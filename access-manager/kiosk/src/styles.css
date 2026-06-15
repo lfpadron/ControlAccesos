@@ -1,0 +1,204 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #eef4f8;
+  color: #16212c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  font-weight: 750;
+  min-height: 72px;
+  padding: 1rem 1.4rem;
+}
+
+.kiosk-shell {
+  align-items: center;
+  display: grid;
+  min-height: 100vh;
+  padding: 3rem;
+}
+
+.kiosk-clock {
+  background: #ffffff;
+  border: 1px solid #d6e0e8;
+  border-radius: 999px;
+  color: #335066;
+  font-weight: 800;
+  padding: 0.55rem 0.9rem;
+  position: fixed;
+  right: 1.25rem;
+  top: 1.25rem;
+  z-index: 2;
+}
+
+.kiosk-stage {
+  display: grid;
+  gap: 2rem;
+  margin: 0 auto;
+  max-width: 760px;
+  text-align: center;
+  width: 100%;
+}
+
+.kiosk-stage h1 {
+  font-size: clamp(2.4rem, 7vw, 5rem);
+  margin: 0;
+}
+
+.kiosk-stage p {
+  color: #536475;
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  margin: 0;
+}
+
+.actions {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.system-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.system-status span {
+  background: #ffffff;
+  border: 1px solid #d6e0e8;
+  border-radius: 999px;
+  color: #335066;
+  font-weight: 750;
+  padding: 0.45rem 0.8rem;
+}
+
+.primary {
+  background: #1769e0;
+  color: #ffffff;
+}
+
+.secondary {
+  background: #ffffff;
+  color: #16212c;
+}
+
+.notice {
+  background: #ffffff;
+  border: 1px solid #d6e0e8;
+  border-radius: 8px;
+  min-height: 64px;
+  padding: 1rem;
+}
+
+.kiosk-card {
+  background: #ffffff;
+  border: 1px solid #d6e0e8;
+  border-radius: 8px;
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  text-align: left;
+}
+
+.kiosk-card label {
+  color: #33475b;
+  font-weight: 800;
+}
+
+.kiosk-card input {
+  border: 1px solid #b9c8d4;
+  border-radius: 8px;
+  font-size: 1.2rem;
+  padding: 1rem;
+  width: 100%;
+}
+
+.result-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.result-item {
+  background: #eef5fb;
+  color: #16212c;
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+  min-height: 88px;
+  text-align: left;
+}
+
+.result-item strong {
+  font-size: 2rem;
+}
+
+.scan-box {
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  border: 2px dashed #9fb3c5;
+  border-radius: 8px;
+  color: #607486;
+  display: grid;
+  font-weight: 800;
+  justify-content: center;
+}
+
+.result-card {
+  text-align: center;
+}
+
+.result-card strong {
+  font-size: clamp(2.5rem, 7vw, 5rem);
+}
+
+.result-card.verde {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #14532d;
+}
+
+.result-card.amarillo {
+  background: #fef9c3;
+  border-color: #fde047;
+  color: #713f12;
+}
+
+.result-card.rojo {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #7f1d1d;
+}
+
+@media (max-width: 640px) {
+  .kiosk-shell {
+    padding: 4.5rem 1rem 1rem;
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .kiosk-clock {
+    left: 1rem;
+    right: 1rem;
+    text-align: center;
+  }
+}

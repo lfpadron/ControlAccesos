@@ -1,0 +1,15 @@
+{
+  "name": "Access Manager Mobile",
+  "short_name": "Access Manager",
+  "start_url": "/mobile/",
+  "display": "standalone",
+  "background_color": "#f7fbfc",
+  "theme_color": "#145c8f",
+  "icons": [
+    {
+      "src": "/mobile/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

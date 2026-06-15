@@ -1,0 +1,150 @@
+services:
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-access_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-access_manager}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-access_manager}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  redis:
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://access_manager:access_manager@postgres:5432/access_manager}
+      APP_VERSION: ${APP_VERSION:-0.2.0}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      QR_SIGNING_SECRET: ${QR_SIGNING_SECRET:-change-me-qr-local-development-only}
+      QR_EXPIRATION_HOURS: ${QR_EXPIRATION_HOURS:-24}
+      CHECKIN_GREEN_BEFORE_MINUTES: ${CHECKIN_GREEN_BEFORE_MINUTES:-120}
+      CHECKIN_GREEN_AFTER_MINUTES: ${CHECKIN_GREEN_AFTER_MINUTES:-30}
+      CHECKIN_YELLOW_BEFORE_MINUTES: ${CHECKIN_YELLOW_BEFORE_MINUTES:-240}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-change-me-temporary-admin-password}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    command: ["python", "-m", "app.workers.worker"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://access_manager:access_manager@postgres:5432/access_manager}
+      APP_VERSION: ${APP_VERSION:-0.2.0}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      QR_SIGNING_SECRET: ${QR_SIGNING_SECRET:-change-me-qr-local-development-only}
+      QR_EXPIRATION_HOURS: ${QR_EXPIRATION_HOURS:-24}
+      CHECKIN_GREEN_BEFORE_MINUTES: ${CHECKIN_GREEN_BEFORE_MINUTES:-120}
+      CHECKIN_GREEN_AFTER_MINUTES: ${CHECKIN_GREEN_AFTER_MINUTES:-30}
+      CHECKIN_YELLOW_BEFORE_MINUTES: ${CHECKIN_YELLOW_BEFORE_MINUTES:-240}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-change-me-temporary-admin-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:4173/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  kiosk:
+    build:
+      context: ./kiosk
+      dockerfile: Containerfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:4173/kiosk/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  mobile-pwa:
+    build:
+      context: ./mobile-pwa
+      dockerfile: Containerfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:4173/mobile/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  caddy:
+    image: public.ecr.aws/docker/library/caddy:2-alpine
+    ports:
+      - "${CADDY_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+      kiosk:
+        condition: service_healthy
+      mobile-pwa:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

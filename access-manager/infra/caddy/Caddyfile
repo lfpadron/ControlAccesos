@@ -1,0 +1,26 @@
+:80 {
+	encode gzip zstd
+
+	redir /kiosk /kiosk/ 308
+	redir /mobile /mobile/ 308
+
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	handle /kiosk/* {
+		reverse_proxy kiosk:4173
+	}
+
+	handle /mobile/* {
+		reverse_proxy mobile-pwa:4173
+	}
+
+	handle {
+		reverse_proxy frontend:4173
+	}
+}
