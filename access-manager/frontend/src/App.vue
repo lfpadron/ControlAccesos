@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import { clearToken, getToken } from './api/client';
+import astrogatoLogo from './astrogato-solo-gato.png';
 
 const router = useRouter();
 const route = useRoute();
@@ -14,7 +15,14 @@ function logout() {
 </script>
 
 <template>
-  <RouterView v-if="fullscreen" />
+  <div v-if="fullscreen" class="fullscreen-frame">
+    <RouterView v-if="fullscreen" />
+    <footer class="app-footer">
+      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      <span class="app-footer-text">Diseñado por Astrogato Labs © ®</span>
+      <span aria-hidden="true"></span>
+    </footer>
+  </div>
   <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -58,5 +66,10 @@ function logout() {
     <main class="content">
       <RouterView />
     </main>
+    <footer class="app-footer">
+      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      <span class="app-footer-text">Diseñado por Astrogato Labs © ®</span>
+      <span aria-hidden="true"></span>
+    </footer>
   </div>
 </template>
