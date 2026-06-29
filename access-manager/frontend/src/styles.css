@@ -450,6 +450,39 @@ pre {
   color: #a7f3d0;
 }
 
+.display-voice-button {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: var(--display-text);
+  display: inline-flex;
+  gap: 0.45rem;
+  min-height: 34px;
+  padding: 0.35rem 0.7rem;
+}
+
+.display-voice-button svg {
+  fill: none;
+  height: 20px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 20px;
+}
+
+.display-voice-button svg path:first-child {
+  fill: currentColor;
+  stroke: none;
+}
+
+.display-voice-button.active {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(167, 243, 208, 0.45);
+  color: #a7f3d0;
+}
+
 .display-identity {
   align-items: center;
   display: flex;
