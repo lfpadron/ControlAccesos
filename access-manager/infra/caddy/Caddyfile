@@ -1,4 +1,4 @@
-:80 {
+{$CADDY_SITE_ADDRESS} {
 	encode gzip zstd
 
 	redir /kiosk /kiosk/ 308

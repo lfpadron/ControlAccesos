@@ -121,8 +121,13 @@ services:
 
   caddy:
     image: public.ecr.aws/docker/library/caddy:2-alpine
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-:80}
+      CADDY_HEALTH_HOST: ${CADDY_HEALTH_HOST:-localhost}
     ports:
       - "${CADDY_HTTP_PORT:-8080}:80"
+      - "${CADDY_HTTPS_PORT:-8443}:443"
+      - "${CADDY_HTTPS_UDP_PORT:-8443}:443/udp"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -137,7 +142,7 @@ services:
       mobile-pwa:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/health || exit 1"]
+      test: ["CMD-SHELL", "wget --header=\"Host: $${CADDY_HEALTH_HOST}\" --spider -q http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 8
