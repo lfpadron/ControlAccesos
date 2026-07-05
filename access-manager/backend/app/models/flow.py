@@ -14,13 +14,17 @@ class Paciente(TimestampMixin, Base):
     __tablename__ = "pacientes"
     __table_args__ = (
         CheckConstraint("celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
+        CheckConstraint(
+            "nombre_preferido IS NOT NULL OR (nombre IS NOT NULL AND apellido_paterno IS NOT NULL)",
+            name="ck_pacientes_identidad_minima",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     folio_paciente: Mapped[str] = mapped_column(String(24), unique=True, nullable=False, index=True)
-    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    nombre: Mapped[str | None] = mapped_column(String(180))
     nombre_preferido: Mapped[str | None] = mapped_column(String(60))
-    apellido_paterno: Mapped[str] = mapped_column(String(180), nullable=False)
+    apellido_paterno: Mapped[str | None] = mapped_column(String(180))
     apellido_materno: Mapped[str | None] = mapped_column(String(180))
     celular: Mapped[str | None] = mapped_column(String(40), index=True)
     fecha_nacimiento: Mapped[date | None] = mapped_column(Date)

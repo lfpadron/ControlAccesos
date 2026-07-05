@@ -67,11 +67,27 @@ def normalized_digits(value: str | None) -> str | None:
     return digits or None
 
 
-def full_patient_name(paciente: Paciente | None) -> str | None:
+def patient_full_name(paciente: Paciente | None) -> str | None:
     if paciente is None:
         return None
     parts = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno]
-    return " ".join(part for part in parts if part)
+    text = " ".join(part for part in parts if part)
+    return text or None
+
+
+def patient_display_name(paciente: Paciente | None) -> str | None:
+    if paciente is None:
+        return None
+    return paciente.nombre_preferido or patient_full_name(paciente)
+
+
+def patient_medical_name(paciente: Paciente | None) -> str | None:
+    if paciente is None:
+        return None
+    full_name = patient_full_name(paciente)
+    if paciente.nombre_preferido and full_name:
+        return f"{paciente.nombre_preferido} ({full_name})"
+    return paciente.nombre_preferido or full_name
 
 
 def consultorio_label(consultorio: Consultorio | None) -> str | None:
@@ -99,9 +115,11 @@ def cita_zona_horaria(db: Session, cita: Cita) -> str:
 
 def cita_item(db: Session, cita: Cita) -> CitaListItem:
     payload = CitaRead.model_validate(cita).model_dump()
+    paciente = db.get(Paciente, cita.paciente_id)
     return CitaListItem(
         **payload,
-        paciente=full_patient_name(db.get(Paciente, cita.paciente_id)),
+        paciente=patient_display_name(paciente),
+        paciente_nombre_completo=patient_medical_name(paciente),
         consultorio=consultorio_label(db.get(Consultorio, cita.consultorio_id)),
         piso=piso_label(db.get(Piso, cita.piso_id)),
         medico=medico_label(db.get(Medico, cita.medico_id)),
@@ -124,6 +142,14 @@ def validate_patient_contact(paciente: Paciente) -> None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Debe indicar celular o fecha de nacimiento.",
+        )
+
+
+def validate_patient_identity(paciente: Paciente) -> None:
+    if not paciente.nombre_preferido and not (paciente.nombre and paciente.apellido_paterno):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Debe indicar nombre preferido o nombre y apellido paterno.",
         )
 
 
@@ -185,18 +211,21 @@ def duplicate_warnings(db: Session, data: dict, exclude_id: UUID | None = None) 
     paciente = db.get(Paciente, data["paciente_id"])
     if paciente is None:
         return []
-    query = (
-        select(Cita)
-        .join(Paciente, Cita.paciente_id == Paciente.id)
-        .where(
-            Cita.fecha_cita == data["fecha_cita"],
-            Cita.medico_id == data["medico_id"],
-            func.lower(Paciente.nombre) == paciente.nombre.lower(),
-            func.lower(Paciente.apellido_paterno) == paciente.apellido_paterno.lower(),
-            Cita.estado.notin_(("CANCELADA", "EXPIRADA")),
-        )
+    query = select(Cita).join(Paciente, Cita.paciente_id == Paciente.id).where(
+        Cita.fecha_cita == data["fecha_cita"],
+        Cita.medico_id == data["medico_id"],
+        Cita.estado.notin_(("CANCELADA", "EXPIRADA")),
     )
-    if paciente.apellido_materno:
+    if paciente.nombre_preferido:
+        query = query.where(func.lower(func.coalesce(Paciente.nombre_preferido, "")) == paciente.nombre_preferido.lower())
+    elif paciente.nombre and paciente.apellido_paterno:
+        query = query.where(
+            func.lower(func.coalesce(Paciente.nombre, "")) == paciente.nombre.lower(),
+            func.lower(func.coalesce(Paciente.apellido_paterno, "")) == paciente.apellido_paterno.lower(),
+        )
+    else:
+        return []
+    if not paciente.nombre_preferido and paciente.apellido_materno:
         query = query.where(func.lower(Paciente.apellido_materno) == paciente.apellido_materno.lower())
     if paciente.celular:
         query = query.where(Paciente.celular == paciente.celular)
@@ -230,7 +259,7 @@ def query_citas(
     if paciente:
         patient_joined = True
         full_name = func.lower(
-            Paciente.nombre
+            func.coalesce(Paciente.nombre, "")
             + " "
             + func.coalesce(Paciente.apellido_paterno, "")
             + " "
@@ -341,15 +370,15 @@ def buscar_pacientes(
             select(Paciente)
             .where(
                 or_(
-                    func.lower(Paciente.nombre).like(term),
-                    func.lower(Paciente.nombre_preferido).like(term),
-                    func.lower(Paciente.apellido_paterno).like(term),
-                    func.lower(Paciente.apellido_materno).like(term),
-                    func.lower(Paciente.celular).like(term),
+                    func.lower(func.coalesce(Paciente.nombre, "")).like(term),
+                    func.lower(func.coalesce(Paciente.nombre_preferido, "")).like(term),
+                    func.lower(func.coalesce(Paciente.apellido_paterno, "")).like(term),
+                    func.lower(func.coalesce(Paciente.apellido_materno, "")).like(term),
+                    func.lower(func.coalesce(Paciente.celular, "")).like(term),
                     func.lower(Paciente.folio_paciente).like(term),
                 )
             )
-            .order_by(Paciente.apellido_paterno, Paciente.nombre)
+            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
             .limit(50)
         ).scalars()
     )
@@ -357,7 +386,11 @@ def buscar_pacientes(
 
 @pacientes_router.get("", response_model=list[PacienteRead])
 def list_pacientes(db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> list[Paciente]:
-    return list(db.execute(select(Paciente).order_by(Paciente.apellido_paterno, Paciente.nombre).limit(200)).scalars())
+    return list(
+        db.execute(
+            select(Paciente).order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre)).limit(200)
+        ).scalars()
+    )
 
 
 @pacientes_router.get("/{paciente_id}", response_model=PacienteRead)
@@ -402,6 +435,7 @@ def update_paciente(
     before = audit_safe_dict(item)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
+    validate_patient_identity(item)
     validate_patient_contact(item)
     db.flush()
     record_audit_event(

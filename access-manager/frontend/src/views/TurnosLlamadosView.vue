@@ -4,6 +4,7 @@ import {
   Complejo,
   Consultorio,
   Institucion,
+  llamarCita,
   listComplejos,
   listConsultorios,
   listInstituciones,
@@ -26,6 +27,7 @@ const consultorioId = ref('');
 const minutos = ref(30);
 const loading = ref(false);
 const error = ref('');
+const message = ref('');
 const minuteOptions = Array.from({ length: 16 }, (_, index) => (index + 1) * 15);
 
 const filteredComplejos = computed(() =>
@@ -108,6 +110,40 @@ function quickCluster() {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
+}
+
+function displayText(item: TurnoDisplayReciente) {
+  return item.texto || `Turno ${item.turno} a consultorio ${item.consultorio}`;
+}
+
+function statusLabel(status: string | null | undefined) {
+  if (!status) return 'Sin estado';
+  if (status === 'NO_LLEGO') return 'No Se Presentó';
+  return status;
+}
+
+function canCallAgain(item: TurnoDisplayReciente) {
+  if (!item.cita_id) return false;
+  if ((item.llamado_numero ?? 1) >= 3) return false;
+  return !['CANCELADA', 'EXPIRADA', 'FINALIZADA', 'NO_LLEGO'].includes(item.estado_cita ?? '');
+}
+
+async function callAgain(item: TurnoDisplayReciente) {
+  if (!item.cita_id) return;
+  loading.value = true;
+  error.value = '';
+  message.value = '';
+  try {
+    const response = await llamarCita(item.cita_id);
+    message.value = response.llamado_numero >= 3 ? 'Tercer llamado registrado. La cita quedó como No Se Presentó.' : 'Turno llamado.';
+    await loadRows();
+  } catch (err) {
+    const failure = err instanceof Error ? err.message : 'No fue posible llamar el turno.';
+    await loadRows();
+    error.value = failure;
+  } finally {
+    loading.value = false;
+  }
 }
 
 function onInstitutionChange() {
@@ -200,6 +236,7 @@ onMounted(async () => {
       </div>
     </section>
 
+    <p v-if="message" class="message">{{ message }}</p>
     <p v-if="error" class="error">{{ error }}</p>
 
     <section class="panel">
@@ -208,17 +245,25 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>Turno</th>
-              <th>Consultorio</th>
+              <th>Texto en pantalla</th>
+              <th>Llamados</th>
               <th>Hora llamado</th>
-              <th>Estado</th>
+              <th>Estado cita</th>
+              <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="item in rows" :key="`${item.turno}-${item.llamado_en}`">
               <td><strong>{{ item.turno }}</strong></td>
-              <td>{{ item.consultorio }}</td>
+              <td>{{ displayText(item) }}</td>
+              <td>{{ item.llamado_numero ?? 1 }}/3</td>
               <td>{{ formatTime(item.llamado_en) }}</td>
-              <td><span class="status ok">{{ item.estado }}</span></td>
+              <td><span class="status ok">{{ statusLabel(item.estado_cita || item.estado) }}</span></td>
+              <td>
+                <button class="small secondary" type="button" :disabled="!canCallAgain(item) || loading" @click="callAgain(item)">
+                  Llamar
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>

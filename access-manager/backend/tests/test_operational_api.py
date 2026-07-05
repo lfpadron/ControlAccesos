@@ -43,6 +43,25 @@ def test_health(client: TestClient) -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+
+    paciente = assert_created(
+        client.post(
+            "/api/pacientes",
+            headers=auth_headers,
+            json={
+                "nombre_preferido": f"Alias {suffix}",
+                "fecha_nacimiento": "1990-01-31",
+            },
+        )
+    )
+
+    assert paciente["nombre"] is None
+    assert paciente["apellido_paterno"] is None
+    assert paciente["nombre_preferido"] == f"Alias {suffix}"
+
+
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 
@@ -283,13 +302,17 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     llamado = assert_created(client.post(f"/api/citas/{cita_id}/llamar", headers=auth_headers))
     assert len(llamado["turno"]) == 4
     assert llamado["consultorio"] == consultorio["nombre_visible"]
+    assert llamado["texto"] == f"Paciente Paciente T* a consultorio Test {suffix}"
+    assert llamado["llamado_numero"] == 1
+    assert llamado["estado_cita"] == "AGENDADA"
 
     public_response = client.get(f"/api/public-display/display-{suffix}/turnos")
     assert public_response.status_code == 200, public_response.text
     public_payload = public_response.json()
     assert public_payload["config"]["polling_interval_seconds"] == 2
     assert public_payload["turnos"][0]["turno"] == llamado["turno"]
-    assert set(public_payload["turnos"][0].keys()) == {"turno", "consultorio", "estado", "llamado_en", "resaltado"}
+    assert public_payload["turnos"][0]["texto"] == llamado["texto"]
+    assert set(public_payload["turnos"][0].keys()) == {"turno", "consultorio", "texto", "estado", "llamado_en", "resaltado"}
 
     recientes_response = client.get(
         "/api/turnos-display/recientes",
@@ -298,7 +321,10 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     )
     assert recientes_response.status_code == 200, recientes_response.text
     reciente = recientes_response.json()[0]
-    assert set(reciente.keys()) == {"turno", "consultorio", "llamado_en", "estado"}
+    assert reciente["texto"] == llamado["texto"]
+    assert reciente["llamado_numero"] == 1
+    assert reciente["estado_cita"] == "AGENDADA"
+    assert set(reciente.keys()) == {"cita_id", "turno", "consultorio", "texto", "llamado_en", "estado", "estado_cita", "llamado_numero"}
 
     audit_response = client.get("/api/auditoria", headers=auth_headers)
     assert audit_response.status_code == 200, audit_response.text
@@ -383,6 +409,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
             headers=auth_headers,
             json={
                 "nombre": "Flujo",
+                "nombre_preferido": f"Alias {suffix}",
                 "apellido_paterno": f"Paciente {suffix}",
                 "celular": f"5559{suffix[:6]}",
             },
@@ -407,6 +434,16 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     cita = assert_created(client.post("/api/citas", headers=auth_headers, json=payload))
     assert is_valid_turn_folio(cita["folio_turno"])
     assert all(char in FOLIO_TURNO_ALPHABET for char in cita["folio_turno"])
+
+    citas_response = client.get(
+        "/api/citas",
+        headers=auth_headers,
+        params={"fecha": appointment_at.date().isoformat(), "paciente": f"Alias {suffix}"},
+    )
+    assert citas_response.status_code == 200, citas_response.text
+    cita_item = next(item for item in citas_response.json() if item["id"] == cita["id"])
+    assert cita_item["paciente"] == f"Alias {suffix}"
+    assert cita_item["paciente_nombre_completo"] == f"Alias {suffix} (Flujo Paciente {suffix})"
 
     duplicate_response = client.post("/api/citas", headers=auth_headers, json=payload)
     assert duplicate_response.status_code == 409

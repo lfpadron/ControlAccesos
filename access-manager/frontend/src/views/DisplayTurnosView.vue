@@ -61,7 +61,7 @@ function saveVoicePreference() {
 }
 
 function turnoKey(item: PublicDisplayTurno) {
-  return `${item.turno}|${item.consultorio}|${item.llamado_en}`;
+  return `${item.turno}|${item.consultorio}|${item.texto ?? ''}|${item.llamado_en}`;
 }
 
 function turnoForSpeech(turno: string) {
@@ -94,11 +94,20 @@ function speak(text: string) {
   window.speechSynthesis.speak(utterance);
 }
 
+function displayText(item: PublicDisplayTurno) {
+  return item.texto || '';
+}
+
+function speechText(item: PublicDisplayTurno) {
+  if (!item.texto) {
+    return `Turno ${turnoForSpeech(item.turno)}. Consultorio ${item.consultorio}.`;
+  }
+  return item.texto.replace(item.turno, turnoForSpeech(item.turno));
+}
+
 function announceTurnos(items: PublicDisplayTurno[]) {
   if (!items.length) return;
-  const text = items
-    .map((item) => `Turno ${turnoForSpeech(item.turno)}. Consultorio ${item.consultorio}.`)
-    .join(' ');
+  const text = items.map(speechText).join(' ');
   speak(text);
 }
 
@@ -185,9 +194,17 @@ onUnmounted(() => {
     </header>
 
     <section class="turnos-stage" aria-live="polite">
-      <article v-for="item in turnos" :key="`${item.turno}-${item.llamado_en}`" class="turno-card" :class="{ highlighted: item.resaltado }">
-        <strong>{{ item.turno }}</strong>
-        <span>{{ item.consultorio }}</span>
+      <article
+        v-for="item in turnos"
+        :key="`${item.turno}-${item.llamado_en}`"
+        class="turno-card"
+        :class="{ highlighted: item.resaltado, 'text-only': displayText(item) }"
+      >
+        <span v-if="displayText(item)" class="turno-card-text">{{ displayText(item) }}</span>
+        <template v-else>
+          <strong>{{ item.turno }}</strong>
+          <span>{{ item.consultorio }}</span>
+        </template>
       </article>
       <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
     </section>

@@ -1,12 +1,36 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import { clearToken, getToken } from './api/client';
-import astrogatoLogo from './astrogato-solo-gato.png';
+import astrogatoLogo from './astrogato-logo.png';
 
 const router = useRouter();
 const route = useRoute();
 const fullscreen = computed(() => Boolean(route.meta.fullscreen));
+const footerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+const footerClockFormatter = new Intl.DateTimeFormat('es-MX', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZone: footerTimeZone,
+});
+const footerDate = ref(new Date());
+const footerClock = computed(() => footerClockFormatter.format(footerDate.value));
+const footerDatetime = computed(() => footerDate.value.toISOString());
+
+let footerClockTimer: number | undefined;
+
+onMounted(() => {
+  footerDate.value = new Date();
+  footerClockTimer = window.setInterval(() => {
+    footerDate.value = new Date();
+  }, 1000);
+});
+
+onUnmounted(() => {
+  window.clearInterval(footerClockTimer);
+});
 
 function logout() {
   clearToken();
@@ -18,9 +42,11 @@ function logout() {
   <div v-if="fullscreen" class="fullscreen-frame">
     <RouterView v-if="fullscreen" />
     <footer class="app-footer">
+      <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
       <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
-      <span class="app-footer-text">Diseñado por Astrogato Labs © ®</span>
-      <span aria-hidden="true"></span>
+      <span class="app-footer-clock">
+        Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
+      </span>
     </footer>
   </div>
   <div v-else class="app-shell">
@@ -67,9 +93,11 @@ function logout() {
       <RouterView />
     </main>
     <footer class="app-footer">
+      <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
       <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
-      <span class="app-footer-text">Diseñado por Astrogato Labs © ®</span>
-      <span aria-hidden="true"></span>
+      <span class="app-footer-clock">
+        Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
+      </span>
     </footer>
   </div>
 </template>

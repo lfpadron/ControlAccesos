@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.constants import TURNO_TEMPLATE_CHOICES, TURNO_TEMPLATE_DEFAULT
+
 
 class RoleCreate(BaseModel):
     codigo: str = Field(min_length=1, max_length=80)
@@ -159,7 +161,14 @@ class MedicoCreate(BaseModel):
     nombre: str = Field(min_length=1, max_length=180)
     apellidos: str = Field(min_length=1, max_length=180)
     nombre_visible: str | None = Field(default=None, max_length=220)
+    plantilla_turno: str = Field(default=TURNO_TEMPLATE_DEFAULT, max_length=40)
     activo: bool = True
+
+    @model_validator(mode="after")
+    def validate_template(self):
+        if self.plantilla_turno not in TURNO_TEMPLATE_CHOICES:
+            raise ValueError("plantilla_turno no es válida")
+        return self
 
 
 class MedicoUpdate(BaseModel):
@@ -167,7 +176,14 @@ class MedicoUpdate(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     apellidos: str | None = Field(default=None, min_length=1, max_length=180)
     nombre_visible: str | None = Field(default=None, max_length=220)
+    plantilla_turno: str | None = Field(default=None, max_length=40)
     activo: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_template(self):
+        if self.plantilla_turno is not None and self.plantilla_turno not in TURNO_TEMPLATE_CHOICES:
+            raise ValueError("plantilla_turno no es válida")
+        return self
 
 
 class MedicoRead(MedicoCreate):

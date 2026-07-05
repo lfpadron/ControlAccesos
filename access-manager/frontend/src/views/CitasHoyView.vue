@@ -191,6 +191,29 @@ async function run(action: () => Promise<unknown>, success: string) {
   }
 }
 
+function statusLabel(status: string) {
+  if (status === 'NO_LLEGO') return 'No Se Presentó';
+  return status;
+}
+
+function canCall(cita: Cita) {
+  return !['CANCELADA', 'EXPIRADA', 'FINALIZADA', 'NO_LLEGO'].includes(cita.estado);
+}
+
+async function callCita(cita: Cita) {
+  error.value = '';
+  message.value = '';
+  try {
+    const response = await llamarCita(cita.id);
+    message.value = response.llamado_numero >= 3 ? 'Tercer llamado registrado. La cita quedó como No Se Presentó.' : 'Turno llamado.';
+    await load();
+  } catch (err) {
+    const failure = err instanceof Error ? err.message : 'No fue posible llamar el turno.';
+    await load();
+    error.value = failure;
+  }
+}
+
 function fileNameFor(cita: Cita | null) {
   if (!cita) return 'turno_qr.png';
   const hora = cita.hora_cita.slice(0, 5).replace(':', '-');
@@ -264,11 +287,15 @@ function clearFilters() {
   void load();
 }
 
+function patientMedicalDisplay(cita: Cita) {
+  return cita.paciente_nombre_completo || cita.paciente || cita.paciente_id;
+}
+
 const exportColumns = [
   { key: 'fecha_cita', label: 'Fecha' },
   { key: 'hora_cita', label: 'Hora', value: (row: Cita) => row.hora_cita.slice(0, 5) },
   { key: 'folio_turno', label: 'Turno' },
-  { key: 'paciente', label: 'Paciente' },
+  { key: 'paciente_nombre_completo', label: 'Paciente', value: patientMedicalDisplay },
   { key: 'medico', label: 'Médico' },
   { key: 'consultorio', label: 'Consultorio' },
   { key: 'piso', label: 'Piso' },
@@ -318,7 +345,7 @@ onMounted(async () => {
             <option value="AUTORIZADO_PASAR">Autorizado</option>
             <option value="EN_CONSULTA">En consulta</option>
             <option value="FINALIZADA">Finalizada</option>
-            <option value="NO_LLEGO">No show</option>
+            <option value="NO_LLEGO">No Se Presentó</option>
             <option value="CANCELADA">Cancelada</option>
             <option value="EXPIRADA">Expirada</option>
           </select>
@@ -406,17 +433,17 @@ onMounted(async () => {
             <tr v-for="cita in slotRows" :key="cita.id">
               <td>{{ cita.hora_cita.slice(0, 5) }}</td>
               <td><strong>{{ cita.folio_turno }}</strong></td>
-              <td>{{ cita.paciente || cita.paciente_id }}</td>
+              <td>{{ patientMedicalDisplay(cita) }}</td>
               <td>{{ cita.medico || cita.medico_id }}</td>
               <td>{{ cita.consultorio || cita.consultorio_id }}</td>
-              <td><span class="status muted">{{ cita.estado }}</span></td>
+              <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
               <td>
                 <div class="inline-actions">
                   <button class="small" type="button" @click="showQr(cita)">QR</button>
                   <button class="small secondary" type="button" @click="showTicket(cita)">Ticket</button>
                   <button class="small secondary" type="button" @click="run(() => checkinLobby(cita.id), 'Check-in registrado.')">Check-in</button>
                   <button class="small secondary" type="button" @click="run(() => autorizarPasar(cita.id), 'Acceso autorizado.')">Autorizar</button>
-                  <button class="small" type="button" @click="run(() => llamarCita(cita.id), 'Turno llamado.')">Llamar</button>
+                  <button class="small" type="button" :disabled="!canCall(cita) || loading" @click="callCita(cita)">Llamar</button>
                   <button class="small danger" type="button" @click="run(() => cancelarCita(cita.id), 'Cita cancelada.')">Cancelar</button>
                 </div>
               </td>

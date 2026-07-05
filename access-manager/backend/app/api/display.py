@@ -7,12 +7,19 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.constants import (
+    TURNO_TEMPLATE_DEFAULT,
+    TURNO_TEMPLATE_PATIENT_CONSULTORIO,
+    TURNO_TEMPLATE_PATIENT_TURNO_CONSULTORIO,
+    TURNO_TEMPLATE_TURNO_CONSULTORIO,
+    TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO,
+)
 from app.core.database import get_db
 from app.core.security import hash_password, require_role, verify_password
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
-from app.models.flow import Cita
-from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Piso
+from app.models.flow import Cita, Paciente
+from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso
 from app.models.usuario import Usuario
 from app.schemas.display import (
     CitaLlamarResponse,
@@ -29,6 +36,9 @@ from app.services.audit_service import audit_safe_dict, record_audit_event
 router = APIRouter()
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
 OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+CALL_INTERVAL = timedelta(minutes=5)
+MAX_CALLS_PER_CITA = 3
+TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
 
 
 def client_ip(request: Request) -> str | None:
@@ -257,6 +267,43 @@ def consultorio_label(db: Session, consultorio_id: UUID) -> str:
     return consultorio.nombre_visible or consultorio.codigo
 
 
+def consultorio_destination_text(label: str) -> str:
+    text = label.strip()
+    if text.lower().startswith("consultorio"):
+        return f"consultorio{text[len('consultorio'):]}"
+    return f"consultorio {text}"
+
+
+def patient_turn_text(paciente: Paciente | None) -> str:
+    if paciente is None:
+        return "Paciente *"
+    name = (paciente.nombre_preferido or paciente.nombre or "Paciente").strip()
+    paternal_initial = (paciente.apellido_paterno or "").strip()[:1].upper()
+    return f"{name} {paternal_initial}*".strip()
+
+
+def render_turno_text(db: Session, cita: Cita, consultorio: str) -> str:
+    medico = db.get(Medico, cita.medico_id)
+    paciente = db.get(Paciente, cita.paciente_id)
+    template = getattr(medico, "plantilla_turno", None) or TURNO_TEMPLATE_DEFAULT
+    patient = patient_turn_text(paciente)
+    destination = consultorio_destination_text(consultorio)
+
+    if template == TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO:
+        return f"Turno {cita.folio_turno} del paciente {patient} a {destination}"
+    if template == TURNO_TEMPLATE_PATIENT_TURNO_CONSULTORIO:
+        return f"Paciente {patient} con turno {cita.folio_turno} a {destination}"
+    if template == TURNO_TEMPLATE_TURNO_CONSULTORIO:
+        return f"Turno {cita.folio_turno} a {destination}"
+    if template == TURNO_TEMPLATE_PATIENT_CONSULTORIO:
+        return f"Paciente {patient} a {destination}"
+    return f"Paciente {patient} a {destination}"
+
+
+def call_number_for_rows(rows: list[TurnoDisplay]) -> int:
+    return max((row.llamado_numero or 1 for row in rows), default=0)
+
+
 @router.get("/pantallas-turnos", response_model=list[PantallaTurnosRead])
 def list_pantallas_turnos(
     db: Session = Depends(get_db),
@@ -428,6 +475,7 @@ def public_display_turnos(
             PublicTurnoDisplay(
                 turno=item.turno,
                 consultorio=item.consultorio,
+                texto=item.texto_visible,
                 estado=item.estado,
                 llamado_en=item.llamado_en,
                 resaltado=item.resaltado_hasta > timestamp and item.estado == "NUEVO",
@@ -461,7 +509,28 @@ def turnos_display_recientes(
         query = query.where(TurnoDisplay.consultorio_id == consultorio_id)
     rows = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc())).scalars())
     db.commit()
-    return [TurnoDisplayRecienteRead(turno=row.turno, consultorio=row.consultorio, llamado_en=row.llamado_en, estado=row.estado) for row in rows]
+    recientes: list[TurnoDisplayRecienteRead] = []
+    seen: set[tuple[UUID | None, int, datetime]] = set()
+    for row in rows:
+        call_number = row.llamado_numero or 1
+        key = (row.cita_id, call_number, row.llamado_en)
+        if key in seen:
+            continue
+        seen.add(key)
+        cita = db.get(Cita, row.cita_id) if row.cita_id else None
+        recientes.append(
+            TurnoDisplayRecienteRead(
+                cita_id=row.cita_id,
+                turno=row.turno,
+                consultorio=row.consultorio,
+                texto=row.texto_visible,
+                llamado_en=row.llamado_en,
+                estado=row.estado,
+                estado_cita=cita.estado if cita else None,
+                llamado_numero=call_number,
+            )
+        )
+    return recientes
 
 
 @router.post("/citas/{cita_id}/llamar", response_model=CitaLlamarResponse, status_code=status.HTTP_201_CREATED)
@@ -473,7 +542,48 @@ def llamar_cita(
 ) -> CitaLlamarResponse:
     cita = exists_or_404(db, Cita, cita_id, "Cita")
     timestamp = now_utc()
-    previous_call = db.execute(select(TurnoDisplay).where(TurnoDisplay.cita_id == cita.id)).first()
+    if cita.estado in TERMINAL_CALL_STATES:
+        detail = "La cita está marcada como No Se Presentó." if cita.estado == "NO_LLEGO" else f"No se puede llamar una cita en estado {cita.estado}."
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+    call_rows = list(
+        db.execute(
+            select(TurnoDisplay)
+            .where(TurnoDisplay.cita_id == cita.id)
+            .order_by(TurnoDisplay.llamado_en.desc())
+        ).scalars()
+    )
+    call_count = call_number_for_rows(call_rows)
+    if call_count >= MAX_CALLS_PER_CITA:
+        before = audit_safe_dict(cita)
+        cita.estado = "NO_LLEGO"
+        db.flush()
+        record_audit_event(
+            db,
+            evento="CITA_NO_SE_PRESENTO",
+            entidad="citas",
+            entidad_id=cita.id,
+            usuario_id=current_user.id,
+            canal="WEB",
+            ip_origen=client_ip(request),
+            valor_antes=before,
+            valor_despues=audit_safe_dict(cita),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El paciente superó 3 llamados. Se marcó como No Se Presentó.",
+        )
+
+    last_call = call_rows[0] if call_rows else None
+    if last_call is not None and last_call.llamado_en + CALL_INTERVAL > timestamp:
+        remaining = (last_call.llamado_en + CALL_INTERVAL) - timestamp
+        minutes = max(1, int((remaining.total_seconds() + 59) // 60))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Debe esperar {minutes} minuto(s) antes de volver a llamar este turno.",
+        )
+
     consultorio_cluster_ids = cluster_ids_for_consultorio(db, cita.consultorio_id)
     screen_by_cluster = screen_ids_by_cluster(db, consultorio_cluster_ids)
     if not screen_by_cluster:
@@ -483,6 +593,9 @@ def llamar_cita(
         )
     screen = db.get(PantallaTurnos, next(iter(screen_by_cluster.values())))
     config = display_config(screen)
+    consultorio_text = consultorio_label(db, cita.consultorio_id)
+    texto_visible = render_turno_text(db, cita, consultorio_text)
+    llamado_numero = call_count + 1
     first_item: TurnoDisplay | None = None
     for cluster_id, pantalla_id in screen_by_cluster.items():
         item = TurnoDisplay(
@@ -493,7 +606,9 @@ def llamar_cita(
             cluster_espera_id=cluster_id,
             consultorio_id=cita.consultorio_id,
             turno=cita.folio_turno,
-            consultorio=consultorio_label(db, cita.consultorio_id),
+            consultorio=consultorio_text,
+            texto_visible=texto_visible,
+            llamado_numero=llamado_numero,
             estado="NUEVO",
             llamado_en=timestamp,
             resaltado_hasta=timestamp + timedelta(seconds=config.segundos_resaltado),
@@ -504,7 +619,7 @@ def llamar_cita(
         first_item = first_item or item
     db.flush()
     item = first_item
-    event = "TURNO_RELLAMADO" if previous_call else "TURNO_LLAMADO"
+    event = "TURNO_RELLAMADO" if call_count else "TURNO_LLAMADO"
     record_audit_event(
         db,
         evento=event,
@@ -517,15 +632,35 @@ def llamar_cita(
             "cita_id": str(cita.id),
             "cluster_ids": [str(cluster_id) for cluster_id in screen_by_cluster],
             "turno": cita.folio_turno,
+            "texto": texto_visible,
+            "llamado_numero": llamado_numero,
         },
     )
+    if llamado_numero >= MAX_CALLS_PER_CITA:
+        before = audit_safe_dict(cita)
+        cita.estado = "NO_LLEGO"
+        db.flush()
+        record_audit_event(
+            db,
+            evento="CITA_NO_SE_PRESENTO",
+            entidad="citas",
+            entidad_id=cita.id,
+            usuario_id=current_user.id,
+            canal="WEB",
+            ip_origen=client_ip(request),
+            valor_antes=before,
+            valor_despues=audit_safe_dict(cita),
+        )
     db.commit()
     db.refresh(item)
     return CitaLlamarResponse(
         id=item.id,
         turno=item.turno,
         consultorio=item.consultorio,
+        texto=item.texto_visible,
         estado=item.estado,
+        estado_cita=cita.estado,
+        llamado_numero=item.llamado_numero,
         llamado_en=item.llamado_en,
         resaltado_hasta=item.resaltado_hasta,
         visible_hasta=item.visible_hasta,

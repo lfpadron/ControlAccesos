@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 TIPOS_CITA = {"PROGRAMADA", "ESPONTANEA"}
@@ -22,16 +22,26 @@ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM
 
 
 class PacienteBase(BaseModel):
-    nombre: str = Field(min_length=1, max_length=180)
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
     nombre_preferido: str | None = Field(default=None, max_length=60)
-    apellido_paterno: str = Field(min_length=1, max_length=180)
+    apellido_paterno: str | None = Field(default=None, min_length=1, max_length=180)
     apellido_materno: str | None = Field(default=None, max_length=180)
     celular: str | None = Field(default=None, max_length=40)
     fecha_nacimiento: date | None = None
     activo: bool = True
 
+    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
+    @classmethod
+    def blank_to_none(cls, value):
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        return value
+
     @model_validator(mode="after")
-    def validate_contact(self):
+    def validate_values(self):
+        if not self.nombre_preferido and not (self.nombre and self.apellido_paterno):
+            raise ValueError("Debe indicar nombre preferido o nombre y apellido paterno.")
         if not self.celular and self.fecha_nacimiento is None:
             raise ValueError("Debe indicar celular o fecha de nacimiento.")
         return self
@@ -49,6 +59,14 @@ class PacienteUpdate(BaseModel):
     celular: str | None = Field(default=None, max_length=40)
     fecha_nacimiento: date | None = None
     activo: bool | None = None
+
+    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
+    @classmethod
+    def blank_to_none(cls, value):
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        return value
 
 
 class PacienteRead(PacienteBase):
@@ -139,6 +157,7 @@ class CitaRead(BaseModel):
 
 class CitaListItem(CitaRead):
     paciente: str | None = None
+    paciente_nombre_completo: str | None = None
     consultorio: str | None = None
     piso: str | None = None
     medico: str | None = None

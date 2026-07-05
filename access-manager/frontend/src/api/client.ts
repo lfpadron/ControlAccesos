@@ -165,6 +165,7 @@ export type Medico = {
   nombre: string;
   apellidos: string;
   nombre_visible?: string | null;
+  plantilla_turno: string;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -278,6 +279,7 @@ export type PublicDisplayConfig = {
 export type PublicDisplayTurno = {
   turno: string;
   consultorio: string;
+  texto?: string | null;
   estado: string;
   llamado_en: string;
   resaltado: boolean;
@@ -291,18 +293,22 @@ export type PublicDisplayResponse = {
 };
 
 export type TurnoDisplayReciente = {
+  cita_id?: string | null;
   turno: string;
   consultorio: string;
+  texto?: string | null;
   llamado_en: string;
   estado: string;
+  estado_cita?: string | null;
+  llamado_numero: number;
 };
 
 export type Paciente = {
   id: string;
   folio_paciente: string;
-  nombre: string;
+  nombre?: string | null;
   nombre_preferido?: string | null;
-  apellido_paterno: string;
+  apellido_paterno?: string | null;
   apellido_materno?: string | null;
   celular?: string | null;
   fecha_nacimiento?: string | null;
@@ -350,6 +356,7 @@ export type Cita = {
   created_at: string;
   updated_at: string;
   paciente?: string | null;
+  paciente_nombre_completo?: string | null;
   consultorio?: string | null;
   piso?: string | null;
   medico?: string | null;
@@ -784,7 +791,15 @@ export function autorizarPasar(citaId: string) {
 }
 
 export function llamarCita(citaId: string) {
-  return apiFetch<{ id: string; turno: string; consultorio: string; estado: string }>(`/citas/${citaId}/llamar`, { method: 'POST' });
+  return apiFetch<{
+    id: string;
+    turno: string;
+    consultorio: string;
+    texto?: string | null;
+    estado: string;
+    estado_cita: string;
+    llamado_numero: number;
+  }>(`/citas/${citaId}/llamar`, { method: 'POST' });
 }
 
 export function auditCitasExport(params: CitaFilters & { formato: 'excel' | 'csv' | 'json' }) {

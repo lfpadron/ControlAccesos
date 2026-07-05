@@ -80,6 +80,7 @@ class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
 class PublicTurnoDisplay(BaseModel):
     turno: str
     consultorio: str
+    texto: str | None = None
     estado: str
     llamado_en: datetime
     resaltado: bool
@@ -93,17 +94,24 @@ class PublicDisplayResponse(BaseModel):
 
 
 class TurnoDisplayRecienteRead(BaseModel):
+    cita_id: UUID | None = None
     turno: str
     consultorio: str
+    texto: str | None = None
     llamado_en: datetime
     estado: str
+    estado_cita: str | None = None
+    llamado_numero: int = 1
 
 
 class CitaLlamarResponse(BaseModel):
     id: UUID
     turno: str
     consultorio: str
+    texto: str | None = None
     estado: str
+    estado_cita: str
+    llamado_numero: int
     llamado_en: datetime
     resaltado_hasta: datetime
     visible_hasta: datetime

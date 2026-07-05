@@ -18,6 +18,7 @@ export type CatalogField = {
   required?: boolean;
   maxLength?: number;
   lookup?: LookupKey;
+  options?: Array<{ value: string; label: string }>;
   createOnly?: boolean;
   defaultValue?: string | number | boolean | null;
 };
@@ -26,6 +27,7 @@ export type CatalogColumn = {
   name: string;
   label: string;
   lookup?: LookupKey;
+  options?: Array<{ value: string; label: string }>;
   boolean?: boolean;
 };
 
@@ -41,6 +43,13 @@ export type CatalogConfig = {
   fields: CatalogField[];
   columns: CatalogColumn[];
 };
+
+export const turnoTemplateOptions = [
+  { value: 'PACIENTE_CONSULTORIO', label: 'Paciente Juan P* a consultorio C19' },
+  { value: 'TURNO_PACIENTE_CONSULTORIO', label: 'Turno ABCD del paciente Juan P* a consultorio C19' },
+  { value: 'PACIENTE_TURNO_CONSULTORIO', label: 'Paciente Juan P* con turno ABCD a consultorio C19' },
+  { value: 'TURNO_CONSULTORIO', label: 'Turno ABCD a consultorio C19' },
+];
 
 export const catalogs: Record<string, CatalogConfig> = {
   roles: {
@@ -212,12 +221,21 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'apellidos', label: 'Apellidos', required: true, maxLength: 180 },
       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 220 },
+      {
+        name: 'plantilla_turno',
+        label: 'Plantilla de turnos',
+        type: 'select',
+        required: true,
+        defaultValue: 'PACIENTE_CONSULTORIO',
+        options: turnoTemplateOptions,
+      },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
     columns: [
       { name: 'nombre_visible', label: 'Nombre visible' },
       { name: 'nombre', label: 'Nombre' },
       { name: 'apellidos', label: 'Apellidos' },
+      { name: 'plantilla_turno', label: 'Plantilla', options: turnoTemplateOptions },
       { name: 'usuario_id', label: 'Usuario', lookup: 'usuarios' },
       { name: 'activo', label: 'Estado', boolean: true },
     ],

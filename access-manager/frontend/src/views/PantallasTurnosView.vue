@@ -392,6 +392,10 @@ function clustersLabel(item: PantallaTurnos) {
   return names.length ? names.join(', ') : 'Sin clúster';
 }
 
+function turnoPreviewText(turno: PublicDisplayTurno) {
+  return turno.texto || turno.consultorio;
+}
+
 onMounted(loadData);
 </script>
 
@@ -672,8 +676,8 @@ onMounted(loadData);
       </div>
       <div v-if="turnos.length" class="turnos-preview">
         <div v-for="turno in turnos" :key="`${turno.turno}-${turno.llamado_en}`" class="turno-preview-item">
-          <strong>{{ turno.turno }}</strong>
-          <span>{{ turno.consultorio }}</span>
+          <strong>{{ turno.texto ? 'Texto' : turno.turno }}</strong>
+          <span>{{ turnoPreviewText(turno) }}</span>
           <small>{{ turno.estado }}</small>
         </div>
       </div>

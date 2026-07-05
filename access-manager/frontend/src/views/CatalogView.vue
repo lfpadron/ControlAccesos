@@ -17,10 +17,11 @@ import {
   listUsuarios,
   updateResource,
 } from '../api/client';
-import { CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
+import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
 
 type Row = Record<string, unknown> & { id: string };
 type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; piso_id?: string };
+type SelectOption = { value: string; label: string };
 
 const route = useRoute();
 const rows = ref<Row[]>([]);
@@ -225,6 +226,11 @@ function fieldInputType(field: CatalogField) {
   return 'text';
 }
 
+function selectOptions(field: CatalogField): SelectOption[] {
+  if (field.options) return field.options;
+  return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
+}
+
 function fieldValue(name: string) {
   const value = form[name];
   return value === null || value === undefined ? '' : String(value);
@@ -333,6 +339,18 @@ async function setActive(row: Row, active: boolean) {
   }
 }
 
+function staticOptionLabel(options: SelectOption[] | undefined, value: unknown) {
+  if (!options || !value) {
+    return value ? String(value) : 'Sin asignar';
+  }
+  if (Array.isArray(value)) {
+    return value.length
+      ? value.map((item) => options.find((option) => option.value === item)?.label ?? String(item)).join(', ')
+      : 'Sin asignar';
+  }
+  return options.find((item) => item.value === value)?.label ?? String(value);
+}
+
 function optionLabel(key: LookupKey | undefined, value: unknown) {
   if (!key || !value) {
     return value ? String(value) : 'Sin asignar';
@@ -345,10 +363,13 @@ function optionLabel(key: LookupKey | undefined, value: unknown) {
   return lookups[key]?.find((item) => item.id === value)?.label ?? String(value);
 }
 
-function cellValue(row: Row, column: { name: string; lookup?: LookupKey; boolean?: boolean }) {
+function cellValue(row: Row, column: CatalogColumn) {
   const value = row[column.name];
   if (column.boolean) {
     return value ? 'Activo' : 'Inactivo';
+  }
+  if (column.options) {
+    return staticOptionLabel(column.options, value);
   }
   return optionLabel(column.lookup, value);
 }
@@ -448,7 +469,7 @@ onMounted(loadData);
             @change="updateField(field.name, $event)"
           >
             <option v-if="!field.required" value="">Sin asignar</option>
-            <option v-for="item in lookups[field.lookup ?? 'usuarios'] ?? []" :key="item.id" :value="item.id">
+            <option v-for="item in selectOptions(field)" :key="item.value" :value="item.value">
               {{ item.label }}
             </option>
           </select>
@@ -461,7 +482,7 @@ onMounted(loadData);
             size="5"
             @change="updateMultiselect(field.name, $event)"
           >
-            <option v-for="item in lookups[field.lookup ?? 'usuarios'] ?? []" :key="item.id" :value="item.id">
+            <option v-for="item in selectOptions(field)" :key="item.value" :value="item.value">
               {{ item.label }}
             </option>
           </select>

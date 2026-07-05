@@ -72,6 +72,8 @@ class TurnoDisplay(TimestampMixin, Base):
     consultorio_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("consultorios.id"), nullable=False, index=True)
     turno: Mapped[str] = mapped_column(String(40), nullable=False)
     consultorio: Mapped[str] = mapped_column(String(180), nullable=False)
+    texto_visible: Mapped[str | None] = mapped_column(String(255))
+    llamado_numero: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     estado: Mapped[str] = mapped_column(String(20), default="NUEVO", server_default="NUEVO", nullable=False)
     llamado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resaltado_hasta: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

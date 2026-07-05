@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, Stri
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.constants import TURNO_TEMPLATE_DEFAULT
 from app.models.base import Base, TimestampMixin
 
 
@@ -96,12 +97,25 @@ class ConsultorioCluster(Base):
 
 class Medico(TimestampMixin, Base):
     __tablename__ = "medicos"
+    __table_args__ = (
+        CheckConstraint(
+            "plantilla_turno IN ('PACIENTE_CONSULTORIO', 'TURNO_PACIENTE_CONSULTORIO', "
+            "'PACIENTE_TURNO_CONSULTORIO', 'TURNO_CONSULTORIO')",
+            name="ck_medicos_plantilla_turno",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     usuario_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     apellidos: Mapped[str] = mapped_column(String(180), nullable=False)
     nombre_visible: Mapped[str | None] = mapped_column(String(220))
+    plantilla_turno: Mapped[str] = mapped_column(
+        String(40),
+        default=TURNO_TEMPLATE_DEFAULT,
+        server_default=TURNO_TEMPLATE_DEFAULT,
+        nullable=False,
+    )
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

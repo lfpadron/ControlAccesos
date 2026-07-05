@@ -78,6 +78,16 @@ function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
 }
 
+function patientDisplayName(paciente: Paciente) {
+  const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+  return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+}
+
+function statusLabel(status: string) {
+  if (status === 'NO_LLEGO') return 'No Se Presentó';
+  return status;
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
@@ -251,7 +261,7 @@ onMounted(load);
           <label for="paciente">Paciente</label>
           <select id="paciente" v-model="form.paciente_id" required>
             <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
-              {{ paciente.nombre }} {{ paciente.apellido_paterno }} · {{ paciente.folio_paciente }}
+              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
             </option>
           </select>
         </div>
@@ -339,7 +349,7 @@ onMounted(load);
             <strong>{{ duplicateWarning.mensaje }}</strong>
             <ul>
               <li v-for="item in duplicateWarning.duplicados" :key="item.cita_id">
-                {{ item.folio_turno }} · {{ item.estado }}
+                {{ item.folio_turno }} · {{ statusLabel(item.estado) }}
               </li>
             </ul>
           </div>
@@ -373,7 +383,7 @@ onMounted(load);
                 <td>{{ cita.folio_turno }}</td>
                 <td>{{ cita.paciente || cita.paciente_id }}</td>
                 <td>{{ cita.consultorio || cita.consultorio_id }}</td>
-                <td><span class="status muted">{{ cita.estado }}</span></td>
+                <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
               </tr>
             </tbody>
           </table>

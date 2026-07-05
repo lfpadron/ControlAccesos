@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
   activatePaciente,
   createPaciente,
@@ -17,6 +17,10 @@ const loading = ref(false);
 const error = ref('');
 const message = ref('');
 const query = ref('');
+const confirmPreferredOnly = ref(false);
+const birthYearInput = ref<HTMLInputElement | null>(null);
+const birthMonthInput = ref<HTMLInputElement | null>(null);
+const birthDayInput = ref<HTMLInputElement | null>(null);
 
 const form = reactive({
   nombre: '',
@@ -27,6 +31,70 @@ const form = reactive({
   fecha_nacimiento: '',
 });
 
+const birthDate = reactive({
+  year: '',
+  month: '',
+  day: '',
+});
+
+const isPreferredOnly = computed(
+  () =>
+    Boolean(form.nombre_preferido.trim()) &&
+    !form.nombre.trim() &&
+    !form.apellido_paterno.trim() &&
+    !form.apellido_materno.trim(),
+);
+
+function patientDisplayName(paciente: Paciente) {
+  const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+  return paciente.nombre_preferido || legalName || 'Sin nombre';
+}
+
+function setBirthDateParts(value?: string | null) {
+  const [year = '', month = '', day = ''] = value?.split('-') ?? [];
+  birthDate.year = year;
+  birthDate.month = month;
+  birthDate.day = day;
+  form.fecha_nacimiento = value ?? '';
+}
+
+function syncBirthDate() {
+  if (!birthDate.year && !birthDate.month && !birthDate.day) {
+    form.fecha_nacimiento = '';
+    return;
+  }
+  if (birthDate.year.length !== 4 || birthDate.month.length !== 2 || birthDate.day.length !== 2) {
+    form.fecha_nacimiento = '';
+    return;
+  }
+  const isoDate = `${birthDate.year}-${birthDate.month}-${birthDate.day}`;
+  const date = new Date(`${isoDate}T00:00:00`);
+  const valid =
+    !Number.isNaN(date.getTime()) &&
+    date.getFullYear() === Number(birthDate.year) &&
+    date.getMonth() + 1 === Number(birthDate.month) &&
+    date.getDate() === Number(birthDate.day);
+  form.fecha_nacimiento = valid ? isoDate : '';
+}
+
+function handleBirthDateInput(part: keyof typeof birthDate, maxLength: number, next?: 'month' | 'day') {
+  birthDate[part] = birthDate[part].replace(/\D/g, '').slice(0, maxLength);
+  syncBirthDate();
+  if (birthDate[part].length === maxLength) {
+    if (next === 'month') birthMonthInput.value?.focus();
+    if (next === 'day') birthDayInput.value?.focus();
+  }
+}
+
+function hasIncompleteBirthDate() {
+  return Boolean(birthDate.year || birthDate.month || birthDate.day) && !form.fecha_nacimiento;
+}
+
+function trimOrNull(value: string) {
+  const text = value.trim();
+  return text || null;
+}
+
 function setForm(paciente?: Paciente | null) {
   selected.value = paciente ?? null;
   form.nombre = paciente?.nombre ?? '';
@@ -34,7 +102,8 @@ function setForm(paciente?: Paciente | null) {
   form.apellido_paterno = paciente?.apellido_paterno ?? '';
   form.apellido_materno = paciente?.apellido_materno ?? '';
   form.celular = paciente?.celular ?? '';
-  form.fecha_nacimiento = paciente?.fecha_nacimiento ?? '';
+  setBirthDateParts(paciente?.fecha_nacimiento ?? '');
+  confirmPreferredOnly.value = false;
 }
 
 async function load() {
@@ -65,16 +134,29 @@ async function search() {
   }
 }
 
-async function submit() {
+async function submit(preferredOnlyConfirmed = false) {
   error.value = '';
   message.value = '';
+  if (hasIncompleteBirthDate()) {
+    error.value = 'Completa la fecha de nacimiento con año, mes y día válidos.';
+    return;
+  }
+  if (!form.nombre_preferido.trim() && (!form.nombre.trim() || !form.apellido_paterno.trim())) {
+    error.value = 'Captura nombre preferido o nombre y apellido paterno.';
+    return;
+  }
+  if (isPreferredOnly.value && !preferredOnlyConfirmed) {
+    confirmPreferredOnly.value = true;
+    return;
+  }
+  confirmPreferredOnly.value = false;
   try {
     const payload = {
-      nombre: form.nombre,
-      nombre_preferido: form.nombre_preferido || null,
-      apellido_paterno: form.apellido_paterno,
-      apellido_materno: form.apellido_materno || null,
-      celular: form.celular || null,
+      nombre: trimOrNull(form.nombre),
+      nombre_preferido: trimOrNull(form.nombre_preferido),
+      apellido_paterno: trimOrNull(form.apellido_paterno),
+      apellido_materno: trimOrNull(form.apellido_materno),
+      celular: trimOrNull(form.celular),
       fecha_nacimiento: form.fecha_nacimiento || null,
     };
     if (selected.value) {
@@ -130,19 +212,19 @@ onMounted(load);
     </div>
 
     <div class="grid catalog-grid">
-      <form class="panel form compact-form" @submit.prevent="submit">
+      <form class="panel form compact-form" @submit.prevent="submit()">
         <h2>{{ selected ? 'Editar paciente' : 'Crear paciente' }}</h2>
         <div class="form-row">
           <label for="nombre">Nombre</label>
-          <input id="nombre" v-model="form.nombre" required maxlength="180" />
+          <input id="nombre" v-model="form.nombre" :required="!form.nombre_preferido.trim()" maxlength="180" />
         </div>
         <div class="form-row">
           <label for="nombre_preferido">Nombre preferido</label>
-          <input id="nombre_preferido" v-model="form.nombre_preferido" maxlength="60" />
+          <input id="nombre_preferido" v-model="form.nombre_preferido" maxlength="60" @input="confirmPreferredOnly = false" />
         </div>
         <div class="form-row">
           <label for="apellido_paterno">Apellido paterno</label>
-          <input id="apellido_paterno" v-model="form.apellido_paterno" required maxlength="180" />
+          <input id="apellido_paterno" v-model="form.apellido_paterno" :required="!form.nombre_preferido.trim()" maxlength="180" />
         </div>
         <div class="form-row">
           <label for="apellido_materno">Apellido materno</label>
@@ -154,7 +236,43 @@ onMounted(load);
         </div>
         <div class="form-row">
           <label for="fecha_nacimiento">Fecha de nacimiento</label>
-          <input id="fecha_nacimiento" v-model="form.fecha_nacimiento" type="date" />
+          <div class="date-segments">
+            <input
+              id="fecha_nacimiento"
+              ref="birthYearInput"
+              v-model="birthDate.year"
+              aria-label="Año de nacimiento"
+              inputmode="numeric"
+              maxlength="4"
+              placeholder="AAAA"
+              @input="handleBirthDateInput('year', 4, 'month')"
+            />
+            <input
+              ref="birthMonthInput"
+              v-model="birthDate.month"
+              aria-label="Mes de nacimiento"
+              inputmode="numeric"
+              maxlength="2"
+              placeholder="MM"
+              @input="handleBirthDateInput('month', 2, 'day')"
+            />
+            <input
+              ref="birthDayInput"
+              v-model="birthDate.day"
+              aria-label="Día de nacimiento"
+              inputmode="numeric"
+              maxlength="2"
+              placeholder="DD"
+              @input="handleBirthDateInput('day', 2)"
+            />
+          </div>
+        </div>
+        <div v-if="confirmPreferredOnly" class="duplicate-warning">
+          <strong>Solo se capturó nombre preferido, ¿Continuar?</strong>
+          <div class="actions-row">
+            <button class="success" type="button" @click="submit(true)">Sí</button>
+            <button class="danger solid" type="button" @click="confirmPreferredOnly = false">No</button>
+          </div>
         </div>
         <div class="actions-row">
           <button type="submit">{{ selected ? 'Guardar cambios' : 'Crear paciente' }}</button>
@@ -198,7 +316,7 @@ onMounted(load);
                 @click="setForm(paciente)"
               >
                 <td>{{ paciente.folio_paciente }}</td>
-                <td>{{ paciente.nombre }} {{ paciente.apellido_paterno }} {{ paciente.apellido_materno || '' }}</td>
+                <td>{{ patientDisplayName(paciente) }}</td>
                 <td>{{ paciente.nombre_preferido || '-' }}</td>
                 <td>{{ paciente.celular || '-' }}</td>
                 <td>
