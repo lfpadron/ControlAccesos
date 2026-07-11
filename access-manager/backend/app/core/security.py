@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import uuid
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -26,7 +26,7 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, password_hash: str) -> bool:
     try:
         return password_hasher.verify(password_hash, plain_password)
-    except VerifyMismatchError:
+    except (InvalidHashError, VerificationError, VerifyMismatchError):
         return False
 
 

@@ -226,6 +226,16 @@ function fieldInputType(field: CatalogField) {
   return 'text';
 }
 
+function fieldAutocomplete(field: CatalogField) {
+  if (field.type === 'password') {
+    return field.createOnly ? 'new-password' : 'off';
+  }
+  if (field.type === 'email') {
+    return 'off';
+  }
+  return undefined;
+}
+
 function selectOptions(field: CatalogField): SelectOption[] {
   if (field.options) return field.options;
   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
@@ -377,6 +387,8 @@ function cellValue(row: Row, column: CatalogColumn) {
 watch(
   () => route.meta.catalog,
   () => {
+    rows.value = [];
+    resetForm();
     void loadData();
   },
 );
@@ -394,7 +406,7 @@ onMounted(loadData);
     </header>
 
     <div class="grid catalog-grid">
-      <form class="panel form" @submit.prevent="submit">
+      <form class="panel form" autocomplete="off" @submit.prevent="submit">
         <h2>{{ editingId ? 'Editar' : 'Crear' }} {{ config.entityName }}</h2>
         <div v-if="config.institutionScoped" class="form-row">
           <label for="catalog-institution">Institución</label>
@@ -493,6 +505,7 @@ onMounted(loadData);
           <input
             v-else
             :id="field.name"
+            :autocomplete="fieldAutocomplete(field)"
             :value="fieldValue(field.name)"
             :maxlength="field.maxLength"
             :required="field.required && !(field.createOnly && editingId)"

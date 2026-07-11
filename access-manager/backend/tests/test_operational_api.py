@@ -220,6 +220,20 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
         )
     )
 
+    admin_relogin = client.post(
+        "/api/auth/login",
+        json={
+            "email": "admin1@example.com",
+            "password": os.getenv("SEED_ADMIN_PASSWORD", "change-me-temporary-admin-password"),
+        },
+    )
+    assert admin_relogin.status_code == 200, admin_relogin.text
+
+    for email in (medico_user["email"], operador_user["email"]):
+        login_response = client.post("/api/auth/login", json={"email": email, "password": "Temporal123!"})
+        assert login_response.status_code == 200, login_response.text
+        assert login_response.json()["access_token"]
+
     medico = assert_created(
         client.post(
             "/api/medicos",

@@ -1,0 +1,94 @@
+diff --git a/access-manager/backend/app/core/security.py b/access-manager/backend/app/core/security.py
+index 6cb7393..9e6233e 100644
+--- a/access-manager/backend/app/core/security.py
++++ b/access-manager/backend/app/core/security.py
+@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
+ import uuid
+ 
+ from argon2 import PasswordHasher
+-from argon2.exceptions import VerifyMismatchError
++from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+ from fastapi import Depends, HTTPException, status
+ from fastapi.security import OAuth2PasswordBearer
+ from jose import JWTError, jwt
+@@ -26,7 +26,7 @@ def hash_password(password: str) -> str:
+ def verify_password(plain_password: str, password_hash: str) -> bool:
+     try:
+         return password_hasher.verify(password_hash, plain_password)
+-    except VerifyMismatchError:
++    except (InvalidHashError, VerificationError, VerifyMismatchError):
+         return False
+ 
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 126a9fb..68c4ab8 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -220,6 +220,20 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+         )
+     )
+ 
++    admin_relogin = client.post(
++        "/api/auth/login",
++        json={
++            "email": "admin1@example.com",
++            "password": os.getenv("SEED_ADMIN_PASSWORD", "change-me-temporary-admin-password"),
++        },
++    )
++    assert admin_relogin.status_code == 200, admin_relogin.text
++
++    for email in (medico_user["email"], operador_user["email"]):
++        login_response = client.post("/api/auth/login", json={"email": email, "password": "Temporal123!"})
++        assert login_response.status_code == 200, login_response.text
++        assert login_response.json()["access_token"]
++
+     medico = assert_created(
+         client.post(
+             "/api/medicos",
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 093094b..461b864 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -226,6 +226,16 @@ function fieldInputType(field: CatalogField) {
+   return 'text';
+ }
+ 
++function fieldAutocomplete(field: CatalogField) {
++  if (field.type === 'password') {
++    return field.createOnly ? 'new-password' : 'off';
++  }
++  if (field.type === 'email') {
++    return 'off';
++  }
++  return undefined;
++}
++
+ function selectOptions(field: CatalogField): SelectOption[] {
+   if (field.options) return field.options;
+   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
+@@ -377,6 +387,8 @@ function cellValue(row: Row, column: CatalogColumn) {
+ watch(
+   () => route.meta.catalog,
+   () => {
++    rows.value = [];
++    resetForm();
+     void loadData();
+   },
+ );
+@@ -394,7 +406,7 @@ onMounted(loadData);
+     </header>
+ 
+     <div class="grid catalog-grid">
+-      <form class="panel form" @submit.prevent="submit">
++      <form class="panel form" autocomplete="off" @submit.prevent="submit">
+         <h2>{{ editingId ? 'Editar' : 'Crear' }} {{ config.entityName }}</h2>
+         <div v-if="config.institutionScoped" class="form-row">
+           <label for="catalog-institution">Institución</label>
+@@ -493,6 +505,7 @@ onMounted(loadData);
+           <input
+             v-else
+             :id="field.name"
++            :autocomplete="fieldAutocomplete(field)"
+             :value="fieldValue(field.name)"
+             :maxlength="field.maxLength"
+             :required="field.required && !(field.createOnly && editingId)"
