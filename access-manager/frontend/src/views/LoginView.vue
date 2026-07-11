@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { login, setToken } from '../api/client';
+import { getCurrentUser, login, setToken } from '../api/client';
 
 const router = useRouter();
 const email = ref('admin1@example.com');
@@ -15,7 +15,8 @@ async function submit() {
   try {
     const response = await login(email.value, password.value);
     setToken(response.access_token);
-    router.push('/dashboard');
+    const user = await getCurrentUser();
+    router.push(user.force_password_change ? '/perfil' : '/dashboard');
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';
   } finally {

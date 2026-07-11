@@ -1,10 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { getToken } from '../api/client';
+import { clearToken, getCurrentUser, getToken } from '../api/client';
 import LoginView from '../views/LoginView.vue';
 import DashboardView from '../views/DashboardView.vue';
 import InstitucionesView from '../views/InstitucionesView.vue';
 import ComplejosView from '../views/ComplejosView.vue';
 import CatalogView from '../views/CatalogView.vue';
+import PerfilView from '../views/PerfilView.vue';
 import AsignacionesView from '../views/AsignacionesView.vue';
 import AuditoriaView from '../views/AuditoriaView.vue';
 import DisplayTurnosView from '../views/DisplayTurnosView.vue';
@@ -26,9 +27,10 @@ const router = createRouter({
     {
       path: '/display/:codigo_dispositivo',
       component: DisplayTurnosView,
-      meta: { public: true, fullscreen: true },
+      meta: { public: true, fullscreen: true, hideUserBadge: true },
     },
     { path: '/dashboard', component: DashboardView },
+    { path: '/perfil', component: PerfilView },
     { path: '/instituciones', component: InstitucionesView },
     { path: '/complejos', component: ComplejosView },
     { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
@@ -40,8 +42,8 @@ const router = createRouter({
     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
     { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
     { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
-    { path: '/pantallas-turnos', component: PantallasTurnosView },
-    { path: '/kioskos', component: KioskosView },
+    { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
     { path: '/pacientes', component: PacientesView },
     { path: '/citas', component: CitasView },
     { path: '/citas/hoy', component: CitasHoyView },
@@ -54,12 +56,28 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
-  if (!to.meta.public && !getToken()) {
+router.beforeEach(async (to) => {
+  const token = getToken();
+  if (!to.meta.public && !token) {
     return '/login';
   }
-  if (to.path === '/login' && getToken()) {
-    return '/dashboard';
+  if (!token || (to.meta.public && to.path !== '/login')) {
+    return;
+  }
+
+  try {
+    const user = await getCurrentUser();
+    if (user.force_password_change && to.path !== '/perfil') {
+      return '/perfil';
+    }
+    if (to.path === '/login') {
+      return user.force_password_change ? '/perfil' : '/dashboard';
+    }
+  } catch {
+    clearToken();
+    if (!to.meta.public) {
+      return '/login';
+    }
   }
 });
 

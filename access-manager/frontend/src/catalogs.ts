@@ -82,11 +82,13 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
       { name: 'password', label: 'Contraseña temporal', type: 'password', required: true, createOnly: true },
       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
+      { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },
     ],
     columns: [
       { name: 'nombre', label: 'Nombre' },
       { name: 'email', label: 'Correo' },
+      { name: 'force_password_change', label: 'Cambio requerido', boolean: true },
       { name: 'estado', label: 'Estado' },
     ],
   },

@@ -1,0 +1,625 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 6daee1d..e5d7173 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -1,14 +1,15 @@
+ from __future__ import annotations
+ 
+-from fastapi import APIRouter, Depends, HTTPException, status
++from fastapi import APIRouter, Depends, HTTPException, Request, status
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+-from app.core.security import create_access_token, get_current_user, verify_password
++from app.core.security import create_access_token, get_current_user, hash_password, verify_password
+ from app.models.usuario import Usuario
+-from app.schemas.auth import LoginRequest, TokenResponse
++from app.schemas.auth import LoginRequest, PasswordChangeRequest, TokenResponse
+ from app.schemas.usuario import UsuarioRead
++from app.services.audit_service import record_audit_event
+ 
+ router = APIRouter()
+ 
+@@ -32,3 +33,33 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
+ @router.get("/me", response_model=UsuarioRead)
+ def me(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+     return current_user
++
++
++@router.post("/password", response_model=UsuarioRead)
++def change_password(
++    payload: PasswordChangeRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = Depends(get_current_user),
++) -> Usuario:
++    if not verify_password(payload.current_password, current_user.password_hash):
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="La contraseña actual no es correcta.",
++        )
++    current_user.password_hash = hash_password(payload.new_password)
++    current_user.force_password_change = False
++    db.flush()
++    record_audit_event(
++        db,
++        evento="PASSWORD_CAMBIADO",
++        entidad="usuarios",
++        entidad_id=current_user.id,
++        usuario_id=current_user.id,
++        canal="WEB",
++        ip_origen=request.client.host if request.client else None,
++        valor_despues={"force_password_change": False},
++    )
++    db.commit()
++    db.refresh(current_user)
++    return current_user
+diff --git a/access-manager/backend/app/core/security.py b/access-manager/backend/app/core/security.py
+index 9e6233e..b42472f 100644
+--- a/access-manager/backend/app/core/security.py
++++ b/access-manager/backend/app/core/security.py
+@@ -5,7 +5,7 @@ import uuid
+ 
+ from argon2 import PasswordHasher
+ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+-from fastapi import Depends, HTTPException, status
++from fastapi import Depends, HTTPException, Request, status
+ from fastapi.security import OAuth2PasswordBearer
+ from jose import JWTError, jwt
+ from sqlalchemy import select
+@@ -40,6 +40,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
+ 
+ 
+ def get_current_user(
++    request: Request,
+     token: str = Depends(oauth2_scheme),
+     db: Session = Depends(get_db),
+ ) -> Usuario:
+@@ -61,6 +62,11 @@ def get_current_user(
+     user = db.execute(select(Usuario).where(Usuario.id == user_id)).scalar_one_or_none()
+     if user is None or user.estado != "ACTIVO":
+         raise credentials_error
++    if user.force_password_change and request.url.path not in {"/api/auth/me", "/api/auth/password"}:
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail="Debe cambiar su contraseña antes de continuar.",
++        )
+     return user
+ 
+ 
+diff --git a/access-manager/backend/app/models/usuario.py b/access-manager/backend/app/models/usuario.py
+index f24fe9d..46827ab 100644
+--- a/access-manager/backend/app/models/usuario.py
++++ b/access-manager/backend/app/models/usuario.py
+@@ -18,4 +18,5 @@ class Usuario(TimestampMixin, Base):
+     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+     telefono: Mapped[str | None] = mapped_column(String(64))
+     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
++    force_password_change: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+     estado: Mapped[str] = mapped_column(String(32), default="ACTIVO", server_default="ACTIVO", nullable=False)
+diff --git a/access-manager/backend/app/schemas/auth.py b/access-manager/backend/app/schemas/auth.py
+index 79590a6..789aa9b 100644
+--- a/access-manager/backend/app/schemas/auth.py
++++ b/access-manager/backend/app/schemas/auth.py
+@@ -8,6 +8,11 @@ class LoginRequest(BaseModel):
+     password: str = Field(min_length=1)
+ 
+ 
++class PasswordChangeRequest(BaseModel):
++    current_password: str = Field(min_length=1)
++    new_password: str = Field(min_length=8, max_length=128)
++
++
+ class TokenResponse(BaseModel):
+     access_token: str
+     token_type: str = "bearer"
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index 20eb717..73d1b1a 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -12,6 +12,7 @@ class UsuarioCreate(BaseModel):
+     password: str = Field(min_length=8, max_length=128)
+     telefono: str | None = Field(default=None, max_length=64)
+     two_factor_enabled: bool = False
++    force_password_change: bool = False
+     estado: str = Field(default="ACTIVO", max_length=32)
+ 
+ 
+@@ -21,6 +22,7 @@ class UsuarioUpdate(BaseModel):
+     password: str | None = Field(default=None, min_length=8, max_length=128)
+     telefono: str | None = Field(default=None, max_length=64)
+     two_factor_enabled: bool | None = None
++    force_password_change: bool | None = None
+     estado: str | None = Field(default=None, max_length=32)
+ 
+ 
+@@ -30,6 +32,7 @@ class UsuarioRead(BaseModel):
+     email: EmailStr
+     telefono: str | None
+     two_factor_enabled: bool
++    force_password_change: bool
+     estado: str
+     created_at: datetime
+     updated_at: datetime
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 68c4ab8..3a7a7e9 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -62,6 +62,73 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
+     assert paciente["nombre_preferido"] == f"Alias {suffix}"
+ 
+ 
++def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++    initial_password = "Temporal123!"
++    new_password = "NuevaTemporal123!"
++
++    user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "nombre": f"Admin Negocio {suffix}",
++                "email": f"admin-negocio-{suffix}@example.com",
++                "password": initial_password,
++                "force_password_change": True,
++            },
++        )
++    )
++    assert user["force_password_change"] is True
++
++    roles_response = client.get("/api/roles", headers=auth_headers)
++    assert roles_response.status_code == 200, roles_response.text
++    admin_negocio_role = next(role for role in roles_response.json() if role["codigo"] == "ADMIN_NEGOCIO")
++    assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={"usuario_id": user["id"], "rol_id": admin_negocio_role["id"]},
++        )
++    )
++
++    login_response = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
++    assert login_response.status_code == 200, login_response.text
++    forced_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
++
++    me_response = client.get("/api/auth/me", headers=forced_headers)
++    assert me_response.status_code == 200, me_response.text
++    assert me_response.json()["force_password_change"] is True
++
++    blocked_response = client.get("/api/roles", headers=forced_headers)
++    assert blocked_response.status_code == 403, blocked_response.text
++    assert blocked_response.json()["detail"] == "Debe cambiar su contraseña antes de continuar."
++
++    wrong_password_response = client.post(
++        "/api/auth/password",
++        headers=forced_headers,
++        json={"current_password": "incorrecta", "new_password": new_password},
++    )
++    assert wrong_password_response.status_code == 401, wrong_password_response.text
++
++    change_response = client.post(
++        "/api/auth/password",
++        headers=forced_headers,
++        json={"current_password": initial_password, "new_password": new_password},
++    )
++    assert change_response.status_code == 200, change_response.text
++    assert change_response.json()["force_password_change"] is False
++
++    old_login_response = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
++    assert old_login_response.status_code == 401, old_login_response.text
++
++    new_login_response = client.post("/api/auth/login", json={"email": user["email"], "password": new_password})
++    assert new_login_response.status_code == 200, new_login_response.text
++    active_headers = {"Authorization": f"Bearer {new_login_response.json()['access_token']}"}
++    roles_after_change = client.get("/api/roles", headers=active_headers)
++    assert roles_after_change.status_code == 200, roles_after_change.text
++
++
+ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/index.html b/access-manager/frontend/index.html
+index b87bfa9..a53e968 100644
+--- a/access-manager/frontend/index.html
++++ b/access-manager/frontend/index.html
+@@ -3,7 +3,7 @@
+   <head>
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <link rel="icon" type="image/png" href="/src/astrogato-solo-gato.png" />
++    <link rel="icon" type="image/png" href="/src/clinicas-alfa.png" />
+     <title>Control de Acceso</title>
+   </head>
+   <body>
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 9584168..6d016ff 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -1,12 +1,15 @@
+ <script setup lang="ts">
+-import { computed, onMounted, onUnmounted, ref } from 'vue';
++import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+-import { clearToken, getToken } from './api/client';
++import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client';
+ import astrogatoLogo from './astrogato-logo.png';
++import clinicasLogo from './clinicas-alfa.png';
+ 
+ const router = useRouter();
+ const route = useRoute();
+ const fullscreen = computed(() => Boolean(route.meta.fullscreen));
++const currentUser = ref<Usuario | null>(null);
++const showUserBadge = computed(() => Boolean(getToken() && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
+ const footerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+ const footerClockFormatter = new Intl.DateTimeFormat('es-MX', {
+   hour: '2-digit',
+@@ -21,21 +24,48 @@ const footerDatetime = computed(() => footerDate.value.toISOString());
+ 
+ let footerClockTimer: number | undefined;
+ 
++async function refreshCurrentUser() {
++  if (!getToken() || fullscreen.value) {
++    currentUser.value = null;
++    return;
++  }
++  try {
++    currentUser.value = await getCurrentUser();
++  } catch {
++    currentUser.value = null;
++  }
++}
++
++function handleCurrentUserUpdated() {
++  void refreshCurrentUser();
++}
++
+ onMounted(() => {
+   footerDate.value = new Date();
+   footerClockTimer = window.setInterval(() => {
+     footerDate.value = new Date();
+   }, 1000);
++  window.addEventListener('current-user-updated', handleCurrentUserUpdated);
+ });
+ 
+ onUnmounted(() => {
+   window.clearInterval(footerClockTimer);
++  window.removeEventListener('current-user-updated', handleCurrentUserUpdated);
+ });
+ 
+ function logout() {
+   clearToken();
++  currentUser.value = null;
+   router.push('/login');
+ }
++
++watch(
++  () => route.fullPath,
++  () => {
++    void refreshCurrentUser();
++  },
++  { immediate: true },
++);
+ </script>
+ 
+ <template>
+@@ -52,15 +82,16 @@ function logout() {
+   <div v-else class="app-shell">
+     <aside class="sidebar">
+       <div class="brand">
+-        <span class="brand-mark">AM</span>
++        <img class="brand-logo" :src="clinicasLogo" alt="Clínicas Alfa" />
+         <div>
+-          <strong>Access Manager</strong>
+-          <small>Control de accesos</small>
++          <strong>Control de acceso</strong>
++          <small>Clínicas Alfa</small>
+         </div>
+       </div>
+       <nav>
+         <span class="nav-section">General</span>
+         <RouterLink to="/dashboard">Dashboard</RouterLink>
++        <RouterLink to="/perfil">Perfil</RouterLink>
+         <span class="nav-section">Instituciones</span>
+         <RouterLink to="/instituciones">Instituciones</RouterLink>
+         <RouterLink to="/complejos">Complejos</RouterLink>
+@@ -90,6 +121,13 @@ function logout() {
+       <button v-if="getToken()" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+     </aside>
+     <main class="content">
++      <div v-if="showUserBadge" class="user-badge-row">
++        <RouterLink class="user-badge" to="/perfil">
++          <span>Usuario</span>
++          <strong>{{ currentUser?.nombre }}</strong>
++          <em v-if="currentUser?.force_password_change">Cambio de contraseña pendiente</em>
++        </RouterLink>
++      </div>
+       <RouterView />
+     </main>
+     <footer class="app-footer">
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 3c81104..715f679 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -86,6 +86,7 @@ export type Usuario = {
+   email: string;
+   telefono?: string | null;
+   two_factor_enabled: boolean;
++  force_password_change: boolean;
+   estado: string;
+   created_at: string;
+   updated_at: string;
+@@ -468,6 +469,17 @@ export async function login(email: string, password: string) {
+   });
+ }
+ 
++export function getCurrentUser() {
++  return apiFetch<Usuario>('/auth/me');
++}
++
++export function changeMyPassword(payload: { current_password: string; new_password: string }) {
++  return apiFetch<Usuario>('/auth/password', {
++    method: 'POST',
++    body: JSON.stringify(payload),
++  });
++}
++
+ export function getApiHealth() {
+   return apiFetch<ApiHealth>('/health');
+ }
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index d09c6b1..6e60823 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -82,11 +82,13 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
+       { name: 'password', label: 'Contraseña temporal', type: 'password', required: true, createOnly: true },
+       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
++      { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
+       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },
+     ],
+     columns: [
+       { name: 'nombre', label: 'Nombre' },
+       { name: 'email', label: 'Correo' },
++      { name: 'force_password_change', label: 'Cambio requerido', boolean: true },
+       { name: 'estado', label: 'Estado' },
+     ],
+   },
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index f572994..e591faf 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -1,10 +1,11 @@
+ import { createRouter, createWebHistory } from 'vue-router';
+-import { getToken } from '../api/client';
++import { clearToken, getCurrentUser, getToken } from '../api/client';
+ import LoginView from '../views/LoginView.vue';
+ import DashboardView from '../views/DashboardView.vue';
+ import InstitucionesView from '../views/InstitucionesView.vue';
+ import ComplejosView from '../views/ComplejosView.vue';
+ import CatalogView from '../views/CatalogView.vue';
++import PerfilView from '../views/PerfilView.vue';
+ import AsignacionesView from '../views/AsignacionesView.vue';
+ import AuditoriaView from '../views/AuditoriaView.vue';
+ import DisplayTurnosView from '../views/DisplayTurnosView.vue';
+@@ -26,9 +27,10 @@ const router = createRouter({
+     {
+       path: '/display/:codigo_dispositivo',
+       component: DisplayTurnosView,
+-      meta: { public: true, fullscreen: true },
++      meta: { public: true, fullscreen: true, hideUserBadge: true },
+     },
+     { path: '/dashboard', component: DashboardView },
++    { path: '/perfil', component: PerfilView },
+     { path: '/instituciones', component: InstitucionesView },
+     { path: '/complejos', component: ComplejosView },
+     { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
+@@ -40,8 +42,8 @@ const router = createRouter({
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+     { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
+     { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
+-    { path: '/pantallas-turnos', component: PantallasTurnosView },
+-    { path: '/kioskos', component: KioskosView },
++    { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
++    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+     { path: '/pacientes', component: PacientesView },
+     { path: '/citas', component: CitasView },
+     { path: '/citas/hoy', component: CitasHoyView },
+@@ -54,12 +56,28 @@ const router = createRouter({
+   ],
+ });
+ 
+-router.beforeEach((to) => {
+-  if (!to.meta.public && !getToken()) {
++router.beforeEach(async (to) => {
++  const token = getToken();
++  if (!to.meta.public && !token) {
+     return '/login';
+   }
+-  if (to.path === '/login' && getToken()) {
+-    return '/dashboard';
++  if (!token || (to.meta.public && to.path !== '/login')) {
++    return;
++  }
++
++  try {
++    const user = await getCurrentUser();
++    if (user.force_password_change && to.path !== '/perfil') {
++      return '/perfil';
++    }
++    if (to.path === '/login') {
++      return user.force_password_change ? '/perfil' : '/dashboard';
++    }
++  } catch {
++    clearToken();
++    if (!to.meta.public) {
++      return '/login';
++    }
+   }
+ });
+ 
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index f053c50..1482d38 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -88,6 +88,15 @@ button:disabled {
+   gap: 0.75rem;
+ }
+ 
++.brand-logo {
++  background: #ffffff;
++  border-radius: 6px;
++  display: block;
++  height: 48px;
++  object-fit: contain;
++  width: 72px;
++}
++
+ .brand-mark {
+   align-items: center;
+   background: #6cc4a1;
+@@ -135,9 +144,55 @@ nav a:hover {
+ }
+ 
+ .content {
++  display: grid;
++  gap: 1rem;
++  align-content: start;
+   padding: 2rem;
+ }
+ 
++.user-badge-row {
++  display: flex;
++  justify-content: flex-end;
++  min-height: 36px;
++}
++
++.user-badge {
++  align-items: center;
++  background: #ffffff;
++  border: 1px solid #d9e1ea;
++  border-radius: 8px;
++  color: #17202a;
++  display: inline-flex;
++  gap: 0.55rem;
++  max-width: min(440px, 100%);
++  padding: 0.45rem 0.7rem;
++  text-decoration: none;
++}
++
++.user-badge span {
++  color: #667789;
++  font-size: 0.78rem;
++  font-weight: 700;
++  text-transform: uppercase;
++}
++
++.user-badge strong {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.user-badge em {
++  background: #fff7ed;
++  border-radius: 999px;
++  color: #9a3412;
++  font-size: 0.78rem;
++  font-style: normal;
++  font-weight: 700;
++  padding: 0.22rem 0.5rem;
++  white-space: nowrap;
++}
++
+ .app-footer {
+   align-items: center;
+   background: #ffffff;
+@@ -420,6 +475,49 @@ th {
+   color: #b42318;
+ }
+ 
++.warning {
++  background: #fff7ed;
++  border: 1px solid #fed7aa;
++  border-radius: 8px;
++  color: #9a3412;
++  font-weight: 700;
++  margin: 0;
++  padding: 0.75rem;
++}
++
++.success-message {
++  color: #168451;
++  font-weight: 700;
++}
++
++.profile-grid {
++  align-items: start;
++}
++
++.profile-list {
++  display: grid;
++  gap: 0.75rem;
++  margin: 1rem 0 0;
++}
++
++.profile-list div {
++  border-bottom: 1px solid #e2e8f0;
++  display: grid;
++  gap: 0.25rem;
++  padding-bottom: 0.75rem;
++}
++
++.profile-list dt {
++  color: #667789;
++  font-size: 0.78rem;
++  font-weight: 800;
++  text-transform: uppercase;
++}
++
++.profile-list dd {
++  margin: 0;
++}
++
+ .duplicate-warning {
+   background: #fff7ed;
+   border: 1px solid #fed7aa;
+@@ -715,6 +813,14 @@ pre {
+     padding: 1rem;
+   }
+ 
++  .user-badge-row {
++    justify-content: stretch;
++  }
++
++  .user-badge {
++    width: 100%;
++  }
++
+   .app-footer {
+     grid-column: 1;
+     gap: 0.5rem;
+diff --git a/access-manager/frontend/src/views/LoginView.vue b/access-manager/frontend/src/views/LoginView.vue
+index c2178fe..ffd5291 100644
+--- a/access-manager/frontend/src/views/LoginView.vue
++++ b/access-manager/frontend/src/views/LoginView.vue
+@@ -1,7 +1,7 @@
+ <script setup lang="ts">
+ import { ref } from 'vue';
+ import { useRouter } from 'vue-router';
+-import { login, setToken } from '../api/client';
++import { getCurrentUser, login, setToken } from '../api/client';
+ 
+ const router = useRouter();
+ const email = ref('admin1@example.com');
+@@ -15,7 +15,8 @@ async function submit() {
+   try {
+     const response = await login(email.value, password.value);
+     setToken(response.access_token);
+-    router.push('/dashboard');
++    const user = await getCurrentUser();
++    router.push(user.force_password_change ? '/perfil' : '/dashboard');
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';
+   } finally {

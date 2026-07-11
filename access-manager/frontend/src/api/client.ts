@@ -86,6 +86,7 @@ export type Usuario = {
   email: string;
   telefono?: string | null;
   two_factor_enabled: boolean;
+  force_password_change: boolean;
   estado: string;
   created_at: string;
   updated_at: string;
@@ -465,6 +466,17 @@ export async function login(email: string, password: string) {
   return apiFetch<{ access_token: string; token_type: string }>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export function getCurrentUser() {
+  return apiFetch<Usuario>('/auth/me');
+}
+
+export function changeMyPassword(payload: { current_password: string; new_password: string }) {
+  return apiFetch<Usuario>('/auth/password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 

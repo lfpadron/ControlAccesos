@@ -62,6 +62,73 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
     assert paciente["nombre_preferido"] == f"Alias {suffix}"
 
 
+def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+    initial_password = "Temporal123!"
+    new_password = "NuevaTemporal123!"
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "nombre": f"Admin Negocio {suffix}",
+                "email": f"admin-negocio-{suffix}@example.com",
+                "password": initial_password,
+                "force_password_change": True,
+            },
+        )
+    )
+    assert user["force_password_change"] is True
+
+    roles_response = client.get("/api/roles", headers=auth_headers)
+    assert roles_response.status_code == 200, roles_response.text
+    admin_negocio_role = next(role for role in roles_response.json() if role["codigo"] == "ADMIN_NEGOCIO")
+    assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={"usuario_id": user["id"], "rol_id": admin_negocio_role["id"]},
+        )
+    )
+
+    login_response = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
+    assert login_response.status_code == 200, login_response.text
+    forced_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    me_response = client.get("/api/auth/me", headers=forced_headers)
+    assert me_response.status_code == 200, me_response.text
+    assert me_response.json()["force_password_change"] is True
+
+    blocked_response = client.get("/api/roles", headers=forced_headers)
+    assert blocked_response.status_code == 403, blocked_response.text
+    assert blocked_response.json()["detail"] == "Debe cambiar su contraseña antes de continuar."
+
+    wrong_password_response = client.post(
+        "/api/auth/password",
+        headers=forced_headers,
+        json={"current_password": "incorrecta", "new_password": new_password},
+    )
+    assert wrong_password_response.status_code == 401, wrong_password_response.text
+
+    change_response = client.post(
+        "/api/auth/password",
+        headers=forced_headers,
+        json={"current_password": initial_password, "new_password": new_password},
+    )
+    assert change_response.status_code == 200, change_response.text
+    assert change_response.json()["force_password_change"] is False
+
+    old_login_response = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
+    assert old_login_response.status_code == 401, old_login_response.text
+
+    new_login_response = client.post("/api/auth/login", json={"email": user["email"], "password": new_password})
+    assert new_login_response.status_code == 200, new_login_response.text
+    active_headers = {"Authorization": f"Bearer {new_login_response.json()['access_token']}"}
+    roles_after_change = client.get("/api/roles", headers=active_headers)
+    assert roles_after_change.status_code == 200, roles_after_change.text
+
+
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 

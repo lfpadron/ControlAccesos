@@ -5,7 +5,7 @@ import uuid
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -40,6 +40,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
 
 
 def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> Usuario:
@@ -61,6 +62,11 @@ def get_current_user(
     user = db.execute(select(Usuario).where(Usuario.id == user_id)).scalar_one_or_none()
     if user is None or user.estado != "ACTIVO":
         raise credentials_error
+    if user.force_password_change and request.url.path not in {"/api/auth/me", "/api/auth/password"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debe cambiar su contraseña antes de continuar.",
+        )
     return user
 
 

@@ -88,6 +88,15 @@ button:disabled {
   gap: 0.75rem;
 }
 
+.brand-logo {
+  background: #ffffff;
+  border-radius: 6px;
+  display: block;
+  height: 48px;
+  object-fit: contain;
+  width: 72px;
+}
+
 .brand-mark {
   align-items: center;
   background: #6cc4a1;
@@ -135,7 +144,53 @@ nav a:hover {
 }
 
 .content {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
   padding: 2rem;
+}
+
+.user-badge-row {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 36px;
+}
+
+.user-badge {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  color: #17202a;
+  display: inline-flex;
+  gap: 0.55rem;
+  max-width: min(440px, 100%);
+  padding: 0.45rem 0.7rem;
+  text-decoration: none;
+}
+
+.user-badge span {
+  color: #667789;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.user-badge strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-badge em {
+  background: #fff7ed;
+  border-radius: 999px;
+  color: #9a3412;
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 700;
+  padding: 0.22rem 0.5rem;
+  white-space: nowrap;
 }
 
 .app-footer {
@@ -418,6 +473,49 @@ th {
 
 .error {
   color: #b42318;
+}
+
+.warning {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  font-weight: 700;
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.success-message {
+  color: #168451;
+  font-weight: 700;
+}
+
+.profile-grid {
+  align-items: start;
+}
+
+.profile-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+}
+
+.profile-list div {
+  border-bottom: 1px solid #e2e8f0;
+  display: grid;
+  gap: 0.25rem;
+  padding-bottom: 0.75rem;
+}
+
+.profile-list dt {
+  color: #667789;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.profile-list dd {
+  margin: 0;
 }
 
 .duplicate-warning {
@@ -713,6 +811,14 @@ pre {
 
   .content {
     padding: 1rem;
+  }
+
+  .user-badge-row {
+    justify-content: stretch;
+  }
+
+  .user-badge {
+    width: 100%;
   }
 
   .app-footer {

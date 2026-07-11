@@ -18,4 +18,5 @@ class Usuario(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
     telefono: Mapped[str | None] = mapped_column(String(64))
     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    force_password_change: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     estado: Mapped[str] = mapped_column(String(32), default="ACTIVO", server_default="ACTIVO", nullable=False)
