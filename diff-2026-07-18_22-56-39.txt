@@ -1,0 +1,218 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index e5d7173..faa1778 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Request, status
+-from sqlalchemy import select
++from sqlalchemy import func, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+@@ -16,7 +16,8 @@ router = APIRouter()
+ 
+ @router.post("/login", response_model=TokenResponse)
+ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+-    user = db.execute(select(Usuario).where(Usuario.email == payload.email)).scalar_one_or_none()
++    email = str(payload.email).strip().lower()
++    user = db.execute(select(Usuario).where(func.lower(Usuario.email) == email)).scalar_one_or_none()
+     if user is None or not verify_password(payload.password, user.password_hash):
+         raise HTTPException(
+             status_code=status.HTTP_401_UNAUTHORIZED,
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index cc09eb1..04c8a18 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -7,7 +7,7 @@ from uuid import UUID
+ 
+ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+ from pydantic import BaseModel
+-from sqlalchemy import select
++from sqlalchemy import func, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+@@ -124,7 +124,8 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
+     email = data.get("email")
+     if email is None:
+         return
+-    query = select(Usuario).where(Usuario.email == email)
++    normalized_email = str(email).strip().lower()
++    query = select(Usuario).where(func.lower(Usuario.email) == normalized_email)
+     if item is not None:
+         query = query.where(Usuario.id != item.id)
+     if db.execute(query).scalar_one_or_none() is not None:
+@@ -326,12 +327,15 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
+ 
+ def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
+     password = data.pop("password")
++    data["email"] = str(data["email"]).strip().lower()
+     data["password_hash"] = hash_password(password)
+     return data
+ 
+ 
+ def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
+     password = data.pop("password", None)
++    if data.get("email") is not None:
++        data["email"] = str(data["email"]).strip().lower()
+     if password:
+         data["password_hash"] = hash_password(password)
+     return data
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 043db70..8aa731d 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -140,13 +140,17 @@ def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[st
+             headers=auth_headers,
+             json={
+                 "nombre": f"Usuario Reset {suffix}",
+-                "email": f"usuario-reset-{suffix}@example.com",
++                "email": f"Usuario-Reset-{suffix}@Example.COM",
+                 "password": initial_password,
+             },
+         )
+     )
++    assert user["email"] == f"usuario-reset-{suffix}@example.com"
+ 
+-    initial_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
++    initial_login = client.post(
++        "/api/auth/login",
++        json={"email": f"USUARIO-RESET-{suffix}@EXAMPLE.COM", "password": initial_password},
++    )
+     assert initial_login.status_code == 200, initial_login.text
+ 
+     reset_response = client.patch(
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index f4dc23b..2e28707 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -226,6 +226,14 @@ function fieldInputType(field: CatalogField) {
+   return 'text';
+ }
+ 
++function fieldId(field: CatalogField) {
++  return `catalog-${config.value.key}-${field.name}`;
++}
++
++function fieldName(field: CatalogField) {
++  return `catalog_${config.value.key}_${field.name}`;
++}
++
+ function fieldAutocomplete(field: CatalogField) {
+   if (field.type === 'password') {
+     return 'new-password';
+@@ -267,7 +275,10 @@ function normalizePayload() {
+     if (field.createOnly && editingId.value) {
+       continue;
+     }
+-    const value = form[field.name];
++    let value = form[field.name];
++    if (typeof value === 'string' && (field.type === 'email' || field.type === 'password')) {
++      value = value.trim();
++    }
+     if (field.type === 'password' && editingId.value && !value) {
+       continue;
+     }
+@@ -423,12 +434,13 @@ onMounted(loadData);
+           </datalist>
+         </div>
+         <div v-for="field in config.fields" :key="field.name" class="form-row">
+-          <label v-if="field.type !== 'checkbox'" :for="field.name">{{ field.label }}</label>
++          <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
+           <template v-if="isScopedComplexField(field)">
+             <input
+-              :id="field.name"
++              :id="fieldId(field)"
+               v-model="complexSearch"
+               list="catalog-complex-options"
++              :name="fieldName(field)"
+               :required="field.required"
+               :disabled="!selectedInstitutionId"
+               @input="syncScopedComplex"
+@@ -440,7 +452,8 @@ onMounted(loadData);
+           </template>
+           <select
+             v-else-if="isScopedPisoField(field)"
+-            :id="field.name"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+             :required="field.required"
+             :disabled="!form.complejo_id"
+@@ -453,7 +466,8 @@ onMounted(loadData);
+           </select>
+           <select
+             v-else-if="isScopedClusterField(field)"
+-            :id="field.name"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
+             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
+             :required="field.required"
+             :disabled="!form.complejo_id || !form.piso_id"
+@@ -467,7 +481,8 @@ onMounted(loadData);
+           </select>
+           <textarea
+             v-else-if="field.type === 'textarea'"
+-            :id="field.name"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+             :required="field.required"
+             rows="3"
+@@ -475,7 +490,8 @@ onMounted(loadData);
+           />
+           <select
+             v-else-if="field.type === 'select'"
+-            :id="field.name"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+             :required="field.required"
+             @change="updateField(field.name, $event)"
+@@ -487,7 +503,8 @@ onMounted(loadData);
+           </select>
+           <select
+             v-else-if="field.type === 'multiselect'"
+-            :id="field.name"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
+             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
+             :required="field.required"
+             multiple
+@@ -499,13 +516,19 @@ onMounted(loadData);
+             </option>
+           </select>
+           <label v-else-if="field.type === 'checkbox'" class="check-row">
+-            <input :checked="Boolean(form[field.name])" type="checkbox" @change="updateChecked(field.name, $event)" />
++            <input
++              :checked="Boolean(form[field.name])"
++              :name="fieldName(field)"
++              type="checkbox"
++              @change="updateChecked(field.name, $event)"
++            />
+             {{ field.label }}
+           </label>
+           <input
+             v-else
+-            :id="field.name"
++            :id="fieldId(field)"
+             :autocomplete="fieldAutocomplete(field)"
++            :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+             :maxlength="field.maxLength"
+             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
+diff --git a/access-manager/frontend/src/views/LoginView.vue b/access-manager/frontend/src/views/LoginView.vue
+index ffd5291..d70539f 100644
+--- a/access-manager/frontend/src/views/LoginView.vue
++++ b/access-manager/frontend/src/views/LoginView.vue
+@@ -13,7 +13,7 @@ async function submit() {
+   error.value = '';
+   loading.value = true;
+   try {
+-    const response = await login(email.value, password.value);
++    const response = await login(email.value.trim(), password.value);
+     setToken(response.access_token);
+     const user = await getCurrentUser();
+     router.push(user.force_password_change ? '/perfil' : '/dashboard');

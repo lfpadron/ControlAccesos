@@ -226,6 +226,14 @@ function fieldInputType(field: CatalogField) {
   return 'text';
 }
 
+function fieldId(field: CatalogField) {
+  return `catalog-${config.value.key}-${field.name}`;
+}
+
+function fieldName(field: CatalogField) {
+  return `catalog_${config.value.key}_${field.name}`;
+}
+
 function fieldAutocomplete(field: CatalogField) {
   if (field.type === 'password') {
     return 'new-password';
@@ -267,7 +275,10 @@ function normalizePayload() {
     if (field.createOnly && editingId.value) {
       continue;
     }
-    const value = form[field.name];
+    let value = form[field.name];
+    if (typeof value === 'string' && (field.type === 'email' || field.type === 'password')) {
+      value = value.trim();
+    }
     if (field.type === 'password' && editingId.value && !value) {
       continue;
     }
@@ -423,12 +434,13 @@ onMounted(loadData);
           </datalist>
         </div>
         <div v-for="field in config.fields" :key="field.name" class="form-row">
-          <label v-if="field.type !== 'checkbox'" :for="field.name">{{ field.label }}</label>
+          <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
           <template v-if="isScopedComplexField(field)">
             <input
-              :id="field.name"
+              :id="fieldId(field)"
               v-model="complexSearch"
               list="catalog-complex-options"
+              :name="fieldName(field)"
               :required="field.required"
               :disabled="!selectedInstitutionId"
               @input="syncScopedComplex"
@@ -440,7 +452,8 @@ onMounted(loadData);
           </template>
           <select
             v-else-if="isScopedPisoField(field)"
-            :id="field.name"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
             :disabled="!form.complejo_id"
@@ -453,7 +466,8 @@ onMounted(loadData);
           </select>
           <select
             v-else-if="isScopedClusterField(field)"
-            :id="field.name"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
             :required="field.required"
             :disabled="!form.complejo_id || !form.piso_id"
@@ -467,7 +481,8 @@ onMounted(loadData);
           </select>
           <textarea
             v-else-if="field.type === 'textarea'"
-            :id="field.name"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
             rows="3"
@@ -475,7 +490,8 @@ onMounted(loadData);
           />
           <select
             v-else-if="field.type === 'select'"
-            :id="field.name"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
             @change="updateField(field.name, $event)"
@@ -487,7 +503,8 @@ onMounted(loadData);
           </select>
           <select
             v-else-if="field.type === 'multiselect'"
-            :id="field.name"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
             :required="field.required"
             multiple
@@ -499,13 +516,19 @@ onMounted(loadData);
             </option>
           </select>
           <label v-else-if="field.type === 'checkbox'" class="check-row">
-            <input :checked="Boolean(form[field.name])" type="checkbox" @change="updateChecked(field.name, $event)" />
+            <input
+              :checked="Boolean(form[field.name])"
+              :name="fieldName(field)"
+              type="checkbox"
+              @change="updateChecked(field.name, $event)"
+            />
             {{ field.label }}
           </label>
           <input
             v-else
-            :id="field.name"
+            :id="fieldId(field)"
             :autocomplete="fieldAutocomplete(field)"
+            :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :maxlength="field.maxLength"
             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"

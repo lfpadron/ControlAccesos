@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -124,7 +124,8 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
     email = data.get("email")
     if email is None:
         return
-    query = select(Usuario).where(Usuario.email == email)
+    normalized_email = str(email).strip().lower()
+    query = select(Usuario).where(func.lower(Usuario.email) == normalized_email)
     if item is not None:
         query = query.where(Usuario.id != item.id)
     if db.execute(query).scalar_one_or_none() is not None:
@@ -326,12 +327,15 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
 
 def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password")
+    data["email"] = str(data["email"]).strip().lower()
     data["password_hash"] = hash_password(password)
     return data
 
 
 def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password", None)
+    if data.get("email") is not None:
+        data["email"] = str(data["email"]).strip().lower()
     if password:
         data["password_hash"] = hash_password(password)
     return data

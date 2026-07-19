@@ -13,7 +13,7 @@ async function submit() {
   error.value = '';
   loading.value = true;
   try {
-    const response = await login(email.value, password.value);
+    const response = await login(email.value.trim(), password.value);
     setToken(response.access_token);
     const user = await getCurrentUser();
     router.push(user.force_password_change ? '/perfil' : '/dashboard');

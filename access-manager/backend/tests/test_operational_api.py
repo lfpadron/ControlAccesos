@@ -140,13 +140,17 @@ def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[st
             headers=auth_headers,
             json={
                 "nombre": f"Usuario Reset {suffix}",
-                "email": f"usuario-reset-{suffix}@example.com",
+                "email": f"Usuario-Reset-{suffix}@Example.COM",
                 "password": initial_password,
             },
         )
     )
+    assert user["email"] == f"usuario-reset-{suffix}@example.com"
 
-    initial_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
+    initial_login = client.post(
+        "/api/auth/login",
+        json={"email": f"USUARIO-RESET-{suffix}@EXAMPLE.COM", "password": initial_password},
+    )
     assert initial_login.status_code == 200, initial_login.text
 
     reset_response = client.patch(
