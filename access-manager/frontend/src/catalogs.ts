@@ -20,6 +20,7 @@ export type CatalogField = {
   lookup?: LookupKey;
   options?: Array<{ value: string; label: string }>;
   createOnly?: boolean;
+  editOptional?: boolean;
   defaultValue?: string | number | boolean | null;
 };
 
@@ -80,7 +81,7 @@ export const catalogs: Record<string, CatalogConfig> = {
     fields: [
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
-      { name: 'password', label: 'Contraseña temporal', type: 'password', required: true, createOnly: true },
+      { name: 'password', label: 'Contraseña temporal / nueva', type: 'password', required: true, editOptional: true },
       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
       { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },

@@ -1,0 +1,97 @@
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 3a7a7e9..043db70 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -129,6 +129,40 @@ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str,
+     assert roles_after_change.status_code == 200, roles_after_change.text
+ 
+ 
++def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++    initial_password = "Temporal123!"
++    reset_password = "ResetTemporal123!"
++
++    user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "nombre": f"Usuario Reset {suffix}",
++                "email": f"usuario-reset-{suffix}@example.com",
++                "password": initial_password,
++            },
++        )
++    )
++
++    initial_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
++    assert initial_login.status_code == 200, initial_login.text
++
++    reset_response = client.patch(
++        f"/api/usuarios/{user['id']}",
++        headers=auth_headers,
++        json={"password": reset_password},
++    )
++    assert reset_response.status_code == 200, reset_response.text
++
++    old_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
++    assert old_login.status_code == 401, old_login.text
++
++    reset_login = client.post("/api/auth/login", json={"email": user["email"], "password": reset_password})
++    assert reset_login.status_code == 200, reset_login.text
++
++
+ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 6e60823..3c173fc 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -20,6 +20,7 @@ export type CatalogField = {
+   lookup?: LookupKey;
+   options?: Array<{ value: string; label: string }>;
+   createOnly?: boolean;
++  editOptional?: boolean;
+   defaultValue?: string | number | boolean | null;
+ };
+ 
+@@ -80,7 +81,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     fields: [
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
+-      { name: 'password', label: 'Contraseña temporal', type: 'password', required: true, createOnly: true },
++      { name: 'password', label: 'Contraseña temporal / nueva', type: 'password', required: true, editOptional: true },
+       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
+       { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
+       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 461b864..f4dc23b 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -228,7 +228,7 @@ function fieldInputType(field: CatalogField) {
+ 
+ function fieldAutocomplete(field: CatalogField) {
+   if (field.type === 'password') {
+-    return field.createOnly ? 'new-password' : 'off';
++    return 'new-password';
+   }
+   if (field.type === 'email') {
+     return 'off';
+@@ -318,7 +318,7 @@ async function submit() {
+ function editRow(row: Row) {
+   editingId.value = row.id;
+   for (const field of config.value.fields) {
+-    if (field.createOnly) {
++    if (field.createOnly || field.type === 'password') {
+       form[field.name] = '';
+     } else if (field.type === 'multiselect') {
+       form[field.name] = Array.isArray(row[field.name]) ? [...(row[field.name] as unknown[])] : [];
+@@ -508,7 +508,7 @@ onMounted(loadData);
+             :autocomplete="fieldAutocomplete(field)"
+             :value="fieldValue(field.name)"
+             :maxlength="field.maxLength"
+-            :required="field.required && !(field.createOnly && editingId)"
++            :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
+             :type="fieldInputType(field)"
+             @input="updateField(field.name, $event)"
+           />

@@ -228,7 +228,7 @@ function fieldInputType(field: CatalogField) {
 
 function fieldAutocomplete(field: CatalogField) {
   if (field.type === 'password') {
-    return field.createOnly ? 'new-password' : 'off';
+    return 'new-password';
   }
   if (field.type === 'email') {
     return 'off';
@@ -318,7 +318,7 @@ async function submit() {
 function editRow(row: Row) {
   editingId.value = row.id;
   for (const field of config.value.fields) {
-    if (field.createOnly) {
+    if (field.createOnly || field.type === 'password') {
       form[field.name] = '';
     } else if (field.type === 'multiselect') {
       form[field.name] = Array.isArray(row[field.name]) ? [...(row[field.name] as unknown[])] : [];
@@ -508,7 +508,7 @@ onMounted(loadData);
             :autocomplete="fieldAutocomplete(field)"
             :value="fieldValue(field.name)"
             :maxlength="field.maxLength"
-            :required="field.required && !(field.createOnly && editingId)"
+            :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
             :type="fieldInputType(field)"
             @input="updateField(field.name, $event)"
           />

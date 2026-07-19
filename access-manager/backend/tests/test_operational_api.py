@@ -129,6 +129,40 @@ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str,
     assert roles_after_change.status_code == 200, roles_after_change.text
 
 
+def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+    initial_password = "Temporal123!"
+    reset_password = "ResetTemporal123!"
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "nombre": f"Usuario Reset {suffix}",
+                "email": f"usuario-reset-{suffix}@example.com",
+                "password": initial_password,
+            },
+        )
+    )
+
+    initial_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
+    assert initial_login.status_code == 200, initial_login.text
+
+    reset_response = client.patch(
+        f"/api/usuarios/{user['id']}",
+        headers=auth_headers,
+        json={"password": reset_password},
+    )
+    assert reset_response.status_code == 200, reset_response.text
+
+    old_login = client.post("/api/auth/login", json={"email": user["email"], "password": initial_password})
+    assert old_login.status_code == 401, old_login.text
+
+    reset_login = client.post("/api/auth/login", json={"email": user["email"], "password": reset_password})
+    assert reset_login.status_code == 200, reset_login.text
+
+
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 
