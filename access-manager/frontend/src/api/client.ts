@@ -21,7 +21,8 @@ function errorMessage(detail: unknown, fallback = 'Error de API') {
         if (!item || typeof item !== 'object') return '';
         const loc =
           'loc' in item && Array.isArray(item.loc) ? (item.loc as unknown[]).filter((part) => part !== 'body').join('.') : '';
-        const msg = 'msg' in item && typeof item.msg === 'string' ? item.msg : fallback;
+        const rawMsg = 'msg' in item && typeof item.msg === 'string' ? item.msg : fallback;
+        const msg = rawMsg.replace(/^Value error,\s*/, '');
         const ctx = 'ctx' in item && item.ctx && typeof item.ctx === 'object' ? item.ctx : {};
         if ('type' in item && item.type === 'string_too_short' && 'min_length' in ctx) {
           return `${loc}: debe tener al menos ${String(ctx.min_length)} caracteres`;

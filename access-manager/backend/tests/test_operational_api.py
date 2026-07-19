@@ -167,6 +167,56 @@ def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[st
     assert reset_login.status_code == 200, reset_login.text
 
 
+def test_user_password_requires_number(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+    valid_password = "Temporal123!"
+    invalid_password = "temporal"
+
+    invalid_create = client.post(
+        "/api/usuarios",
+        headers=auth_headers,
+        json={
+            "nombre": f"Usuario Password {suffix}",
+            "email": f"password-{suffix}@example.com",
+            "password": invalid_password,
+        },
+    )
+    assert invalid_create.status_code == 422, invalid_create.text
+    assert "al menos 1 número" in invalid_create.text
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "nombre": f"Usuario Password {suffix}",
+                "email": f"password-{suffix}@example.com",
+                "password": valid_password,
+            },
+        )
+    )
+
+    invalid_reset = client.patch(
+        f"/api/usuarios/{user['id']}",
+        headers=auth_headers,
+        json={"password": invalid_password},
+    )
+    assert invalid_reset.status_code == 422, invalid_reset.text
+    assert "al menos 1 número" in invalid_reset.text
+
+    login_response = client.post("/api/auth/login", json={"email": user["email"], "password": valid_password})
+    assert login_response.status_code == 200, login_response.text
+    user_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    invalid_self_change = client.post(
+        "/api/auth/password",
+        headers=user_headers,
+        json={"current_password": valid_password, "new_password": invalid_password},
+    )
+    assert invalid_self_change.status_code == 422, invalid_self_change.text
+    assert "al menos 1 número" in invalid_self_change.text
+
+
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 

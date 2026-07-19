@@ -299,6 +299,19 @@ function normalizePayload() {
   return payload;
 }
 
+function validatePayload(payload: Record<string, unknown>) {
+  for (const field of config.value.fields) {
+    if (!field.pattern || !(field.name in payload)) {
+      continue;
+    }
+    const value = payload[field.name];
+    if (typeof value === 'string' && value && !new RegExp(field.pattern).test(value)) {
+      return field.title ?? `${field.label} no tiene un formato válido.`;
+    }
+  }
+  return '';
+}
+
 async function submit() {
   loading.value = true;
   error.value = '';
@@ -311,11 +324,18 @@ async function submit() {
       return;
     }
   }
+  const payload = normalizePayload();
+  const validationError = validatePayload(payload);
+  if (validationError) {
+    error.value = validationError;
+    loading.value = false;
+    return;
+  }
   try {
     if (editingId.value) {
-      await updateResource<Row>(config.value.resource, editingId.value, normalizePayload());
+      await updateResource<Row>(config.value.resource, editingId.value, payload);
     } else {
-      await createResource<Row>(config.value.resource, normalizePayload());
+      await createResource<Row>(config.value.resource, payload);
     }
     await loadRows();
     resetForm();
@@ -530,8 +550,11 @@ onMounted(loadData);
             :autocomplete="fieldAutocomplete(field)"
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
+            :minlength="field.minLength"
             :maxlength="field.maxLength"
+            :pattern="field.pattern"
             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
+            :title="field.title"
             :type="fieldInputType(field)"
             @input="updateField(field.name, $event)"
           />

@@ -1,0 +1,282 @@
+diff --git a/access-manager/backend/app/schemas/auth.py b/access-manager/backend/app/schemas/auth.py
+index 789aa9b..8fa2642 100644
+--- a/access-manager/backend/app/schemas/auth.py
++++ b/access-manager/backend/app/schemas/auth.py
+@@ -1,6 +1,8 @@
+ from __future__ import annotations
+ 
+-from pydantic import BaseModel, EmailStr, Field
++from pydantic import BaseModel, EmailStr, Field, field_validator
++
++from app.schemas.password_policy import validate_user_password
+ 
+ 
+ class LoginRequest(BaseModel):
+@@ -12,6 +14,11 @@ class PasswordChangeRequest(BaseModel):
+     current_password: str = Field(min_length=1)
+     new_password: str = Field(min_length=8, max_length=128)
+ 
++    @field_validator("new_password")
++    @classmethod
++    def validate_new_password(cls, value: str) -> str:
++        return validate_user_password(value)
++
+ 
+ class TokenResponse(BaseModel):
+     access_token: str
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index 73d1b1a..c4f81aa 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -3,7 +3,9 @@ from __future__ import annotations
+ from datetime import datetime
+ from uuid import UUID
+ 
+-from pydantic import BaseModel, ConfigDict, EmailStr, Field
++from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
++
++from app.schemas.password_policy import validate_user_password
+ 
+ 
+ class UsuarioCreate(BaseModel):
+@@ -15,6 +17,11 @@ class UsuarioCreate(BaseModel):
+     force_password_change: bool = False
+     estado: str = Field(default="ACTIVO", max_length=32)
+ 
++    @field_validator("password")
++    @classmethod
++    def validate_password(cls, value: str) -> str:
++        return validate_user_password(value)
++
+ 
+ class UsuarioUpdate(BaseModel):
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+@@ -25,6 +32,11 @@ class UsuarioUpdate(BaseModel):
+     force_password_change: bool | None = None
+     estado: str | None = Field(default=None, max_length=32)
+ 
++    @field_validator("password")
++    @classmethod
++    def validate_password(cls, value: str | None) -> str | None:
++        return validate_user_password(value)
++
+ 
+ class UsuarioRead(BaseModel):
+     id: UUID
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 8aa731d..95fa2f0 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -167,6 +167,56 @@ def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[st
+     assert reset_login.status_code == 200, reset_login.text
+ 
+ 
++def test_user_password_requires_number(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++    valid_password = "Temporal123!"
++    invalid_password = "temporal"
++
++    invalid_create = client.post(
++        "/api/usuarios",
++        headers=auth_headers,
++        json={
++            "nombre": f"Usuario Password {suffix}",
++            "email": f"password-{suffix}@example.com",
++            "password": invalid_password,
++        },
++    )
++    assert invalid_create.status_code == 422, invalid_create.text
++    assert "al menos 1 número" in invalid_create.text
++
++    user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "nombre": f"Usuario Password {suffix}",
++                "email": f"password-{suffix}@example.com",
++                "password": valid_password,
++            },
++        )
++    )
++
++    invalid_reset = client.patch(
++        f"/api/usuarios/{user['id']}",
++        headers=auth_headers,
++        json={"password": invalid_password},
++    )
++    assert invalid_reset.status_code == 422, invalid_reset.text
++    assert "al menos 1 número" in invalid_reset.text
++
++    login_response = client.post("/api/auth/login", json={"email": user["email"], "password": valid_password})
++    assert login_response.status_code == 200, login_response.text
++    user_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
++
++    invalid_self_change = client.post(
++        "/api/auth/password",
++        headers=user_headers,
++        json={"current_password": valid_password, "new_password": invalid_password},
++    )
++    assert invalid_self_change.status_code == 422, invalid_self_change.text
++    assert "al menos 1 número" in invalid_self_change.text
++
++
+ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 715f679..d880c66 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -21,7 +21,8 @@ function errorMessage(detail: unknown, fallback = 'Error de API') {
+         if (!item || typeof item !== 'object') return '';
+         const loc =
+           'loc' in item && Array.isArray(item.loc) ? (item.loc as unknown[]).filter((part) => part !== 'body').join('.') : '';
+-        const msg = 'msg' in item && typeof item.msg === 'string' ? item.msg : fallback;
++        const rawMsg = 'msg' in item && typeof item.msg === 'string' ? item.msg : fallback;
++        const msg = rawMsg.replace(/^Value error,\s*/, '');
+         const ctx = 'ctx' in item && item.ctx && typeof item.ctx === 'object' ? item.ctx : {};
+         if ('type' in item && item.type === 'string_too_short' && 'min_length' in ctx) {
+           return `${loc}: debe tener al menos ${String(ctx.min_length)} caracteres`;
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 3c173fc..c29615b 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -16,7 +16,10 @@ export type CatalogField = {
+   label: string;
+   type?: FieldType;
+   required?: boolean;
++  minLength?: number;
+   maxLength?: number;
++  pattern?: string;
++  title?: string;
+   lookup?: LookupKey;
+   options?: Array<{ value: string; label: string }>;
+   createOnly?: boolean;
+@@ -81,7 +84,17 @@ export const catalogs: Record<string, CatalogConfig> = {
+     fields: [
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
+-      { name: 'password', label: 'Contraseña temporal / nueva', type: 'password', required: true, editOptional: true },
++      {
++        name: 'password',
++        label: 'Contraseña temporal / nueva',
++        type: 'password',
++        required: true,
++        minLength: 8,
++        maxLength: 128,
++        pattern: '^(?=.*\\d).{8,128}$',
++        title: 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.',
++        editOptional: true,
++      },
+       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
+       { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
+       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 2e28707..053e9e5 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -299,6 +299,19 @@ function normalizePayload() {
+   return payload;
+ }
+ 
++function validatePayload(payload: Record<string, unknown>) {
++  for (const field of config.value.fields) {
++    if (!field.pattern || !(field.name in payload)) {
++      continue;
++    }
++    const value = payload[field.name];
++    if (typeof value === 'string' && value && !new RegExp(field.pattern).test(value)) {
++      return field.title ?? `${field.label} no tiene un formato válido.`;
++    }
++  }
++  return '';
++}
++
+ async function submit() {
+   loading.value = true;
+   error.value = '';
+@@ -311,11 +324,18 @@ async function submit() {
+       return;
+     }
+   }
++  const payload = normalizePayload();
++  const validationError = validatePayload(payload);
++  if (validationError) {
++    error.value = validationError;
++    loading.value = false;
++    return;
++  }
+   try {
+     if (editingId.value) {
+-      await updateResource<Row>(config.value.resource, editingId.value, normalizePayload());
++      await updateResource<Row>(config.value.resource, editingId.value, payload);
+     } else {
+-      await createResource<Row>(config.value.resource, normalizePayload());
++      await createResource<Row>(config.value.resource, payload);
+     }
+     await loadRows();
+     resetForm();
+@@ -530,8 +550,11 @@ onMounted(loadData);
+             :autocomplete="fieldAutocomplete(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
++            :minlength="field.minLength"
+             :maxlength="field.maxLength"
++            :pattern="field.pattern"
+             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
++            :title="field.title"
+             :type="fieldInputType(field)"
+             @input="updateField(field.name, $event)"
+           />
+diff --git a/access-manager/frontend/src/views/PerfilView.vue b/access-manager/frontend/src/views/PerfilView.vue
+index 847bab6..215bdf2 100644
+--- a/access-manager/frontend/src/views/PerfilView.vue
++++ b/access-manager/frontend/src/views/PerfilView.vue
+@@ -9,6 +9,7 @@ const confirmPassword = ref('');
+ const error = ref('');
+ const success = ref('');
+ const loading = ref(false);
++const passwordRequirementsMessage = 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.';
+ 
+ async function loadProfile() {
+   error.value = '';
+@@ -22,6 +23,10 @@ async function loadProfile() {
+ async function submitPasswordChange() {
+   error.value = '';
+   success.value = '';
++  if (newPassword.value.length < 8 || !/\d/.test(newPassword.value)) {
++    error.value = passwordRequirementsMessage;
++    return;
++  }
+   if (newPassword.value !== confirmPassword.value) {
+     error.value = 'La confirmación de contraseña no coincide.';
+     return;
+@@ -95,7 +100,17 @@ onMounted(loadProfile);
+         </div>
+         <div class="form-row">
+           <label for="new-password">Nueva contraseña</label>
+-          <input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
++          <input
++            id="new-password"
++            v-model="newPassword"
++            type="password"
++            autocomplete="new-password"
++            minlength="8"
++            maxlength="128"
++            pattern="^(?=.*\d).{8,128}$"
++            :title="passwordRequirementsMessage"
++            required
++          />
+         </div>
+         <div class="form-row">
+           <label for="confirm-password">Confirmar nueva contraseña</label>
+@@ -106,6 +121,8 @@ onMounted(loadProfile);
+             autocomplete="new-password"
+             minlength="8"
+             maxlength="128"
++            pattern="^(?=.*\d).{8,128}$"
++            :title="passwordRequirementsMessage"
+             required
+           />
+         </div>

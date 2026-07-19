@@ -9,6 +9,7 @@ const confirmPassword = ref('');
 const error = ref('');
 const success = ref('');
 const loading = ref(false);
+const passwordRequirementsMessage = 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.';
 
 async function loadProfile() {
   error.value = '';
@@ -22,6 +23,10 @@ async function loadProfile() {
 async function submitPasswordChange() {
   error.value = '';
   success.value = '';
+  if (newPassword.value.length < 8 || !/\d/.test(newPassword.value)) {
+    error.value = passwordRequirementsMessage;
+    return;
+  }
   if (newPassword.value !== confirmPassword.value) {
     error.value = 'La confirmación de contraseña no coincide.';
     return;
@@ -95,7 +100,17 @@ onMounted(loadProfile);
         </div>
         <div class="form-row">
           <label for="new-password">Nueva contraseña</label>
-          <input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
+          <input
+            id="new-password"
+            v-model="newPassword"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            maxlength="128"
+            pattern="^(?=.*\d).{8,128}$"
+            :title="passwordRequirementsMessage"
+            required
+          />
         </div>
         <div class="form-row">
           <label for="confirm-password">Confirmar nueva contraseña</label>
@@ -106,6 +121,8 @@ onMounted(loadProfile);
             autocomplete="new-password"
             minlength="8"
             maxlength="128"
+            pattern="^(?=.*\d).{8,128}$"
+            :title="passwordRequirementsMessage"
             required
           />
         </div>

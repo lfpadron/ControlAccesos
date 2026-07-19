@@ -16,7 +16,10 @@ export type CatalogField = {
   label: string;
   type?: FieldType;
   required?: boolean;
+  minLength?: number;
   maxLength?: number;
+  pattern?: string;
+  title?: string;
   lookup?: LookupKey;
   options?: Array<{ value: string; label: string }>;
   createOnly?: boolean;
@@ -81,7 +84,17 @@ export const catalogs: Record<string, CatalogConfig> = {
     fields: [
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
-      { name: 'password', label: 'Contraseña temporal / nueva', type: 'password', required: true, editOptional: true },
+      {
+        name: 'password',
+        label: 'Contraseña temporal / nueva',
+        type: 'password',
+        required: true,
+        minLength: 8,
+        maxLength: 128,
+        pattern: '^(?=.*\\d).{8,128}$',
+        title: 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.',
+        editOptional: true,
+      },
       { name: 'telefono', label: 'Teléfono', maxLength: 64 },
       { name: 'force_password_change', label: 'Forzar cambio de contraseña', type: 'checkbox', defaultValue: false },
       { name: 'estado', label: 'Estado', defaultValue: 'ACTIVO', maxLength: 40 },
