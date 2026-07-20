@@ -1,0 +1,197 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 83d75a5..1dacf06 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -1,7 +1,8 @@
+ from __future__ import annotations
+ 
+-from datetime import date
++from datetime import date, datetime
+ from uuid import UUID
++from zoneinfo import ZoneInfo
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+ from sqlalchemy import func, or_, select
+@@ -45,6 +46,10 @@ qr_router = APIRouter()
+ OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+ 
+ 
++def business_today() -> date:
++    return datetime.now(ZoneInfo("America/Mexico_City")).date()
++
++
+ def client_ip(request: Request) -> str | None:
+     return request.client.host if request.client else None
+ 
+@@ -527,7 +532,7 @@ def citas_hoy(
+     _current_user: Usuario = OperationalUser,
+ ) -> list[CitaListItem]:
+     rows = db.execute(
+-        query_citas(db, fecha or date.today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
++        query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+     ).scalars()
+     return [cita_item(db, row) for row in rows]
+ 
+@@ -549,7 +554,7 @@ def buscar_citas(
+     rows = db.execute(
+         query_citas(
+             db,
+-            fecha or date.today(),
++            fecha or business_today(),
+             complejo_id,
+             piso_id,
+             consultorio_id,
+@@ -605,7 +610,7 @@ def registrar_exportacion_citas(
+         ip_origen=client_ip(request),
+         valor_despues={
+             "formato": formato,
+-            "fecha": str(fecha or date.today()),
++            "fecha": str(fecha or business_today()),
+             "complejo_id": str(complejo_id) if complejo_id else None,
+             "piso_id": str(piso_id) if piso_id else None,
+             "consultorio_id": str(consultorio_id) if consultorio_id else None,
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 04c8a18..02be7fd 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -6,7 +6,7 @@ from typing import Any
+ from uuid import UUID
+ 
+ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+-from pydantic import BaseModel
++from pydantic import BaseModel, ValidationError
+ from sqlalchemy import func, select
+ from sqlalchemy.orm import Session
+ 
+@@ -102,6 +102,21 @@ def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object
+     return item
+ 
+ 
++def validate_payload(schema: type[BaseModel], payload_data: dict[str, Any]) -> BaseModel:
++    try:
++        return schema.model_validate(payload_data)
++    except ValidationError as exc:
++        detail = [
++            {
++                "loc": list(error.get("loc", ())),
++                "msg": str(error.get("msg", "Entrada inválida")),
++                "type": str(error.get("type", "value_error")),
++            }
++            for error in exc.errors()
++        ]
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
++
++
+ def validate_date_range(data: dict[str, Any], item: object | None = None) -> None:
+     fecha_inicio = data.get("fecha_inicio", getattr(item, "fecha_inicio", None))
+     fecha_fin = data.get("fecha_fin", getattr(item, "fecha_fin", None))
+@@ -371,7 +386,7 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+         db: Session = Depends(get_db),
+         current_user: Usuario = AdminUser,
+     ) -> object:
+-        payload = config.create_schema.model_validate(payload_data)
++        payload = validate_payload(config.create_schema, payload_data)
+         data = payload.model_dump()
+         if config.validator:
+             config.validator(db, data, None)
+@@ -411,7 +426,7 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+         item = exists_or_404(db, config.model, item_id, config.entity)
+         before_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
+         before = {**audit_safe_dict(item), **before_extra}
+-        payload = config.update_schema.model_validate(payload_data)
++        payload = validate_payload(config.update_schema, payload_data)
+         data = payload.model_dump(exclude_unset=True)
+         if config.prepare_update:
+             data = config.prepare_update(data)
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index acc6dd4..0c25510 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -311,9 +311,15 @@ def main() -> None:
+                 nombre="Paciente",
+                 apellido_paterno="Demo",
+                 celular="5550100000",
++                fecha_nacimiento=date(1970, 1, 1),
+             )
+             db.add(paciente)
+             db.flush()
++        else:
++            if paciente.celular is None:
++                paciente.celular = "5550100000"
++            if paciente.fecha_nacimiento is None:
++                paciente.fecha_nacimiento = date(1970, 1, 1)
+ 
+         local_timezone = ZoneInfo(complejo.zona_horaria)
+         checkin_target = datetime.now(local_timezone) + timedelta(minutes=60)
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 95fa2f0..164cd78 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -604,6 +604,14 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     assert is_valid_turn_folio(cita["folio_turno"])
+     assert all(char in FOLIO_TURNO_ALPHABET for char in cita["folio_turno"])
+ 
++    kiosk_search_response = client.get(
++        "/api/citas/buscar",
++        params={"paciente": f"Alias {suffix}", "fecha": appointment_at.date().isoformat()},
++    )
++    assert kiosk_search_response.status_code == 200, kiosk_search_response.text
++    kiosk_matches = kiosk_search_response.json()
++    assert any(item["id"] == cita["id"] for item in kiosk_matches)
++
+     citas_response = client.get(
+         "/api/citas",
+         headers=auth_headers,
+diff --git a/access-manager/kiosk/src/views/KioskHomeView.vue b/access-manager/kiosk/src/views/KioskHomeView.vue
+index f2adb65..1428377 100644
+--- a/access-manager/kiosk/src/views/KioskHomeView.vue
++++ b/access-manager/kiosk/src/views/KioskHomeView.vue
+@@ -37,6 +37,12 @@ const loading = ref(false);
+ const currentDateTime = ref('');
+ let clockTimer: number | undefined;
+ 
++function todayLocalIso() {
++  const now = new Date();
++  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
++  return local.toISOString().slice(0, 10);
++}
++
+ function updateClock() {
+   currentDateTime.value = new Intl.DateTimeFormat('es-MX', {
+     dateStyle: 'medium',
+@@ -79,18 +85,17 @@ async function searchCitas() {
+     error.value = 'Capture nombre y apellido.';
+     return;
+   }
+-  if (!celular.value.trim() && !fechaNacimiento.value) {
+-    error.value = 'Capture celular o fecha de nacimiento.';
+-    return;
+-  }
+   loading.value = true;
+   error.value = '';
+   try {
+-    const query = new URLSearchParams({ paciente: nombreApellido.value.trim() });
++    const query = new URLSearchParams({
++      paciente: nombreApellido.value.trim(),
++      fecha: todayLocalIso(),
++    });
+     if (celular.value.trim()) query.set('celular', celular.value.trim());
+     if (fechaNacimiento.value) query.set('fecha_nacimiento', fechaNacimiento.value);
+     citas.value = await apiFetch<CitaSearchResult[]>(`/citas/buscar?${query.toString()}`);
+-    status.value = citas.value.length === 1 ? 'Una cita encontrada.' : `${citas.value.length} citas encontradas.`;
++    status.value = citas.value.length === 1 ? 'Una cita encontrada.' : `${citas.value.length} citas encontradas para hoy.`;
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible buscar citas.';
+   } finally {
+@@ -171,9 +176,9 @@ onBeforeUnmount(() => {
+       <form v-else-if="mode === 'search'" class="kiosk-card" @submit.prevent="searchCitas">
+         <label for="search-name">Nombre y apellido</label>
+         <input id="search-name" v-model="nombreApellido" autocomplete="name" autofocus required />
+-        <label for="search-phone">Celular</label>
++        <label for="search-phone">Celular (opcional)</label>
+         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
+-        <label for="search-birthdate">Fecha de nacimiento</label>
++        <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
+         <input id="search-birthdate" v-model="fechaNacimiento" type="date" />
+         <button class="primary" type="submit" :disabled="loading">Buscar</button>
+         <button class="secondary" type="button" @click="backHome">Volver</button>

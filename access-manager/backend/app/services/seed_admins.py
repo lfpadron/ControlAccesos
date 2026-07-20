@@ -311,9 +311,15 @@ def main() -> None:
                 nombre="Paciente",
                 apellido_paterno="Demo",
                 celular="5550100000",
+                fecha_nacimiento=date(1970, 1, 1),
             )
             db.add(paciente)
             db.flush()
+        else:
+            if paciente.celular is None:
+                paciente.celular = "5550100000"
+            if paciente.fecha_nacimiento is None:
+                paciente.fecha_nacimiento = date(1970, 1, 1)
 
         local_timezone = ZoneInfo(complejo.zona_horaria)
         checkin_target = datetime.now(local_timezone) + timedelta(minutes=60)

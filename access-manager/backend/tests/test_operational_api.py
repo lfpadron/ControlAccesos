@@ -604,6 +604,14 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     assert is_valid_turn_folio(cita["folio_turno"])
     assert all(char in FOLIO_TURNO_ALPHABET for char in cita["folio_turno"])
 
+    kiosk_search_response = client.get(
+        "/api/citas/buscar",
+        params={"paciente": f"Alias {suffix}", "fecha": appointment_at.date().isoformat()},
+    )
+    assert kiosk_search_response.status_code == 200, kiosk_search_response.text
+    kiosk_matches = kiosk_search_response.json()
+    assert any(item["id"] == cita["id"] for item in kiosk_matches)
+
     citas_response = client.get(
         "/api/citas",
         headers=auth_headers,

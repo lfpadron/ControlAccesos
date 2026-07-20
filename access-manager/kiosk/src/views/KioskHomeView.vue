@@ -37,6 +37,12 @@ const loading = ref(false);
 const currentDateTime = ref('');
 let clockTimer: number | undefined;
 
+function todayLocalIso() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
 function updateClock() {
   currentDateTime.value = new Intl.DateTimeFormat('es-MX', {
     dateStyle: 'medium',
@@ -79,18 +85,17 @@ async function searchCitas() {
     error.value = 'Capture nombre y apellido.';
     return;
   }
-  if (!celular.value.trim() && !fechaNacimiento.value) {
-    error.value = 'Capture celular o fecha de nacimiento.';
-    return;
-  }
   loading.value = true;
   error.value = '';
   try {
-    const query = new URLSearchParams({ paciente: nombreApellido.value.trim() });
+    const query = new URLSearchParams({
+      paciente: nombreApellido.value.trim(),
+      fecha: todayLocalIso(),
+    });
     if (celular.value.trim()) query.set('celular', celular.value.trim());
     if (fechaNacimiento.value) query.set('fecha_nacimiento', fechaNacimiento.value);
     citas.value = await apiFetch<CitaSearchResult[]>(`/citas/buscar?${query.toString()}`);
-    status.value = citas.value.length === 1 ? 'Una cita encontrada.' : `${citas.value.length} citas encontradas.`;
+    status.value = citas.value.length === 1 ? 'Una cita encontrada.' : `${citas.value.length} citas encontradas para hoy.`;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible buscar citas.';
   } finally {
@@ -171,9 +176,9 @@ onBeforeUnmount(() => {
       <form v-else-if="mode === 'search'" class="kiosk-card" @submit.prevent="searchCitas">
         <label for="search-name">Nombre y apellido</label>
         <input id="search-name" v-model="nombreApellido" autocomplete="name" autofocus required />
-        <label for="search-phone">Celular</label>
+        <label for="search-phone">Celular (opcional)</label>
         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
-        <label for="search-birthdate">Fecha de nacimiento</label>
+        <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
         <input id="search-birthdate" v-model="fechaNacimiento" type="date" />
         <button class="primary" type="submit" :disabled="loading">Buscar</button>
         <button class="secondary" type="button" @click="backHome">Volver</button>

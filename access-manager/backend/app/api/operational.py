@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -100,6 +100,21 @@ def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{label} no encontrado.")
     return item
+
+
+def validate_payload(schema: type[BaseModel], payload_data: dict[str, Any]) -> BaseModel:
+    try:
+        return schema.model_validate(payload_data)
+    except ValidationError as exc:
+        detail = [
+            {
+                "loc": list(error.get("loc", ())),
+                "msg": str(error.get("msg", "Entrada inválida")),
+                "type": str(error.get("type", "value_error")),
+            }
+            for error in exc.errors()
+        ]
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
 
 
 def validate_date_range(data: dict[str, Any], item: object | None = None) -> None:
@@ -371,7 +386,7 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         db: Session = Depends(get_db),
         current_user: Usuario = AdminUser,
     ) -> object:
-        payload = config.create_schema.model_validate(payload_data)
+        payload = validate_payload(config.create_schema, payload_data)
         data = payload.model_dump()
         if config.validator:
             config.validator(db, data, None)
@@ -411,7 +426,7 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         item = exists_or_404(db, config.model, item_id, config.entity)
         before_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
         before = {**audit_safe_dict(item), **before_extra}
-        payload = config.update_schema.model_validate(payload_data)
+        payload = validate_payload(config.update_schema, payload_data)
         data = payload.model_dump(exclude_unset=True)
         if config.prepare_update:
             data = config.prepare_update(data)

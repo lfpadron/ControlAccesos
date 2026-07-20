@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, select
@@ -43,6 +44,10 @@ citas_router = APIRouter()
 qr_router = APIRouter()
 
 OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+
+
+def business_today() -> date:
+    return datetime.now(ZoneInfo("America/Mexico_City")).date()
 
 
 def client_ip(request: Request) -> str | None:
@@ -527,7 +532,7 @@ def citas_hoy(
     _current_user: Usuario = OperationalUser,
 ) -> list[CitaListItem]:
     rows = db.execute(
-        query_citas(db, fecha or date.today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+        query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
     ).scalars()
     return [cita_item(db, row) for row in rows]
 
@@ -549,7 +554,7 @@ def buscar_citas(
     rows = db.execute(
         query_citas(
             db,
-            fecha or date.today(),
+            fecha or business_today(),
             complejo_id,
             piso_id,
             consultorio_id,
@@ -605,7 +610,7 @@ def registrar_exportacion_citas(
         ip_origen=client_ip(request),
         valor_despues={
             "formato": formato,
-            "fecha": str(fecha or date.today()),
+            "fecha": str(fecha or business_today()),
             "complejo_id": str(complejo_id) if complejo_id else None,
             "piso_id": str(piso_id) if piso_id else None,
             "consultorio_id": str(consultorio_id) if consultorio_id else None,
