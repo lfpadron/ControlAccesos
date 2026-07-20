@@ -1,0 +1,43 @@
+diff --git a/subir_droplet.ps1 b/subir_droplet.ps1
+index 9b59565..34c78a6 100644
+--- a/subir_droplet.ps1
++++ b/subir_droplet.ps1
+@@ -7,6 +7,7 @@ param(
+     [switch]$UseDefaults,
+     [switch]$SkipExtract,
+     [switch]$ExtractOnly,
++    [switch]$SkipDeploy,
+     [switch]$KeepArchive,
+     [switch]$Help
+ )
+@@ -24,6 +25,7 @@ function Show-Help {
+     Write-Host "  -UseDefaults   No pregunta valores; usa los parametros/defaults."
+     Write-Host "  -SkipExtract   Solo sube el paquete a /tmp; no extrae en el servidor."
+     Write-Host "  -ExtractOnly   Solo extrae /tmp/control-accesos-deploy.tar.gz en el servidor."
++    Write-Host "  -SkipDeploy    Extrae los archivos, pero no reconstruye contenedores ni migra."
+     Write-Host "  -KeepArchive   Conserva el .tar.gz local al terminar."
+ }
+ 
+@@ -189,6 +191,22 @@ try {
+         Write-Host "SkipExtract activo: el paquete quedo en ${Remote}:$RemoteArchive"
+     }
+ 
++    if (-not $SkipExtract -and -not $SkipDeploy) {
++        $remoteDirQ = Quote-Sh $RemoteDir
++        $remoteDeployCommand = "set -e; cd $remoteDirQ; if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi; docker compose build --no-cache backend worker frontend kiosk mobile-pwa; docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa caddy; docker compose exec -T backend uv run alembic upgrade head; docker compose ps"
++
++        Invoke-Native "Reconstruyendo contenedores y aplicando migraciones en $RemoteDir" "ssh" @(
++            "-i", $KeyPath,
++            "-o", "StrictHostKeyChecking=accept-new",
++            $Remote,
++            $remoteDeployCommand
++        )
++    }
++    elseif ($SkipDeploy) {
++        Write-Host ""
++        Write-Host "SkipDeploy activo: no se reconstruyeron contenedores ni se aplicaron migraciones."
++    }
++
+     Write-Host ""
+     Write-Host "Subida completada correctamente."
+ }
