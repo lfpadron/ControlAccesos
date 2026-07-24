@@ -193,7 +193,23 @@ try {
 
     if (-not $SkipExtract -and -not $SkipDeploy) {
         $remoteDirQ = Quote-Sh $RemoteDir
-        $remoteDeployCommand = "set -e; cd $remoteDirQ; if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi; docker compose build --no-cache backend worker frontend kiosk mobile-pwa; docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa caddy; docker compose exec -T backend uv run alembic upgrade head; docker compose ps"
+        $remoteDeploySteps = @(
+            "set -e",
+            "cd $remoteDirQ",
+            "if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi",
+            "export COMPOSE_BAKE=false",
+            "docker compose build backend",
+            "docker compose build worker",
+            "docker compose build frontend",
+            "docker compose build kiosk",
+            "docker compose build mobile-pwa",
+            "docker compose up -d postgres redis",
+            "docker compose run --rm backend uv run alembic upgrade head",
+            "docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa",
+            "docker compose up -d --force-recreate caddy || { docker compose logs --tail=120 backend; docker compose ps; exit 1; }",
+            "docker compose ps"
+        )
+        $remoteDeployCommand = $remoteDeploySteps -join "; "
 
         Invoke-Native "Reconstruyendo contenedores y aplicando migraciones en $RemoteDir" "ssh" @(
             "-i", $KeyPath,

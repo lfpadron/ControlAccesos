@@ -1,0 +1,58 @@
+diff --git a/access-manager/backend/app/core/config.py b/access-manager/backend/app/core/config.py
+index 07ce56f..5e0a373 100644
+--- a/access-manager/backend/app/core/config.py
++++ b/access-manager/backend/app/core/config.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ from functools import lru_cache
+ 
+-from pydantic import Field
++from pydantic import Field, field_validator
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+ 
+@@ -29,6 +29,15 @@ class Settings(BaseSettings):
+ 
+     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+ 
++    @field_validator("database_url")
++    @classmethod
++    def normalize_database_url(cls, value: str) -> str:
++        if value.startswith("postgresql://"):
++            return "postgresql+psycopg://" + value.removeprefix("postgresql://")
++        if value.startswith("postgres://"):
++            return "postgresql+psycopg://" + value.removeprefix("postgres://")
++        return value
++
+     @property
+     def cors_origin_list(self) -> list[str]:
+         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+diff --git a/subir_droplet.ps1 b/subir_droplet.ps1
+index 34c78a6..ea8faa2 100644
+--- a/subir_droplet.ps1
++++ b/subir_droplet.ps1
+@@ -193,7 +193,23 @@ try {
+ 
+     if (-not $SkipExtract -and -not $SkipDeploy) {
+         $remoteDirQ = Quote-Sh $RemoteDir
+-        $remoteDeployCommand = "set -e; cd $remoteDirQ; if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi; docker compose build --no-cache backend worker frontend kiosk mobile-pwa; docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa caddy; docker compose exec -T backend uv run alembic upgrade head; docker compose ps"
++        $remoteDeploySteps = @(
++            "set -e",
++            "cd $remoteDirQ",
++            "if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi",
++            "export COMPOSE_BAKE=false",
++            "docker compose build backend",
++            "docker compose build worker",
++            "docker compose build frontend",
++            "docker compose build kiosk",
++            "docker compose build mobile-pwa",
++            "docker compose up -d postgres redis",
++            "docker compose run --rm backend uv run alembic upgrade head",
++            "docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa",
++            "docker compose up -d --force-recreate caddy || { docker compose logs --tail=120 backend; docker compose ps; exit 1; }",
++            "docker compose ps"
++        )
++        $remoteDeployCommand = $remoteDeploySteps -join "; "
+ 
+         Invoke-Native "Reconstruyendo contenedores y aplicando migraciones en $RemoteDir" "ssh" @(
+             "-i", $KeyPath,
