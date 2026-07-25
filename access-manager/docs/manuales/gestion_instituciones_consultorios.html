@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de usuario - Gestión de instituciones y consultorios</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #526070;
+      --line: #d9e2ea;
+      --soft: #f4f8fb;
+      --soft-2: #eaf4f8;
+      --brand: #145c8f;
+      --brand-dark: #0f4167;
+      --accent: #00a78e;
+      --warning: #8a5a00;
+      --paper: #ffffff;
+      --code-bg: #edf3f7;
+      --shadow: 0 18px 48px rgba(31, 57, 84, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef5f8;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 34px 42px 30px;
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    header .eyebrow {
+      margin: 0 0 10px;
+      color: #d9edf8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.14;
+      letter-spacing: 0;
+    }
+
+    header .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #eef8fc;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 34px 42px 42px;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--soft-2);
+      color: var(--brand-dark);
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h2:first-child {
+      margin-top: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      color: #24394c;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 14px;
+    }
+
+    a {
+      color: var(--brand-dark);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 28px;
+    }
+
+    .summary-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--soft);
+    }
+
+    .summary-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand-dark);
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    .summary-box span {
+      color: var(--muted);
+    }
+
+    .note,
+    .warning,
+    .example {
+      margin: 18px 0;
+      border-radius: 8px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .warning {
+      border-color: #e5c568;
+      background: #fff8e6;
+      color: #4f3a08;
+    }
+
+    .example {
+      border-color: #b9ddd7;
+      background: #effbf8;
+    }
+
+    .label {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--code-bg);
+      color: #22384d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .menu-path {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 3px 7px;
+      background: var(--code-bg);
+      color: #102c45;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft-2);
+      color: #18354e;
+    }
+
+    code {
+      border-radius: 4px;
+      padding: 1px 5px;
+      background: var(--code-bg);
+      color: #1d3347;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 30px;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 21px;
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header,
+      main {
+        padding-left: 22px;
+        padding-right: 22px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page {
+        max-width: none;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header {
+        color: #000000;
+        background: #ffffff;
+        border-bottom: 2px solid #000000;
+      }
+
+      header .eyebrow,
+      header .subtitle,
+      .summary-box span,
+      .footer {
+        color: #000000;
+      }
+
+      h2 {
+        color: #000000;
+        break-after: avoid;
+      }
+
+      table,
+      .note,
+      .warning,
+      .example {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Control de acceso · Manual de usuario</p>
+      <h1>Gestión de instituciones y consultorios</h1>
+      <p class="subtitle">
+        Guía administrativa para configurar la estructura física y operativa: instituciones, complejos, pisos, salas de espera y consultorios.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="resumen">
+        <h2 id="resumen">Resumen Rápido</h2>
+        <div class="summary-grid">
+          <div class="summary-box">
+            <strong>Dirigido a</strong>
+            <span>Administradores de sistema y administradores de negocio.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Resultado</strong>
+            <span>Estructura institucional lista para operar citas, kioskos, consultorios y turnos.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Orden recomendado</strong>
+            <span>Institución, complejo, piso, sala de espera y consultorio.</span>
+          </div>
+        </div>
+
+        <p>
+          Estos catálogos forman la base de operación del sistema. Una institución contiene uno o varios complejos; cada complejo
+          contiene pisos; y dentro de los pisos se configuran salas de espera y consultorios. Si esta estructura está incompleta,
+          las citas, kioskos, asignaciones y pantallas de turnos no podrán operar correctamente.
+        </p>
+
+        <div class="note">
+          <strong>Secuencia recomendada:</strong> cree primero la institución, después sus complejos, luego los pisos y finalmente las
+          áreas operativas como salas de espera y consultorios.
+        </div>
+      </section>
+
+      <section aria-labelledby="menus">
+        <h2 id="menus">Dónde Entrar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Actividad</th>
+              <th>Menú</th>
+              <th>Qué se configura</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crear o editar instituciones</td>
+              <td><span class="menu-path">Instituciones &gt; Instituciones</span></td>
+              <td>Nombre, razón social, notas y estado.</td>
+            </tr>
+            <tr>
+              <td>Crear o editar complejos</td>
+              <td><span class="menu-path">Instituciones &gt; Complejos</span></td>
+              <td>Institución, nombre, descripción, dirección, teléfono, zona horaria y estado.</td>
+            </tr>
+            <tr>
+              <td>Crear o editar pisos</td>
+              <td><span class="menu-path">Instituciones &gt; Pisos</span></td>
+              <td>Institución, complejo, número, nombre visible, descripción y estado.</td>
+            </tr>
+            <tr>
+              <td>Crear o editar salas de espera</td>
+              <td><span class="menu-path">Instituciones &gt; Salas de espera</span></td>
+              <td>Institución, complejo, piso, nombre, descripción, capacidad estimada y estado.</td>
+            </tr>
+            <tr>
+              <td>Crear o editar consultorios</td>
+              <td><span class="menu-path">Instituciones &gt; Consultorios</span></td>
+              <td>Institución, complejo, piso, código, nombre visible, instrucciones de acceso, clústers y estado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="instituciones">
+        <h2 id="instituciones">Instituciones</h2>
+        <p>
+          La institución representa a la organización principal que administra sedes o complejos. Es el primer registro que debe existir
+          antes de crear edificios, pisos y consultorios.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Instituciones &gt; Instituciones</span>.</li>
+          <li>Use el buscador para revisar si la institución ya existe por nombre o razón social.</li>
+          <li>En <strong>Crear institución</strong>, capture <strong>Nombre</strong>.</li>
+          <li>Capture <strong>Razón social</strong> si aplica.</li>
+          <li>Use <strong>Notas</strong> para observaciones administrativas.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <p>
+          Para editar, seleccione la institución en la tabla. El formulario cambiará a <strong>Editar institución</strong>; modifique
+          los datos y guarde. Puede usar <strong>Desactivar</strong> o <strong>Activar</strong> para controlar su uso sin borrar el registro.
+        </p>
+      </section>
+
+      <section aria-labelledby="complejos">
+        <h2 id="complejos">Complejos</h2>
+        <p>
+          Un complejo representa una torre, edificio, sede o unidad operativa perteneciente a una institución. La zona horaria del
+          complejo se usa para interpretar horarios de citas y ventanas de llegada.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Instituciones &gt; Complejos</span>.</li>
+          <li>Si hay muchas instituciones, use <strong>Buscar institución</strong> o el filtro <strong>Todas las instituciones</strong>.</li>
+          <li>En <strong>Crear complejo</strong>, seleccione la <strong>Institución</strong>.</li>
+          <li>Capture <strong>Nombre</strong>.</li>
+          <li>Capture <strong>Descripción</strong>, <strong>Dirección</strong> y <strong>Teléfono</strong> si están disponibles.</li>
+          <li>Seleccione o capture la <strong>Zona horaria</strong>, por ejemplo <code>America/Mexico_City</code>.</li>
+          <li>Deje marcada la opción <strong>Activo</strong> y presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Revise la zona horaria:</strong> una zona horaria incorrecta puede afectar horarios de citas, check-in y reportes operativos.
+        </div>
+
+        <p>
+          Para editar, seleccione un complejo en la tabla o use el botón <strong>Editar</strong>. Desde la columna <strong>Acciones</strong>
+          también puede activar o desactivar el complejo.
+        </p>
+      </section>
+
+      <section aria-labelledby="pisos">
+        <h2 id="pisos">Pisos</h2>
+        <p>
+          Los pisos son niveles físicos dentro de un complejo. Se usan para filtrar consultorios, salas de espera, kioskos, citas y reportes.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Instituciones &gt; Pisos</span>.</li>
+          <li>Seleccione la <strong>Institución</strong>.</li>
+          <li>Seleccione el <strong>Complejo</strong>. El sistema solo mostrará complejos de la institución seleccionada.</li>
+          <li>Capture <strong>Número</strong>, por ejemplo <code>PB</code>, <code>1</code> o <code>2</code>.</li>
+          <li>Capture <strong>Nombre visible</strong>, por ejemplo <code>Planta baja</code> o <code>Piso 2</code>.</li>
+          <li>Capture <strong>Descripción</strong> si ayuda a identificar el nivel.</li>
+          <li>Deje marcada la opción <strong>Activo</strong> y presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <p>
+          Para editar, seleccione el renglón del piso en la tabla. El mismo formulario cambiará a <strong>Editar piso</strong>.
+        </p>
+      </section>
+
+      <section aria-labelledby="salas">
+        <h2 id="salas">Salas de Espera</h2>
+        <p>
+          Las salas de espera representan áreas donde recepción, kiosko y operación pueden ubicar visitantes antes de pasar a consulta.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Instituciones &gt; Salas de espera</span>.</li>
+          <li>Seleccione la <strong>Institución</strong>.</li>
+          <li>Seleccione el <strong>Complejo</strong>.</li>
+          <li>Seleccione el <strong>Piso</strong>.</li>
+          <li>Capture <strong>Nombre</strong>, por ejemplo <code>Sala principal</code>.</li>
+          <li>Capture <strong>Descripción</strong> si aplica.</li>
+          <li>Capture <strong>Capacidad estimada</strong> si desea registrar una referencia operativa.</li>
+          <li>Deje marcada la opción <strong>Activa</strong> y presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <p>
+          Para editar, seleccione la sala en la tabla. Puede activar o desactivar salas desde la columna <strong>Acciones</strong>.
+        </p>
+      </section>
+
+      <section aria-labelledby="consultorios">
+        <h2 id="consultorios">Consultorios</h2>
+        <p>
+          Los consultorios son espacios físicos donde se asignan médicos, operadores y citas. También son el destino que puede mostrarse
+          al llamar un turno.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Instituciones &gt; Consultorios</span>.</li>
+          <li>Seleccione la <strong>Institución</strong>.</li>
+          <li>Seleccione el <strong>Complejo</strong>.</li>
+          <li>Seleccione el <strong>Piso</strong>.</li>
+          <li>Capture <strong>Código</strong>, por ejemplo <code>C-101</code> o <code>CONS-12</code>.</li>
+          <li>Capture <strong>Nombre visible</strong>, por ejemplo <code>Consultorio 101</code>.</li>
+          <li>Capture <strong>Instrucciones de acceso</strong> si el paciente o el personal necesita una referencia adicional.</li>
+          <li>Seleccione uno o varios <strong>Clústers</strong> asociados al consultorio.</li>
+          <li>Deje marcada la opción <strong>Activo</strong> y presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Clústers requeridos:</strong> el consultorio debe asociarse a al menos un clúster del mismo complejo y piso. Si se usarán
+          pantallas de turnos, ese clúster debe tener una pantalla activa para que los llamados puedan mostrarse.
+        </div>
+
+        <p>
+          Para editar, seleccione el consultorio en la tabla o use <strong>Editar</strong>. Desde <strong>Acciones</strong> puede activar
+          o desactivar el consultorio.
+        </p>
+      </section>
+
+      <section aria-labelledby="edicion-general">
+        <h2 id="edicion-general">Edición y Estados</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Elemento</th>
+              <th>Cómo editar</th>
+              <th>Estado disponible</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Institución</td>
+              <td>Seleccione el renglón en la tabla de instituciones.</td>
+              <td>Activa o inactiva.</td>
+            </tr>
+            <tr>
+              <td>Complejo</td>
+              <td>Seleccione el renglón o use el botón <strong>Editar</strong>.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+            <tr>
+              <td>Piso</td>
+              <td>Seleccione el renglón en el catálogo.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+            <tr>
+              <td>Sala de espera</td>
+              <td>Seleccione el renglón en el catálogo.</td>
+              <td>Activa o inactiva.</td>
+            </tr>
+            <tr>
+              <td>Consultorio</td>
+              <td>Seleccione el renglón en el catálogo.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          No se recomienda reutilizar nombres o códigos para espacios distintos. Si un área física cambia de función, edite la descripción
+          o desactive el registro anterior y cree uno nuevo cuando sea más claro para operación.
+        </div>
+      </section>
+
+      <section aria-labelledby="ejemplo">
+        <h2 id="ejemplo">Ejemplo Práctico</h2>
+        <div class="example">
+          <h3>Objetivo</h3>
+          <p>
+            Configurar una sede básica para Clínicas Alfa con una torre, un piso, una sala de espera y dos consultorios.
+          </p>
+
+          <h3>1. Crear la institución</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Instituciones &gt; Instituciones</span>.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Clínicas Alfa</code>.</li>
+            <li>Capturar <strong>Razón social:</strong> <code>Clínicas Alfa S.A.</code>.</li>
+            <li>Presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>2. Crear el complejo</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Instituciones &gt; Complejos</span>.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Torre Central</code>.</li>
+            <li>Capturar <strong>Zona horaria:</strong> <code>America/Mexico_City</code>.</li>
+            <li>Presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>3. Crear piso y sala</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Instituciones &gt; Pisos</span>.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa y <strong>Complejo:</strong> Torre Central.</li>
+            <li>Capturar <strong>Número:</strong> <code>PB</code> y <strong>Nombre visible:</strong> <code>Planta baja</code>.</li>
+            <li>Guardar y después abrir <span class="menu-path">Instituciones &gt; Salas de espera</span>.</li>
+            <li>Crear <strong>Sala principal</strong> en Torre Central, Planta baja, con capacidad estimada <code>30</code>.</li>
+          </ol>
+
+          <h3>4. Crear consultorios</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Instituciones &gt; Consultorios</span>.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa, <strong>Complejo:</strong> Torre Central y <strong>Piso:</strong> Planta baja.</li>
+            <li>Crear consultorio con <strong>Código:</strong> <code>C-101</code> y <strong>Nombre visible:</strong> <code>Consultorio 101</code>.</li>
+            <li>Seleccionar el clúster correspondiente del piso y presionar <strong>Guardar</strong>.</li>
+            <li>Repetir para <strong>Código:</strong> <code>C-102</code> y <strong>Nombre visible:</strong> <code>Consultorio 102</code>.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section aria-labelledby="verificacion">
+        <h2 id="verificacion">Verificación Final</h2>
+        <ul class="checklist">
+          <li>La institución aparece como activa.</li>
+          <li>El complejo pertenece a la institución correcta y tiene zona horaria válida.</li>
+          <li>Los pisos pertenecen al complejo correcto y tienen nombre visible claro.</li>
+          <li>Las salas de espera están activas y asignadas al piso correcto.</li>
+          <li>Los consultorios tienen código único, nombre visible y clúster asignado.</li>
+          <li>Los consultorios que recibirán citas están activos.</li>
+          <li>Los clústers asociados a consultorios con turnos tienen al menos una pantalla activa.</li>
+        </ul>
+      </section>
+
+      <p class="footer">
+        Manual HTML autocontenido. Puede abrirse en navegador, compartirse como archivo o imprimirse a PDF.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

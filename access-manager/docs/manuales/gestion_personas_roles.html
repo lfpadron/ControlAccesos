@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de usuario - Gestión de personas y roles</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #526070;
+      --line: #d9e2ea;
+      --soft: #f4f8fb;
+      --soft-2: #eaf4f8;
+      --brand: #145c8f;
+      --brand-dark: #0f4167;
+      --accent: #00a78e;
+      --warning: #8a5a00;
+      --paper: #ffffff;
+      --code-bg: #edf3f7;
+      --shadow: 0 18px 48px rgba(31, 57, 84, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef5f8;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 34px 42px 30px;
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    header .eyebrow {
+      margin: 0 0 10px;
+      color: #d9edf8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.14;
+      letter-spacing: 0;
+    }
+
+    header .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #eef8fc;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 34px 42px 42px;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--soft-2);
+      color: var(--brand-dark);
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h2:first-child {
+      margin-top: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      color: #24394c;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 14px;
+    }
+
+    a {
+      color: var(--brand-dark);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 28px;
+    }
+
+    .summary-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--soft);
+    }
+
+    .summary-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand-dark);
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    .summary-box span {
+      color: var(--muted);
+    }
+
+    .note,
+    .warning,
+    .example {
+      margin: 18px 0;
+      border-radius: 8px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .warning {
+      border-color: #e5c568;
+      background: #fff8e6;
+      color: #4f3a08;
+    }
+
+    .example {
+      border-color: #b9ddd7;
+      background: #effbf8;
+    }
+
+    .label {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--code-bg);
+      color: #22384d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .menu-path {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 3px 7px;
+      background: var(--code-bg);
+      color: #102c45;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft-2);
+      color: #18354e;
+    }
+
+    code {
+      border-radius: 4px;
+      padding: 1px 5px;
+      background: var(--code-bg);
+      color: #1d3347;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 30px;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 21px;
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header,
+      main {
+        padding-left: 22px;
+        padding-right: 22px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page {
+        max-width: none;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header {
+        color: #000000;
+        background: #ffffff;
+        border-bottom: 2px solid #000000;
+      }
+
+      header .eyebrow,
+      header .subtitle,
+      .summary-box span,
+      .footer {
+        color: #000000;
+      }
+
+      h2 {
+        color: #000000;
+        break-after: avoid;
+      }
+
+      table,
+      .note,
+      .warning,
+      .example {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Control de acceso · Manual de usuario</p>
+      <h1>Gestión de personas y roles</h1>
+      <p class="subtitle">
+        Guía administrativa para crear cuentas de acceso, asignar permisos y registrar médicos u operadores dentro del sistema.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="resumen">
+        <h2 id="resumen">Resumen Rápido</h2>
+        <div class="summary-grid">
+          <div class="summary-box">
+            <strong>Dirigido a</strong>
+            <span>Administradores de sistema y administradores de negocio autorizados.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Resultado</strong>
+            <span>Usuarios con roles correctos y perfiles operativos listos para trabajar.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Menú principal</strong>
+            <span>Personas y roles.</span>
+          </div>
+        </div>
+
+        <p>
+          En esta sección se administra quién puede ingresar al sistema, qué permisos tiene y si esa persona actuará como médico,
+          operador, recepcionista, administrador u otro perfil operativo. La cuenta de usuario permite iniciar sesión; los roles
+          definen permisos; y los registros de médicos u operadores habilitan actividades específicas dentro de la operación diaria.
+        </p>
+
+        <div class="note">
+          <strong>Idea clave:</strong> primero cree o revise el rol, después cree la cuenta de usuario, asigne el rol correspondiente
+          y finalmente registre a la persona como médico u operador si realizará esas funciones.
+        </div>
+      </section>
+
+      <section aria-labelledby="menus">
+        <h2 id="menus">Dónde Entrar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Actividad</th>
+              <th>Menú</th>
+              <th>Qué se configura</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crear o editar cuentas</td>
+              <td><span class="menu-path">Personas y roles &gt; Usuarios</span></td>
+              <td>Nombre, correo, contraseña temporal, teléfono, cambio obligatorio de contraseña y estado.</td>
+            </tr>
+            <tr>
+              <td>Consultar usuarios</td>
+              <td><span class="menu-path">Personas y roles &gt; Búsqueda de usuarios</span></td>
+              <td>Búsqueda por ubicación, rol, estado y nombre; exportación a Excel, CSV o JSON.</td>
+            </tr>
+            <tr>
+              <td>Administrar roles</td>
+              <td><span class="menu-path">Personas y roles &gt; Roles</span></td>
+              <td>Códigos, nombres, descripciones y estado de los permisos base.</td>
+            </tr>
+            <tr>
+              <td>Asignar permisos</td>
+              <td><span class="menu-path">Personas y roles &gt; Roles de usuario</span></td>
+              <td>Relación entre usuario, rol, institución y complejo.</td>
+            </tr>
+            <tr>
+              <td>Registrar médicos</td>
+              <td><span class="menu-path">Personas y roles &gt; Médicos</span></td>
+              <td>Directorio médico, usuario asociado y plantilla para llamados de turno.</td>
+            </tr>
+            <tr>
+              <td>Registrar operadores</td>
+              <td><span class="menu-path">Personas y roles &gt; Operadores</span></td>
+              <td>Personal operativo asociado a una cuenta de usuario.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="flujo">
+        <h2 id="flujo">Flujo Recomendado</h2>
+        <ol>
+          <li>Revise que el rol necesario exista y esté activo en <span class="menu-path">Personas y roles &gt; Roles</span>.</li>
+          <li>Cree la cuenta en <span class="menu-path">Personas y roles &gt; Usuarios</span>.</li>
+          <li>Asigne el rol a la cuenta desde <span class="menu-path">Personas y roles &gt; Roles de usuario</span>.</li>
+          <li>Defina el alcance por institución o complejo si el usuario no debe operar de forma global.</li>
+          <li>Si la persona atenderá pacientes, regístrela en <span class="menu-path">Personas y roles &gt; Médicos</span>.</li>
+          <li>Si la persona apoyará operación, regístrela en <span class="menu-path">Personas y roles &gt; Operadores</span>.</li>
+          <li>Confirme el resultado en <span class="menu-path">Personas y roles &gt; Búsqueda de usuarios</span>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Seguridad:</strong> asigne sólo los roles necesarios. Las cuentas administrativas deben reservarse para personas
+          autorizadas y las contraseñas temporales deben cambiarse en el primer ingreso cuando aplique.
+        </div>
+      </section>
+
+      <section aria-labelledby="usuarios">
+        <h2 id="usuarios">Usuarios</h2>
+        <p>
+          Use este catálogo para dar de alta las cuentas que podrán iniciar sesión en el sistema. Una cuenta puede representar a un
+          administrador, recepcionista, médico, operador o usuario técnico.
+        </p>
+
+        <h3>Alta de usuario</h3>
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Usuarios</span>.</li>
+          <li>Capturar <strong>Nombre</strong> de la persona o cuenta operativa.</li>
+          <li>Capturar <strong>Correo electrónico</strong>. Este dato identifica la cuenta para acceso y búsqueda.</li>
+          <li>Capturar <strong>Contraseña temporal / nueva</strong>.</li>
+          <li>Capturar <strong>Teléfono</strong> si se desea mantener el dato de contacto.</li>
+          <li>Marcar <strong>Forzar cambio de contraseña</strong> si la persona debe cambiarla al entrar por primera vez.</li>
+          <li>Dejar <strong>Estado:</strong> <code>ACTIVO</code> si la cuenta debe poder operar.</li>
+          <li>Presionar <strong>Guardar</strong>.</li>
+        </ol>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Campo</th>
+              <th>Uso recomendado</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Nombre</td>
+              <td>Nombre completo o nombre reconocible de la cuenta.</td>
+            </tr>
+            <tr>
+              <td>Correo electrónico</td>
+              <td>Debe ser único y estar escrito correctamente, porque se usa para identificar al usuario.</td>
+            </tr>
+            <tr>
+              <td>Contraseña temporal / nueva</td>
+              <td>Debe tener al menos 8 caracteres y al menos 1 número. En creación es obligatoria.</td>
+            </tr>
+            <tr>
+              <td>Forzar cambio de contraseña</td>
+              <td>Útil cuando el administrador entrega una contraseña temporal.</td>
+            </tr>
+            <tr>
+              <td>Estado</td>
+              <td>Use <code>ACTIVO</code> para cuentas vigentes. Use <code>INACTIVO</code> cuando la persona ya no debe operar.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Edición de usuario</h3>
+        <ol>
+          <li>Localice el usuario en la tabla.</li>
+          <li>Seleccione el renglón o use <strong>Editar</strong>.</li>
+          <li>Actualice nombre, correo, teléfono, estado o la opción de cambio de contraseña.</li>
+          <li>Si no desea cambiar la contraseña, deje vacío el campo <strong>Contraseña temporal / nueva</strong>.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="note">
+          Cambiar el estado del usuario no elimina sus roles históricos. Si una cuenta deja de operar, revise también sus roles de
+          usuario y sus registros de médico u operador.
+        </div>
+      </section>
+
+      <section aria-labelledby="roles">
+        <h2 id="roles">Roles</h2>
+        <p>
+          Los roles son permisos base para operación y administración. El sistema incluye roles semilla para cubrir los perfiles más
+          comunes; puede crear nuevos roles si la operación lo requiere y existe una política clara de autorización.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Rol semilla</th>
+              <th>Uso</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>ADMIN_SISTEMA</code></td>
+              <td>Administración global del sistema.</td>
+            </tr>
+            <tr>
+              <td><code>ADMIN_NEGOCIO</code></td>
+              <td>Administración por institución o complejo.</td>
+            </tr>
+            <tr>
+              <td><code>RECEPCIONISTA</code></td>
+              <td>Recepción operativa, registro de llegadas y apoyo a citas.</td>
+            </tr>
+            <tr>
+              <td><code>MEDICO</code></td>
+              <td>Perfil médico para atención y llamados de pacientes.</td>
+            </tr>
+            <tr>
+              <td><code>OPERADOR</code></td>
+              <td>Apoyo operativo asignado a médicos, consultorios o complejos.</td>
+            </tr>
+            <tr>
+              <td><code>GUARDIA_CONTINGENCIA</code></td>
+              <td>Acceso limitado para escenarios de contingencia.</td>
+            </tr>
+            <tr>
+              <td><code>USUARIO_KIOSKO</code></td>
+              <td>Rol técnico para kioskos; normalmente no se asigna a personas de operación diaria.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Alta o edición de rol</h3>
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Roles</span>.</li>
+          <li>Capturar <strong>Código</strong>. Use mayúsculas y guiones bajos para que sea fácil de reconocer.</li>
+          <li>Capturar <strong>Nombre</strong> claro para administradores.</li>
+          <li>Capturar <strong>Descripción</strong> con el propósito del rol.</li>
+          <li>Dejar <strong>Activo</strong> marcado si el rol puede asignarse.</li>
+          <li>Presionar <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Importante:</strong> no cree roles duplicados para resolver casos temporales. Si sólo necesita retirar acceso,
+          desactive la asignación del usuario o cambie el estado de la cuenta.
+        </div>
+      </section>
+
+      <section aria-labelledby="roles-usuario">
+        <h2 id="roles-usuario">Roles de Usuario</h2>
+        <p>
+          En este catálogo se define qué puede hacer cada cuenta. Una misma persona puede tener más de un rol si sus actividades lo
+          justifican, por ejemplo administrador de negocio y recepcionista en una misma sede.
+        </p>
+
+        <h3>Asignar un rol</h3>
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Roles de usuario</span>.</li>
+          <li>Seleccionar <strong>Usuario</strong>.</li>
+          <li>Seleccionar <strong>Rol</strong>.</li>
+          <li>Seleccionar <strong>Institución</strong> si el rol aplica sólo dentro de una institución.</li>
+          <li>Seleccionar <strong>Complejo</strong> si el rol aplica sólo a una sede específica.</li>
+          <li>Dejar <strong>Activo</strong> marcado.</li>
+          <li>Presionar <strong>Guardar</strong>.</li>
+        </ol>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Alcance</th>
+              <th>Cuándo usarlo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sin institución ni complejo</td>
+              <td>Acceso global. Debe reservarse para perfiles como <code>ADMIN_SISTEMA</code>.</td>
+            </tr>
+            <tr>
+              <td>Con institución</td>
+              <td>Cuando el usuario sólo administra u opera dentro de una institución.</td>
+            </tr>
+            <tr>
+              <td>Con institución y complejo</td>
+              <td>Cuando el usuario sólo debe operar en una sede o complejo concreto.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          Las asignaciones guardan alcance por institución y complejo. Para controles más específicos por piso o consultorio, revise las
+          asignaciones operativas correspondientes cuando la persona sea médico u operador.
+        </div>
+      </section>
+
+      <section aria-labelledby="medicos">
+        <h2 id="medicos">Médicos</h2>
+        <p>
+          El catálogo de médicos registra a las personas que podrán recibir asignaciones de consultorio y llamar pacientes. Puede existir
+          un médico sin usuario asociado, aunque lo habitual es vincularlo a una cuenta si usará el sistema directamente.
+        </p>
+
+        <h3>Alta o edición de médico</h3>
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Médicos</span>.</li>
+          <li>Seleccionar <strong>Usuario asociado</strong> si el médico tendrá cuenta de acceso.</li>
+          <li>Capturar <strong>Nombre</strong> y <strong>Apellidos</strong>.</li>
+          <li>Capturar <strong>Nombre visible</strong> si se desea mostrar un texto más corto o institucional.</li>
+          <li>Seleccionar <strong>Plantilla de turnos</strong>.</li>
+          <li>Dejar <strong>Activo</strong> marcado si el médico está disponible para operación.</li>
+          <li>Presionar <strong>Guardar</strong>.</li>
+        </ol>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Plantilla</th>
+              <th>Texto de ejemplo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>PACIENTE_CONSULTORIO</code></td>
+              <td>Paciente Juan P* a consultorio C19.</td>
+            </tr>
+            <tr>
+              <td><code>TURNO_PACIENTE_CONSULTORIO</code></td>
+              <td>Turno ABCD del paciente Juan P* a consultorio C19.</td>
+            </tr>
+            <tr>
+              <td><code>PACIENTE_TURNO_CONSULTORIO</code></td>
+              <td>Paciente Juan P* con turno ABCD a consultorio C19.</td>
+            </tr>
+            <tr>
+              <td><code>TURNO_CONSULTORIO</code></td>
+              <td>Turno ABCD a consultorio C19.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          La plantilla de turnos afecta el texto que se mostrará al llamar a un paciente en las pantallas de turnos. Elija una plantilla
+          consistente para todos los médicos de la misma sede.
+        </div>
+      </section>
+
+      <section aria-labelledby="operadores">
+        <h2 id="operadores">Operadores</h2>
+        <p>
+          Los operadores son usuarios que apoyan la operación de médicos, consultorios o complejos. A diferencia del médico, el operador
+          siempre debe estar asociado a una cuenta de usuario.
+        </p>
+
+        <h3>Alta o edición de operador</h3>
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Operadores</span>.</li>
+          <li>Seleccionar <strong>Usuario</strong>.</li>
+          <li>Dejar <strong>Activo</strong> marcado si el operador puede participar en operación.</li>
+          <li>Presionar <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="note">
+          Si el operador debe quedar vinculado a una sede, consultorio o médico específico, complete la configuración en
+          <span class="menu-path">Operación &gt; Asignaciones</span> después de crear el operador.
+        </div>
+      </section>
+
+      <section aria-labelledby="busqueda">
+        <h2 id="busqueda">Búsqueda de Usuarios</h2>
+        <p>
+          Esta pantalla sirve para consultar y auditar cuentas operativas. Permite confirmar qué usuarios están activos, qué roles tienen
+          y en qué instituciones, complejos o pisos aparecen por sus roles y asignaciones.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Filtro o acción</th>
+              <th>Uso</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Institución</td>
+              <td>Filtra usuarios relacionados con una institución.</td>
+            </tr>
+            <tr>
+              <td>Complejo</td>
+              <td>Filtra usuarios relacionados con una sede o complejo.</td>
+            </tr>
+            <tr>
+              <td>Piso</td>
+              <td>Filtra usuarios cuyo alcance se deduce de asignaciones activas por consultorio o complejo.</td>
+            </tr>
+            <tr>
+              <td>Rol</td>
+              <td>Muestra sólo usuarios con el rol seleccionado.</td>
+            </tr>
+            <tr>
+              <td>Estado</td>
+              <td>Permite consultar todos, activos o inactivos.</td>
+            </tr>
+            <tr>
+              <td>Nombre</td>
+              <td>Busca por nombre, apellido, correo o datos del médico asociado.</td>
+            </tr>
+            <tr>
+              <td>Excel, CSV, JSON</td>
+              <td>Exporta el resultado filtrado para revisión o distribución.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <ol>
+          <li>Ir a <span class="menu-path">Personas y roles &gt; Búsqueda de usuarios</span>.</li>
+          <li>Capturar uno o varios filtros.</li>
+          <li>Presionar <strong>Filtrar</strong>.</li>
+          <li>Revisar columnas de <strong>Nombre</strong>, <strong>Correo</strong>, <strong>Roles</strong>, <strong>Estado</strong>, <strong>Instituciones</strong>, <strong>Complejos</strong> y <strong>Pisos</strong>.</li>
+          <li>Usar <strong>Excel</strong>, <strong>CSV</strong> o <strong>JSON</strong> si necesita compartir el listado.</li>
+          <li>Presionar <strong>Limpiar</strong> para iniciar una nueva búsqueda.</li>
+        </ol>
+      </section>
+
+      <section aria-labelledby="edicion-estados">
+        <h2 id="edicion-estados">Edición y Estados</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Elemento</th>
+              <th>Cómo editar</th>
+              <th>Estado disponible</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Usuario</td>
+              <td>Seleccione el renglón en el catálogo de usuarios o use <strong>Editar</strong>.</td>
+              <td>Campo <strong>Estado</strong>, por ejemplo <code>ACTIVO</code> o <code>INACTIVO</code>.</td>
+            </tr>
+            <tr>
+              <td>Rol</td>
+              <td>Seleccione el rol en la tabla.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+            <tr>
+              <td>Rol de usuario</td>
+              <td>Seleccione la asignación en la tabla.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+            <tr>
+              <td>Médico</td>
+              <td>Seleccione el médico en el catálogo.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+            <tr>
+              <td>Operador</td>
+              <td>Seleccione el operador en el catálogo.</td>
+              <td>Activo o inactivo.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="warning">
+          Para retirar acceso de forma ordenada, desactive o marque como inactiva la cuenta de usuario y revise sus roles, perfil médico,
+          perfil operador y asignaciones operativas. Así se evita que una cuenta quede visible como disponible en algún flujo.
+        </div>
+      </section>
+
+      <section aria-labelledby="ejemplo">
+        <h2 id="ejemplo">Ejemplo Práctico</h2>
+        <div class="example">
+          <h3>Objetivo</h3>
+          <p>
+            Crear una recepcionista para Clínicas Alfa, asignarle permisos en Torre Central y confirmar que aparece en la búsqueda.
+          </p>
+
+          <h3>1. Revisar el rol</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Personas y roles &gt; Roles</span>.</li>
+            <li>Buscar el rol <code>RECEPCIONISTA</code>.</li>
+            <li>Confirmar que está activo. Si no existe, crearlo con nombre <code>Recepcionista</code> y una descripción breve.</li>
+          </ol>
+
+          <h3>2. Crear la cuenta</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Personas y roles &gt; Usuarios</span>.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Laura Méndez</code>.</li>
+            <li>Capturar <strong>Correo electrónico:</strong> <code>laura.mendez@clinicasalfa.mx</code>.</li>
+            <li>Capturar <strong>Contraseña temporal / nueva:</strong> <code>Temporal123</code>.</li>
+            <li>Marcar <strong>Forzar cambio de contraseña</strong>.</li>
+            <li>Dejar <strong>Estado:</strong> <code>ACTIVO</code> y presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>3. Asignar el rol</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Personas y roles &gt; Roles de usuario</span>.</li>
+            <li>Seleccionar <strong>Usuario:</strong> Laura Méndez.</li>
+            <li>Seleccionar <strong>Rol:</strong> Recepcionista.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Seleccionar <strong>Complejo:</strong> Torre Central.</li>
+            <li>Dejar <strong>Activo</strong> marcado y presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>4. Registrar como operador operativo</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Personas y roles &gt; Operadores</span>.</li>
+            <li>Seleccionar <strong>Usuario:</strong> Laura Méndez.</li>
+            <li>Dejar <strong>Activo</strong> marcado y presionar <strong>Guardar</strong>.</li>
+            <li>Si Laura apoyará un consultorio o complejo específico, completar después la relación en <span class="menu-path">Operación &gt; Asignaciones</span>.</li>
+          </ol>
+
+          <h3>5. Validar en búsqueda</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Personas y roles &gt; Búsqueda de usuarios</span>.</li>
+            <li>Filtrar por <strong>Institución:</strong> Clínicas Alfa, <strong>Complejo:</strong> Torre Central y <strong>Rol:</strong> Recepcionista.</li>
+            <li>Confirmar que aparece Laura Méndez con estado <code>ACTIVO</code>.</li>
+            <li>Exportar a <strong>CSV</strong> si el listado se compartirá con administración.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section aria-labelledby="verificacion">
+        <h2 id="verificacion">Verificación Final</h2>
+        <ul class="checklist">
+          <li>La cuenta de usuario existe y tiene correo correcto.</li>
+          <li>La contraseña temporal cumple con la regla mínima y se marcó cambio obligatorio cuando aplica.</li>
+          <li>El usuario tiene sólo los roles necesarios para sus actividades.</li>
+          <li>Los roles de usuario tienen institución y complejo cuando el acceso debe ser acotado.</li>
+          <li>Los médicos están vinculados a usuario cuando usarán el sistema directamente.</li>
+          <li>Los médicos tienen plantilla de turnos coherente con la sede.</li>
+          <li>Los operadores están vinculados a una cuenta activa.</li>
+          <li>La búsqueda de usuarios muestra el rol, estado y alcance esperados.</li>
+          <li>Los usuarios retirados o suspendidos no permanecen como activos en roles, médicos u operadores.</li>
+        </ul>
+      </section>
+
+      <p class="footer">
+        Manual HTML autocontenido. Puede abrirse en navegador, compartirse como archivo o imprimirse a PDF.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

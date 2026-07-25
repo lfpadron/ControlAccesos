@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de usuario - Gestión de kioskos</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #526070;
+      --line: #d9e2ea;
+      --soft: #f4f8fb;
+      --soft-2: #eaf4f8;
+      --brand: #145c8f;
+      --brand-dark: #0f4167;
+      --accent: #00a78e;
+      --warning: #8a5a00;
+      --paper: #ffffff;
+      --code-bg: #edf3f7;
+      --shadow: 0 18px 48px rgba(31, 57, 84, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef5f8;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 34px 42px 30px;
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    header .eyebrow {
+      margin: 0 0 10px;
+      color: #d9edf8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.14;
+      letter-spacing: 0;
+    }
+
+    header .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #eef8fc;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 34px 42px 42px;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--soft-2);
+      color: var(--brand-dark);
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h2:first-child {
+      margin-top: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      color: #24394c;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 14px;
+    }
+
+    a {
+      color: var(--brand-dark);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 28px;
+    }
+
+    .summary-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--soft);
+    }
+
+    .summary-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand-dark);
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    .summary-box span {
+      color: var(--muted);
+    }
+
+    .note,
+    .warning,
+    .example {
+      margin: 18px 0;
+      border-radius: 8px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .warning {
+      border-color: #e5c568;
+      background: #fff8e6;
+      color: #4f3a08;
+    }
+
+    .example {
+      border-color: #b9ddd7;
+      background: #effbf8;
+    }
+
+    .label {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--code-bg);
+      color: #22384d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .menu-path {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 3px 7px;
+      background: var(--code-bg);
+      color: #102c45;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft-2);
+      color: #18354e;
+    }
+
+    code {
+      border-radius: 4px;
+      padding: 1px 5px;
+      background: var(--code-bg);
+      color: #1d3347;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 30px;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 21px;
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header,
+      main {
+        padding-left: 22px;
+        padding-right: 22px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page {
+        max-width: none;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header {
+        color: #000000;
+        background: #ffffff;
+        border-bottom: 2px solid #000000;
+      }
+
+      header .eyebrow,
+      header .subtitle,
+      .summary-box span,
+      .footer {
+        color: #000000;
+      }
+
+      h2 {
+        color: #000000;
+        break-after: avoid;
+      }
+
+      table,
+      .note,
+      .warning,
+      .example {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Control de acceso · Manual de usuario</p>
+      <h1>Gestión de kioskos</h1>
+      <p class="subtitle">
+        Guía para crear puntos de acceso, registrar kioskos de autoservicio y configurar su presentación visual.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="resumen">
+        <h2 id="resumen">Resumen Rápido</h2>
+        <div class="summary-grid">
+          <div class="summary-box">
+            <strong>Dirigido a</strong>
+            <span>Administradores de sistema y administradores de negocio.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Resultado</strong>
+            <span>Un kiosko activo ligado a un punto de acceso físico.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Menú clave</strong>
+            <span>Operación &gt; Kioskos.</span>
+          </div>
+        </div>
+
+        <p>
+          El kiosko permite que el paciente registre su llegada desde una pantalla de autoservicio. En la app, la gestión se divide
+          en dos partes: primero se crea el <strong>punto de acceso</strong>, que representa la ubicación física; después se registra
+          el <strong>kiosko</strong>, que representa el dispositivo instalado en ese punto.
+        </p>
+
+        <div class="note">
+          <strong>Antes de empezar:</strong> deben existir la institución, el complejo y el piso donde se instalará el kiosko.
+          El punto de acceso y el kiosko deben pertenecer al mismo complejo y al mismo piso.
+        </div>
+      </section>
+
+      <section aria-labelledby="menus">
+        <h2 id="menus">Dónde Entrar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Actividad</th>
+              <th>Menú</th>
+              <th>Qué se configura</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Dar de alta o editar un punto de acceso</td>
+              <td><span class="menu-path">Operación &gt; Kioskos</span></td>
+              <td>Institución, complejo, piso, nombre, descripción y estado activo.</td>
+            </tr>
+            <tr>
+              <td>Registrar o editar un kiosko</td>
+              <td><span class="menu-path">Operación &gt; Kioskos</span></td>
+              <td>Dispositivo, token, punto de acceso, URL, nombre, descripción, polling, estado y colores.</td>
+            </tr>
+            <tr>
+              <td>Activar o desactivar registros</td>
+              <td><span class="menu-path">Operación &gt; Kioskos</span></td>
+              <td>Tablas de <strong>Puntos de acceso</strong> y <strong>Kioskos</strong>, columna <strong>Acciones</strong>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="punto">
+        <h2 id="punto">Alta de un Punto de Acceso</h2>
+        <p>
+          El punto de acceso identifica el lugar donde se encuentra el kiosko. Use nombres operativos claros, por ejemplo
+          <code>Lobby principal</code>, <code>Recepción urgencias</code> o <code>Entrada torre norte</code>.
+        </p>
+
+        <ol>
+          <li>Ingrese a la web administrativa de Control de acceso.</li>
+          <li>En el menú lateral, abra <span class="menu-path">Operación &gt; Kioskos</span>.</li>
+          <li>En el formulario <strong>Crear punto de acceso</strong>, seleccione la <strong>Institución</strong>.</li>
+          <li>Seleccione el <strong>Complejo</strong>. El sistema filtrará los pisos disponibles.</li>
+          <li>Seleccione el <strong>Piso</strong> donde estará ubicado el kiosko.</li>
+          <li>Capture el <strong>Nombre</strong> del punto de acceso.</li>
+          <li>Capture una <strong>Descripción</strong> si necesita documentar la ubicación o alcance.</li>
+          <li>Deje marcada la opción <strong>Activo</strong>.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <p>
+          Después de guardar, el punto aparece en la tabla <strong>Puntos de acceso</strong> con su nombre, complejo, piso,
+          estado y acciones para editar, activar o desactivar.
+        </p>
+      </section>
+
+      <section aria-labelledby="kiosko">
+        <h2 id="kiosko">Alta de un Kiosko</h2>
+        <p>
+          El kiosko es el dispositivo que abre la aplicación pública de autoservicio. Desde ahí el paciente puede buscar su cita
+          del día o validar el token QR para registrar llegada.
+        </p>
+
+        <ol>
+          <li>En <span class="menu-path">Operación &gt; Kioskos</span>, ubique el formulario <strong>Crear kiosko</strong>.</li>
+          <li>Seleccione <strong>Institución</strong>, <strong>Complejo</strong> y <strong>Piso</strong>.</li>
+          <li>Seleccione el <strong>Punto de acceso</strong>. Solo se muestran puntos del complejo y piso seleccionados.</li>
+          <li>Capture el <strong>Dispositivo</strong>. Debe ser único, por ejemplo <code>kiosko-lobby-pb</code>.</li>
+          <li>Capture el <strong>Token</strong>. Al crear un kiosko es obligatorio y debe tener al menos 8 caracteres.</li>
+          <li>Revise la <strong>URL de kiosko</strong>. El sistema la genera automáticamente con el código del dispositivo y el token capturado.</li>
+          <li>Capture el <strong>Nombre</strong>, por ejemplo <code>Kiosko lobby planta baja</code>.</li>
+          <li>Capture una <strong>Descripción</strong> si ayuda a soporte o mantenimiento.</li>
+          <li>Configure <strong>Polling</strong>, que indica cada cuántos segundos el kiosko actualizará información. El valor permitido va de 2 a 30 segundos.</li>
+          <li>Deje marcada la opción <strong>Activo</strong>.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Cuide el token:</strong> no lo publique en documentos visibles para pacientes. Si necesita cambiarlo, edite el kiosko
+          y capture un nuevo token. Si está editando otros datos, puede dejar el campo token vacío para conservar el existente.
+        </div>
+
+        <p>
+          Después de guardar, el kiosko aparece en la tabla <strong>Kioskos</strong> con columnas de <strong>Dispositivo</strong>,
+          <strong>Nombre</strong>, <strong>Punto</strong>, <strong>Polling</strong>, <strong>Estado</strong> y <strong>Acciones</strong>.
+        </p>
+      </section>
+
+      <section aria-labelledby="colores">
+        <h2 id="colores">Configuración de Colores</h2>
+        <p>
+          La sección <strong>Colores</strong> define la presentación visual configurada para el kiosko y muestra una vista previa.
+          Use combinaciones de alto contraste y consistentes con la identidad de la clínica.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Campo</th>
+              <th>Uso</th>
+              <th>Valor sugerido</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Color fondo</strong></td>
+              <td>Color base del kiosko y de la vista previa.</td>
+              <td><span class="label">white</span> para un fondo claro.</td>
+            </tr>
+            <tr>
+              <td><strong>Color texto</strong></td>
+              <td>Color principal de lectura.</td>
+              <td><span class="label">black</span> sobre fondo claro.</td>
+            </tr>
+            <tr>
+              <td><strong>Color primario</strong></td>
+              <td>Color principal de identidad, botones o bordes destacados.</td>
+              <td><span class="label">royalblue</span> para acciones principales.</td>
+            </tr>
+            <tr>
+              <td><strong>Color acento</strong></td>
+              <td>Color de apoyo para estados, confirmaciones o énfasis visual.</td>
+              <td><span class="label">seagreen</span> para confirmaciones.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <strong>Vista previa:</strong> el formulario muestra el nombre del kiosko y el texto <strong>Buscar cita</strong>.
+          Valide ahí que el fondo, texto y color primario sean legibles antes de guardar.
+        </div>
+      </section>
+
+      <section aria-labelledby="uso">
+        <h2 id="uso">Uso Operativo del Kiosko</h2>
+        <p>
+          Una vez configurado, abra la URL generada en el dispositivo físico. En operación diaria, el kiosko ofrece dos caminos:
+        </p>
+
+        <ul>
+          <li><strong>Escanear QR:</strong> permite validar el token QR de una cita y registrar llegada.</li>
+          <li><strong>Buscar cita:</strong> permite buscar citas del día por nombre y apellido, con celular o fecha de nacimiento como datos opcionales.</li>
+        </ul>
+
+        <p>
+          Cuando la llegada se registra correctamente, el kiosko muestra el resultado y el folio de turno correspondiente. Este folio
+          es el que el paciente usará para identificar su llamado en pantalla.
+        </p>
+      </section>
+
+      <section aria-labelledby="ejemplo">
+        <h2 id="ejemplo">Ejemplo Práctico</h2>
+        <div class="example">
+          <h3>Objetivo</h3>
+          <p>
+            Configurar un kiosko para el lobby de planta baja de Clínicas Alfa, asociado al punto de acceso de recepción principal.
+          </p>
+
+          <h3>1. Crear el punto de acceso</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Operación &gt; Kioskos</span>.</li>
+            <li>En <strong>Crear punto de acceso</strong>, seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Seleccionar <strong>Complejo:</strong> Torre Central.</li>
+            <li>Seleccionar <strong>Piso:</strong> Planta baja.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Lobby principal</code>.</li>
+            <li>Capturar <strong>Descripción:</strong> <code>Punto de acceso para registro de llegada en recepción principal.</code></li>
+            <li>Confirmar que <strong>Activo</strong> esté marcado y presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>2. Registrar el kiosko</h3>
+          <ol>
+            <li>En <strong>Crear kiosko</strong>, seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Seleccionar <strong>Complejo:</strong> Torre Central.</li>
+            <li>Seleccionar <strong>Piso:</strong> Planta baja.</li>
+            <li>Seleccionar <strong>Punto de acceso:</strong> Lobby principal.</li>
+            <li>Capturar <strong>Dispositivo:</strong> <code>kiosko-lobby-pb</code>.</li>
+            <li>Capturar <strong>Token:</strong> <code>LobbyPB2026</code>.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Kiosko lobby PB</code>.</li>
+            <li>Capturar <strong>Descripción:</strong> <code>Kiosko de autoservicio para pacientes con cita de hoy.</code></li>
+            <li>Dejar <strong>Polling:</strong> <code>5</code> segundos y <strong>Activo</strong> marcado.</li>
+          </ol>
+
+          <h3>3. Configurar colores</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>Color fondo</th>
+                <td><code>white</code></td>
+              </tr>
+              <tr>
+                <th>Color texto</th>
+                <td><code>black</code></td>
+              </tr>
+              <tr>
+                <th>Color primario</th>
+                <td><code>royalblue</code></td>
+              </tr>
+              <tr>
+                <th>Color acento</th>
+                <td><code>seagreen</code></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p>
+            Presionar <strong>Guardar</strong>. La URL generada será similar a
+            <code>/kiosk/?device=kiosko-lobby-pb&amp;token=LobbyPB2026</code>. Use el botón <strong>Abrir</strong> para probarla.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="verificacion">
+        <h2 id="verificacion">Verificación Final</h2>
+        <ul class="checklist">
+          <li>El punto de acceso aparece como <strong>Activo</strong> en la tabla <strong>Puntos de acceso</strong>.</li>
+          <li>El kiosko aparece como <strong>Activo</strong> en la tabla <strong>Kioskos</strong>.</li>
+          <li>El kiosko está asociado al punto correcto y al mismo complejo y piso.</li>
+          <li>La URL de kiosko abre correctamente desde el botón <strong>Abrir</strong>.</li>
+          <li>La vista previa tiene contraste suficiente entre fondo, texto y color primario.</li>
+          <li>En el kiosko, la opción <strong>Buscar cita</strong> permite encontrar citas de hoy y registrar llegada.</li>
+          <li>En el kiosko, la opción <strong>Escanear QR</strong> permite validar el token QR cuando esté disponible.</li>
+        </ul>
+
+        <div class="warning">
+          <strong>Si el kiosko no funciona:</strong> confirme que el backend esté disponible, que el kiosko esté activo, que la URL use
+          el código de dispositivo correcto y que el punto de acceso no haya sido desactivado.
+        </div>
+      </section>
+
+      <p class="footer">
+        Manual HTML autocontenido. Puede abrirse en navegador, compartirse como archivo o imprimirse a PDF.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

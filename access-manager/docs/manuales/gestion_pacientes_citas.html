@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de usuario - Gestión de pacientes y citas</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #526070;
+      --line: #d9e2ea;
+      --soft: #f4f8fb;
+      --soft-2: #eaf4f8;
+      --brand: #145c8f;
+      --brand-dark: #0f4167;
+      --accent: #00a78e;
+      --warning: #8a5a00;
+      --paper: #ffffff;
+      --code-bg: #edf3f7;
+      --shadow: 0 18px 48px rgba(31, 57, 84, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef5f8;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 34px 42px 30px;
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    header .eyebrow {
+      margin: 0 0 10px;
+      color: #d9edf8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.14;
+      letter-spacing: 0;
+    }
+
+    header .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #eef8fc;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 34px 42px 42px;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--soft-2);
+      color: var(--brand-dark);
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h2:first-child {
+      margin-top: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      color: #24394c;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 14px;
+    }
+
+    a {
+      color: var(--brand-dark);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 28px;
+    }
+
+    .summary-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--soft);
+    }
+
+    .summary-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand-dark);
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    .summary-box span {
+      color: var(--muted);
+    }
+
+    .note,
+    .warning,
+    .example {
+      margin: 18px 0;
+      border-radius: 8px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .warning {
+      border-color: #e5c568;
+      background: #fff8e6;
+      color: #4f3a08;
+    }
+
+    .example {
+      border-color: #b9ddd7;
+      background: #effbf8;
+    }
+
+    .label {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--code-bg);
+      color: #22384d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .menu-path {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 3px 7px;
+      background: var(--code-bg);
+      color: #102c45;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft-2);
+      color: #18354e;
+    }
+
+    code {
+      border-radius: 4px;
+      padding: 1px 5px;
+      background: var(--code-bg);
+      color: #1d3347;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 30px;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 21px;
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header,
+      main {
+        padding-left: 22px;
+        padding-right: 22px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page {
+        max-width: none;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header {
+        color: #000000;
+        background: #ffffff;
+        border-bottom: 2px solid #000000;
+      }
+
+      header .eyebrow,
+      header .subtitle,
+      .summary-box span,
+      .footer {
+        color: #000000;
+      }
+
+      h2 {
+        color: #000000;
+        break-after: avoid;
+      }
+
+      table,
+      .note,
+      .warning,
+      .example {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Control de acceso · Manual de usuario</p>
+      <h1>Gestión de pacientes y citas</h1>
+      <p class="subtitle">
+        Guía para registrar pacientes, crear citas programadas o espontáneas, generar QR, registrar llegadas y llamar turnos.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="resumen">
+        <h2 id="resumen">Resumen Rápido</h2>
+        <div class="summary-grid">
+          <div class="summary-box">
+            <strong>Dirigido a</strong>
+            <span>Recepción, operación, médicos y administradores.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Resultado</strong>
+            <span>Paciente con cita, folio de turno, QR y flujo de llegada controlado.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Menús clave</strong>
+            <span>Pacientes, Citas, Citas de hoy y Turnos llamados.</span>
+          </div>
+        </div>
+
+        <p>
+          El flujo operativo inicia con el alta o búsqueda del paciente, continúa con la creación de una cita y termina con la
+          llegada, autorización y llamado del turno en pantalla. El sistema genera automáticamente un <strong>folio de paciente</strong>
+          y un <strong>folio de turno</strong> para cada cita.
+        </p>
+
+        <div class="note">
+          <strong>Privacidad:</strong> el QR no contiene datos clínicos ni datos personales visibles. Las pantallas públicas muestran
+          solo turno y destino operativo, de acuerdo con la configuración de turnos.
+        </div>
+      </section>
+
+      <section aria-labelledby="menus">
+        <h2 id="menus">Dónde Entrar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Actividad</th>
+              <th>Menú</th>
+              <th>Qué se realiza</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Alta, edición y búsqueda de pacientes</td>
+              <td><span class="menu-path">Operación &gt; Pacientes</span></td>
+              <td>Crear paciente, editar datos, activar/desactivar y marcar para borrar.</td>
+            </tr>
+            <tr>
+              <td>Alta de citas programadas o espontáneas</td>
+              <td><span class="menu-path">Operación &gt; Citas</span></td>
+              <td>Crear cita, seleccionar paciente, médico, ubicación, fecha, hora y notas operativas.</td>
+            </tr>
+            <tr>
+              <td>Operación diaria de citas</td>
+              <td><span class="menu-path">Operación &gt; Citas de hoy</span></td>
+              <td>Buscar por filtros, generar QR, ticket, check-in, autorizar, llamar y cancelar.</td>
+            </tr>
+            <tr>
+              <td>Consulta y rellamada de turnos recientes</td>
+              <td><span class="menu-path">Operación &gt; Turnos llamados</span></td>
+              <td>Ver llamados recientes por ubicación y volver a llamar cuando aplique.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="pacientes">
+        <h2 id="pacientes">Alta de Pacientes</h2>
+        <p>
+          Use este módulo para registrar la identidad operativa del paciente. No se capturan datos clínicos.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Pacientes</span>.</li>
+          <li>En el formulario <strong>Crear paciente</strong>, capture <strong>Nombre</strong> y <strong>Apellido paterno</strong>.</li>
+          <li>Si el paciente usa un nombre social o de preferencia, capture <strong>Nombre preferido</strong>.</li>
+          <li>Capture <strong>Apellido materno</strong> si está disponible.</li>
+          <li>Capture <strong>Celular</strong> o <strong>Fecha de nacimiento</strong>. Al menos uno de estos datos es necesario para identificar y validar al paciente.</li>
+          <li>Si captura fecha de nacimiento, use los campos <strong>AAAA</strong>, <strong>MM</strong> y <strong>DD</strong>.</li>
+          <li>Presione <strong>Crear paciente</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Nombre preferido solamente:</strong> si solo captura nombre preferido y deja vacío nombre legal y apellidos, el sistema
+          pedirá confirmación antes de guardar.
+        </div>
+
+        <p>
+          Al guardar, el sistema asigna un <strong>Folio</strong> de paciente y el registro aparece en el listado.
+        </p>
+      </section>
+
+      <section aria-labelledby="editar-paciente">
+        <h2 id="editar-paciente">Edición de Pacientes</h2>
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Pacientes</span>.</li>
+          <li>Use el campo de búsqueda del listado para localizar al paciente por <strong>nombre</strong>, <strong>celular</strong> o <strong>folio</strong>.</li>
+          <li>Seleccione el renglón del paciente. El formulario cambiará a <strong>Editar paciente</strong>.</li>
+          <li>Modifique los datos necesarios.</li>
+          <li>Presione <strong>Guardar cambios</strong>.</li>
+        </ol>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Acción</th>
+              <th>Uso recomendado</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Nuevo</strong></td>
+              <td>Limpia el formulario para iniciar otra alta.</td>
+            </tr>
+            <tr>
+              <td><strong>Desactivar</strong> / <strong>Activar</strong></td>
+              <td>Cambia el estado operativo del paciente sin borrar el registro.</td>
+            </tr>
+            <tr>
+              <td><strong>Marcar para borrar</strong></td>
+              <td>Deja el registro marcado para revisión o depuración posterior. No es borrado físico inmediato.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="alta-citas">
+        <h2 id="alta-citas">Alta de Citas</h2>
+        <p>
+          Las citas pueden ser <strong>Programadas</strong> o <strong>Espontáneas</strong>. En ambos casos el sistema genera un
+          folio corto de turno de forma automática.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Citas</span>.</li>
+          <li>En <strong>Tipo</strong>, seleccione <strong>Programada</strong> o <strong>Espontánea</strong>.</li>
+          <li>Capture <strong>Fecha</strong> y <strong>Hora</strong>.</li>
+          <li>Seleccione el <strong>Paciente</strong>. Si no existe, créelo primero en <span class="menu-path">Operación &gt; Pacientes</span>.</li>
+          <li>Seleccione el <strong>Médico</strong>.</li>
+          <li>Seleccione <strong>Institución</strong>, <strong>Complejo</strong>, <strong>Piso</strong> y <strong>Consultorio</strong>.</li>
+          <li>Capture <strong>Notas operativas</strong> si ayudan a recepción u operación.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="note">
+          <strong>Citas espontáneas:</strong> se usan para pacientes que llegan sin agenda previa. Seleccione tipo <strong>Espontánea</strong>,
+          capture la fecha y hora de atención estimada y continúe con los mismos campos.
+        </div>
+
+        <div class="warning">
+          <strong>Posible duplicado:</strong> si el sistema detecta una cita similar para el mismo paciente, médico y fecha, mostrará una
+          advertencia. Revise los turnos sugeridos y confirme solo si realmente debe crear otra cita.
+        </div>
+      </section>
+
+      <section aria-labelledby="editar-citas">
+        <h2 id="editar-citas">Edición de Citas</h2>
+        <p>
+          La edición de una cita permite corregir datos como tipo, paciente, médico, consultorio, complejo, piso, fecha, hora,
+          duración estimada, origen o notas operativas. Si se cambia el complejo o la fecha, el sistema puede regenerar el folio de turno.
+        </p>
+
+        <ol>
+          <li>Busque la cita desde <span class="menu-path">Operación &gt; Citas de hoy</span> usando filtros de fecha, estado, ubicación, médico o paciente.</li>
+          <li>Si su instalación muestra una acción <strong>Editar</strong>, ábrala y actualice los campos necesarios.</li>
+          <li>Guarde la cita y revise que la fecha, hora, médico, consultorio y estado sean correctos.</li>
+          <li>Si aparece advertencia de duplicado, confirme únicamente después de validar que la corrección es intencional.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Nota de interfaz:</strong> en la vista actual, la pantalla <strong>Citas</strong> está enfocada en creación y el tablero
+          <strong>Citas de hoy</strong> en operación diaria. Si no aparece una acción de edición directa, corrija desde el flujo autorizado
+          por soporte/backoffice o cancele la cita incorrecta y cree una nueva con los datos correctos.
+        </div>
+      </section>
+
+      <section aria-labelledby="qr">
+        <h2 id="qr">Generación de QR y Ticket</h2>
+        <p>
+          El QR sirve para que el paciente registre su llegada desde kiosko, PWA u otro canal autorizado. También puede generarse un
+          ticket lógico con turno, QR, consultorio, piso y hora.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Citas de hoy</span>.</li>
+          <li>Filtre por fecha, estado, ubicación, médico o paciente hasta encontrar la cita.</li>
+          <li>En la columna <strong>Acciones</strong>, presione <strong>QR</strong>.</li>
+          <li>El sistema mostrará el QR generado y el mensaje <strong>QR generado</strong>.</li>
+          <li>Use <strong>Bajar</strong> para descargar la imagen del QR si necesita compartirla o imprimirla.</li>
+          <li>Si necesita el formato de ticket, presione <strong>Ticket</strong>. El ticket incluye el QR y los datos operativos mínimos.</li>
+        </ol>
+
+        <div class="note">
+          Al generar QR para una cita en estado <strong>Agendada</strong>, la cita pasa a estado <strong>QR generado</strong>.
+          El QR anterior se cancela cuando se genera uno nuevo.
+        </div>
+      </section>
+
+      <section aria-labelledby="llegada">
+        <h2 id="llegada">Registro de Llegada</h2>
+        <p>
+          El paciente puede registrarse al llegar de tres formas principales: con QR en el kiosko, buscando su cita en el kiosko,
+          o mediante el botón <strong>Check-in</strong> en <span class="menu-path">Operación &gt; Citas de hoy</span>.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Resultado</th>
+              <th>Qué significa</th>
+              <th>Efecto en la cita</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="label">VERDE</span></td>
+              <td>Llegada dentro de la ventana permitida. Configuración estándar: desde 120 minutos antes hasta 30 minutos después de la cita.</td>
+              <td>Se registra llegada y la cita cambia a <strong>Llegó lobby</strong>.</td>
+            </tr>
+            <tr>
+              <td><span class="label">AMARILLO</span></td>
+              <td>La cita es válida, pero el paciente llegó con mucha anticipación. Configuración estándar: entre 240 y 120 minutos antes.</td>
+              <td>Se registra llegada y la cita cambia a <strong>Llegó lobby</strong>.</td>
+            </tr>
+            <tr>
+              <td><span class="label">ROJO</span></td>
+              <td>QR inválido, cita cancelada, expirada, marcada como no se presentó o fuera de ventana.</td>
+              <td>No se registra llegada válida.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          Después de la llegada, operación puede usar <strong>Autorizar</strong> para cambiar la cita a <strong>Autorizado</strong>
+          cuando el paciente pueda pasar.
+        </p>
+      </section>
+
+      <section aria-labelledby="llamada">
+        <h2 id="llamada">Llamada y Rellamada</h2>
+        <p>
+          La llamada envía el turno a las pantallas configuradas para el consultorio. Antes de llamar, confirme que el consultorio
+          esté asociado a un clúster con pantalla de turnos activa.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Citas de hoy</span>.</li>
+          <li>Filtre y localice la cita.</li>
+          <li>En la columna <strong>Acciones</strong>, presione <strong>Llamar</strong>.</li>
+          <li>El turno aparece en la pantalla pública con estilo de turno nuevo y después pasa a estilo normal.</li>
+          <li>Para volver a llamar, espere al menos 5 minutos desde el último llamado.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Rellamadas:</strong> el sistema permite hasta 3 llamados por cita. En el tercer llamado, la cita queda como
+          <strong>No Se Presentó</strong>. No se puede llamar una cita cancelada, expirada, finalizada o marcada como no se presentó.
+        </div>
+
+        <p>
+          También puede consultar llamados recientes en <span class="menu-path">Operación &gt; Turnos llamados</span>. Ahí verá el
+          conteo <strong>1/3</strong>, <strong>2/3</strong> o <strong>3/3</strong> y podrá volver a llamar si el estado lo permite.
+        </p>
+      </section>
+
+      <section aria-labelledby="buscar">
+        <h2 id="buscar">Dónde y Cómo Buscar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Necesidad</th>
+              <th>Ruta</th>
+              <th>Campos de búsqueda o filtros</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Buscar paciente para editar o crear cita</td>
+              <td><span class="menu-path">Operación &gt; Pacientes</span></td>
+              <td>Nombre, celular o folio del paciente.</td>
+            </tr>
+            <tr>
+              <td>Consultar citas generales</td>
+              <td><span class="menu-path">Operación &gt; Citas</span></td>
+              <td>Tabla <strong>Últimas citas</strong> con fecha, hora, turno, paciente, consultorio y estado.</td>
+            </tr>
+            <tr>
+              <td>Operar citas del día o de una fecha</td>
+              <td><span class="menu-path">Operación &gt; Citas de hoy</span></td>
+              <td>Fecha, estado, institución, complejo, piso, consultorio, médico y paciente.</td>
+            </tr>
+            <tr>
+              <td>Exportar resultados de citas</td>
+              <td><span class="menu-path">Operación &gt; Citas de hoy</span></td>
+              <td>Use los botones <strong>Excel</strong>, <strong>CSV</strong> o <strong>JSON</strong> después de filtrar.</td>
+            </tr>
+            <tr>
+              <td>Resolver dudas sobre turnos ya llamados</td>
+              <td><span class="menu-path">Operación &gt; Turnos llamados</span></td>
+              <td>Institución, complejo, piso, consultorio, clúster y rango de minutos.</td>
+            </tr>
+            <tr>
+              <td>Búsqueda de autoservicio del paciente</td>
+              <td><span class="menu-path">Kiosko</span></td>
+              <td>Nombre y apellido; opcionalmente celular o fecha de nacimiento. Busca citas del día.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="ejemplo">
+        <h2 id="ejemplo">Ejemplo Práctico</h2>
+        <div class="example">
+          <h3>Objetivo</h3>
+          <p>
+            Registrar a un paciente, crear una cita espontánea, generar QR, registrar llegada y llamar el turno en pantalla.
+          </p>
+
+          <h3>1. Crear paciente</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Operación &gt; Pacientes</span>.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>María</code>.</li>
+            <li>Capturar <strong>Apellido paterno:</strong> <code>López</code>.</li>
+            <li>Capturar <strong>Celular:</strong> <code>5551234567</code>.</li>
+            <li>Presionar <strong>Crear paciente</strong>.</li>
+          </ol>
+
+          <h3>2. Crear cita espontánea</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Operación &gt; Citas</span>.</li>
+            <li>Seleccionar <strong>Tipo:</strong> Espontánea.</li>
+            <li>Seleccionar fecha y hora de atención.</li>
+            <li>Seleccionar a <strong>María López</strong> en el campo Paciente.</li>
+            <li>Seleccionar médico, institución, complejo, piso y consultorio.</li>
+            <li>Agregar notas operativas si aplica y presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>3. Generar QR y registrar llegada</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Operación &gt; Citas de hoy</span>.</li>
+            <li>Buscar por fecha y paciente <code>María López</code>.</li>
+            <li>Presionar <strong>QR</strong> y después <strong>Bajar</strong> si se requiere archivo.</li>
+            <li>Cuando la paciente llegue, registrar desde kiosko con QR o usar <strong>Check-in</strong> en el tablero.</li>
+            <li>Confirmar que el estado cambie a <strong>Llegó lobby</strong>.</li>
+          </ol>
+
+          <h3>4. Llamar turno</h3>
+          <ol>
+            <li>En la misma fila de <span class="menu-path">Citas de hoy</span>, presionar <strong>Llamar</strong>.</li>
+            <li>Verificar que el turno aparezca en la pantalla correspondiente.</li>
+            <li>Si requiere rellamada, esperar 5 minutos y llamar nuevamente desde <strong>Citas de hoy</strong> o <strong>Turnos llamados</strong>.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section aria-labelledby="verificacion">
+        <h2 id="verificacion">Verificación Final</h2>
+        <ul class="checklist">
+          <li>El paciente tiene nombre preferido o nombre y apellido paterno.</li>
+          <li>El paciente tiene celular o fecha de nacimiento para identificación.</li>
+          <li>La cita tiene paciente, médico, fecha, hora, complejo, piso y consultorio correctos.</li>
+          <li>El consultorio está cubierto por un clúster con pantalla de turnos activa.</li>
+          <li>El QR o ticket se genera desde <strong>Citas de hoy</strong>.</li>
+          <li>El check-in cambia la cita a <strong>Llegó lobby</strong> cuando el resultado es verde o amarillo.</li>
+          <li>La llamada aparece en pantalla y el conteo de llamados no supera 3.</li>
+        </ul>
+      </section>
+
+      <p class="footer">
+        Manual HTML autocontenido. Puede abrirse en navegador, compartirse como archivo o imprimirse a PDF.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

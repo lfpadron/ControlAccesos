@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual de usuario - Gestión de pantallas de turnos</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #526070;
+      --line: #d9e2ea;
+      --soft: #f4f8fb;
+      --soft-2: #eaf4f8;
+      --brand: #145c8f;
+      --brand-dark: #0f4167;
+      --accent: #00a78e;
+      --warning: #8a5a00;
+      --paper: #ffffff;
+      --code-bg: #edf3f7;
+      --shadow: 0 18px 48px rgba(31, 57, 84, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef5f8;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 34px 42px 30px;
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    header .eyebrow {
+      margin: 0 0 10px;
+      color: #d9edf8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.14;
+      letter-spacing: 0;
+    }
+
+    header .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #eef8fc;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 34px 42px 42px;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--soft-2);
+      color: var(--brand-dark);
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h2:first-child {
+      margin-top: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      color: #24394c;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 14px;
+    }
+
+    a {
+      color: var(--brand-dark);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 28px;
+    }
+
+    .summary-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--soft);
+    }
+
+    .summary-box strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand-dark);
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    .summary-box span {
+      color: var(--muted);
+    }
+
+    .note,
+    .warning,
+    .example {
+      margin: 18px 0;
+      border-radius: 8px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .warning {
+      border-color: #e5c568;
+      background: #fff8e6;
+      color: #4f3a08;
+    }
+
+    .example {
+      border-color: #b9ddd7;
+      background: #effbf8;
+    }
+
+    .label {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--code-bg);
+      color: #22384d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .menu-path {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 3px 7px;
+      background: var(--code-bg);
+      color: #102c45;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft-2);
+      color: #18354e;
+    }
+
+    code {
+      border-radius: 4px;
+      padding: 1px 5px;
+      background: var(--code-bg);
+      color: #1d3347;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .checklist {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 30px;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 21px;
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header,
+      main {
+        padding-left: 22px;
+        padding-right: 22px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page {
+        max-width: none;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      header {
+        color: #000000;
+        background: #ffffff;
+        border-bottom: 2px solid #000000;
+      }
+
+      header .eyebrow,
+      header .subtitle,
+      .summary-box span,
+      .footer {
+        color: #000000;
+      }
+
+      h2 {
+        color: #000000;
+        break-after: avoid;
+      }
+
+      table,
+      .note,
+      .warning,
+      .example {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Control de acceso · Manual de usuario</p>
+      <h1>Gestión de pantallas de turnos</h1>
+      <p class="subtitle">
+        Guía para crear clústers, registrar pantallas públicas y configurar los colores con los que se muestran los turnos llamados.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="resumen">
+        <h2 id="resumen">Resumen rápido</h2>
+        <div class="summary-grid">
+          <div class="summary-box">
+            <strong>Dirigido a</strong>
+            <span>Administradores de sistema y administradores de negocio.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Resultado</strong>
+            <span>Una pantalla activa que muestra los turnos de uno o varios clústers.</span>
+          </div>
+          <div class="summary-box">
+            <strong>Menús clave</strong>
+            <span>Instituciones &gt; Clústers y Operación &gt; Pantallas de turnos.</span>
+          </div>
+        </div>
+
+        <p>
+          Las pantallas de turnos se configuran en dos partes. Primero se crea el <strong>clúster</strong>, que agrupa el área
+          del piso donde se mostrarán los llamados. Después se registra la <strong>pantalla</strong>, se asocia al clúster y se ajustan
+          sus colores, tamaños y tiempos de despliegue.
+        </p>
+
+        <div class="note">
+          <strong>Antes de empezar:</strong> deben existir la institución, el complejo y el piso donde estará la pantalla. Si los turnos
+          saldrán de consultorios específicos, esos consultorios también deben estar asociados al clúster correspondiente.
+        </div>
+      </section>
+
+      <section aria-labelledby="menus">
+        <h2 id="menus">Dónde Entrar</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Actividad</th>
+              <th>Menú</th>
+              <th>Qué se configura</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Dar de alta o editar un clúster</td>
+              <td><span class="menu-path">Instituciones &gt; Clústers</span></td>
+              <td>Complejo, piso, nombre, descripción y estado activo.</td>
+            </tr>
+            <tr>
+              <td>Registrar o editar una pantalla</td>
+              <td><span class="menu-path">Operación &gt; Pantallas de turnos</span></td>
+              <td>Dispositivo, nombre, clústers asignados, token, estado, colores, tamaños y tiempos.</td>
+            </tr>
+            <tr>
+              <td>Revisar que llegan turnos a una pantalla</td>
+              <td><span class="menu-path">Operación &gt; Pantallas de turnos</span></td>
+              <td>Tabla de pantallas y sección <strong>Despliegue actual</strong>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="cluster">
+        <h2 id="cluster">Alta de un Clúster</h2>
+        <p>
+          Use el clúster para indicar qué grupo de consultorios o área del piso alimentará una pantalla de turnos.
+          Por ejemplo: <code>Lobby planta baja</code>, <code>Piso 2 norte</code> o <code>Laboratorio</code>.
+        </p>
+
+        <ol>
+          <li>Ingrese a la web administrativa de Control de acceso.</li>
+          <li>En el menú lateral, abra <span class="menu-path">Instituciones &gt; Clústers</span>.</li>
+          <li>En el formulario <strong>Crear clúster</strong>, seleccione la <strong>Institución</strong>.</li>
+          <li>Seleccione el <strong>Complejo</strong>. El sistema filtrará los pisos de ese complejo.</li>
+          <li>Seleccione el <strong>Piso</strong> donde se usará el clúster.</li>
+          <li>Capture el <strong>Nombre</strong>. Use un nombre corto y fácil de reconocer por operación.</li>
+          <li>Capture una <strong>Descripción</strong> si ayuda a identificar el alcance del clúster.</li>
+          <li>Deje marcada la opción <strong>Activo</strong>.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <div class="warning">
+          <strong>Importante:</strong> si un consultorio no está asociado a un clúster con pantalla activa, el sistema puede impedir o
+          rechazar el llamado de turno hacia pantalla. Revise la asociación del consultorio cuando un turno no aparece.
+        </div>
+      </section>
+
+      <section aria-labelledby="pantalla">
+        <h2 id="pantalla">Alta de una Pantalla</h2>
+        <p>
+          Una pantalla representa el dispositivo público que abrirá la URL de display y mostrará los turnos llamados.
+          Puede asignarse a uno o varios clústers del mismo complejo y piso.
+        </p>
+
+        <ol>
+          <li>Abra <span class="menu-path">Operación &gt; Pantallas de turnos</span>.</li>
+          <li>En <strong>Crear pantalla</strong>, seleccione <strong>Institución</strong>, <strong>Complejo</strong> y <strong>Piso</strong>.</li>
+          <li>En el campo <strong>Clúster</strong>, busque el clúster creado y presione <strong>Agregar</strong>. Debe quedar visible como etiqueta debajo del campo.</li>
+          <li>Capture el <strong>Dispositivo</strong>. Este código identifica la pantalla y forma parte de su URL pública. Use un valor único, por ejemplo <code>display-lobby-pb</code>.</li>
+          <li>Capture el <strong>Nombre</strong>, por ejemplo <code>Pantalla lobby planta baja</code>.</li>
+          <li>Revise la <strong>URL de pantalla</strong>. El sistema la genera automáticamente con el código de dispositivo.</li>
+          <li>Capture una <strong>Descripción</strong> si necesita documentar la ubicación física o uso de la pantalla.</li>
+          <li>Opcionalmente capture un <strong>Token</strong>. Si se usa token, la pantalla deberá abrirse con ese token para consultar turnos.</li>
+          <li>Configure <strong>Polling</strong>, que indica cada cuántos segundos la pantalla consulta nuevos turnos. El valor permitido va de 2 a 10 segundos.</li>
+          <li>Deje marcada la opción <strong>Activa</strong> para que pueda recibir llamados.</li>
+          <li>Presione <strong>Guardar</strong>.</li>
+        </ol>
+
+        <p>
+          Después de guardar, la pantalla aparece en la tabla con columnas de <strong>Dispositivo</strong>, <strong>Nombre</strong>,
+          <strong>Clústers</strong>, <strong>Polling</strong>, <strong>Estado</strong> y <strong>Acciones</strong>. Desde ahí puede editarla,
+          desactivarla o volver a activarla.
+        </p>
+      </section>
+
+      <section aria-labelledby="colores">
+        <h2 id="colores">Configuración de Colores y Visualización</h2>
+        <p>
+          La sección <strong>Detalle visual</strong> define cómo se verá la pantalla pública. Use colores con buen contraste para que
+          los pacientes puedan leer el turno a distancia.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Campo</th>
+              <th>Uso</th>
+              <th>Valor sugerido</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Color de fondo</strong></td>
+              <td>Color principal detrás de los turnos.</td>
+              <td><span class="label">black</span> para alto contraste.</td>
+            </tr>
+            <tr>
+              <td><strong>Color de letra</strong></td>
+              <td>Color del texto general de la pantalla.</td>
+              <td><span class="label">white</span> sobre fondo oscuro.</td>
+            </tr>
+            <tr>
+              <td><strong>Color turno nuevo</strong></td>
+              <td>Color usado para resaltar el turno recién llamado.</td>
+              <td><span class="label">yellow</span> para hacerlo visible rápidamente.</td>
+            </tr>
+            <tr>
+              <td><strong>Color turno normal</strong></td>
+              <td>Color usado cuando el turno ya no está resaltado, pero sigue visible.</td>
+              <td><span class="label">white</span> para mantener lectura clara.</td>
+            </tr>
+            <tr>
+              <td><strong>Tamaño turno nuevo</strong></td>
+              <td>Tamaño de letra del turno recién llamado. Rango permitido: 24 a 220.</td>
+              <td><span class="label">96</span> para pantallas de sala.</td>
+            </tr>
+            <tr>
+              <td><strong>Tamaño turno normal</strong></td>
+              <td>Tamaño de letra para turnos ya visibles. Rango permitido: 18 a 160.</td>
+              <td><span class="label">64</span> para mantener varios turnos legibles.</td>
+            </tr>
+            <tr>
+              <td><strong>Segundos resaltado</strong></td>
+              <td>Tiempo en que un turno permanece marcado como nuevo. Rango permitido: 5 a 120.</td>
+              <td><span class="label">25</span> segundos.</td>
+            </tr>
+            <tr>
+              <td><strong>Segundos visible</strong></td>
+              <td>Tiempo total en que el turno permanece visible. Rango permitido: 30 a 3600.</td>
+              <td><span class="label">300</span> segundos.</td>
+            </tr>
+            <tr>
+              <td><strong>Máximo de turnos</strong></td>
+              <td>Cantidad máxima de turnos que se muestran al mismo tiempo. Rango permitido: 1 a 50.</td>
+              <td><span class="label">10</span> turnos.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <strong>Vista previa:</strong> el formulario muestra una muestra visual con el nombre de la pantalla y un turno de ejemplo.
+          Úsela para validar contraste antes de guardar.
+        </div>
+      </section>
+
+      <section aria-labelledby="ejemplo">
+        <h2 id="ejemplo">Ejemplo Práctico</h2>
+        <div class="example">
+          <h3>Objetivo</h3>
+          <p>
+            Configurar una pantalla para el lobby de planta baja de Clínicas Alfa, donde se mostrarán los turnos llamados
+            desde los consultorios del área de recepción principal.
+          </p>
+
+          <h3>1. Crear el clúster</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Instituciones &gt; Clústers</span>.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Seleccionar <strong>Complejo:</strong> Torre Central.</li>
+            <li>Seleccionar <strong>Piso:</strong> Planta baja.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Lobby planta baja</code>.</li>
+            <li>Capturar <strong>Descripción:</strong> <code>Turnos visibles para recepción principal y consultorios de planta baja.</code></li>
+            <li>Confirmar que <strong>Activo</strong> esté marcado y presionar <strong>Guardar</strong>.</li>
+          </ol>
+
+          <h3>2. Registrar la pantalla</h3>
+          <ol>
+            <li>Ir a <span class="menu-path">Operación &gt; Pantallas de turnos</span>.</li>
+            <li>Seleccionar <strong>Institución:</strong> Clínicas Alfa.</li>
+            <li>Seleccionar <strong>Complejo:</strong> Torre Central.</li>
+            <li>Seleccionar <strong>Piso:</strong> Planta baja.</li>
+            <li>En <strong>Clúster</strong>, buscar <code>Lobby planta baja</code> y presionar <strong>Agregar</strong>.</li>
+            <li>Capturar <strong>Dispositivo:</strong> <code>display-lobby-pb</code>.</li>
+            <li>Capturar <strong>Nombre:</strong> <code>Pantalla lobby PB</code>.</li>
+            <li>Opcionalmente capturar un token, por ejemplo <code>LobbyPB2026</code>, si se quiere proteger la consulta pública.</li>
+            <li>Dejar <strong>Polling:</strong> <code>5</code> segundos y <strong>Activa</strong> marcado.</li>
+          </ol>
+
+          <h3>3. Configurar colores</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>Color de fondo</th>
+                <td><code>black</code></td>
+              </tr>
+              <tr>
+                <th>Color de letra</th>
+                <td><code>white</code></td>
+              </tr>
+              <tr>
+                <th>Color turno nuevo</th>
+                <td><code>yellow</code></td>
+              </tr>
+              <tr>
+                <th>Color turno normal</th>
+                <td><code>white</code></td>
+              </tr>
+              <tr>
+                <th>Tamaño turno nuevo</th>
+                <td><code>96</code></td>
+              </tr>
+              <tr>
+                <th>Tamaño turno normal</th>
+                <td><code>64</code></td>
+              </tr>
+              <tr>
+                <th>Segundos resaltado</th>
+                <td><code>25</code></td>
+              </tr>
+              <tr>
+                <th>Segundos visible</th>
+                <td><code>300</code></td>
+              </tr>
+              <tr>
+                <th>Máximo de turnos</th>
+                <td><code>10</code></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p>
+            Presionar <strong>Guardar</strong>. La pantalla quedará disponible en una URL similar a
+            <code>/display/display-lobby-pb</code>. Si se configuró token, la URL incluirá el parámetro correspondiente.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="verificacion">
+        <h2 id="verificacion">Verificación Final</h2>
+        <ul class="checklist">
+          <li>El clúster aparece como <strong>Activo</strong> en <span class="menu-path">Instituciones &gt; Clústers</span>.</li>
+          <li>La pantalla aparece como <strong>Activa</strong> en <span class="menu-path">Operación &gt; Pantallas de turnos</span>.</li>
+          <li>La pantalla tiene al menos un clúster agregado.</li>
+          <li>La URL de pantalla abre correctamente desde el botón <strong>Abrir</strong>.</li>
+          <li>La vista previa tiene contraste suficiente entre fondo, texto y turno nuevo.</li>
+          <li>Al llamar un turno desde un consultorio asociado al clúster, el turno aparece en la pantalla.</li>
+        </ul>
+
+        <div class="warning">
+          <strong>Si no aparece el turno:</strong> confirme que la pantalla está activa, que el clúster asignado es el correcto,
+          que el consultorio pertenece a ese clúster y que el token usado en la URL coincide con el configurado para la pantalla.
+        </div>
+      </section>
+
+      <p class="footer">
+        Manual HTML autocontenido. Puede abrirse en navegador, compartirse como archivo o imprimirse a PDF.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

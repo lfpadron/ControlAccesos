@@ -1,5 +1,5 @@
 param(
-    [string]$Server = "138.197.65.67",
+    [string]$Server = "161.35.122.23",
     [string]$User = "root",
     [string]$RemoteDir = "/opt/control-accesos",
     [string]$ProjectDir = "",
@@ -19,7 +19,7 @@ function Show-Help {
     Write-Host "Uso:"
     Write-Host "  .\subir_droplet.ps1"
     Write-Host "  .\subir_droplet.ps1 -UseDefaults"
-    Write-Host "  .\subir_droplet.ps1 -Server 138.197.65.67 -User root -RemoteDir /opt/control-accesos"
+    Write-Host "  .\subir_droplet.ps1 -Server 161.35.122.23 -User root -RemoteDir /opt/control-accesos"
     Write-Host ""
     Write-Host "Opciones utiles:"
     Write-Host "  -UseDefaults   No pregunta valores; usa los parametros/defaults."
@@ -197,6 +197,8 @@ try {
             "set -e",
             "cd $remoteDirQ",
             "if [ ! -s compose.yaml ]; then echo 'compose.yaml no existe o esta vacio en $RemoteDir' >&2; exit 1; fi",
+            "if [ ! -s .env ]; then echo '.env no existe o esta vacio en $RemoteDir' >&2; exit 1; fi",
+            "unset DATABASE_URL",
             "export COMPOSE_BAKE=false",
             "docker compose build backend",
             "docker compose build worker",
