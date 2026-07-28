@@ -1,0 +1,464 @@
+diff --git a/access-manager/.env.example b/access-manager/.env.example
+index 5b57147..6df5f2b 100644
+--- a/access-manager/.env.example
++++ b/access-manager/.env.example
+@@ -9,7 +9,7 @@ REDIS_URL=redis://redis:6379/0
+ 
+ JWT_SECRET=change-me-jwt-local-development-only
+ JWT_ALGORITHM=HS256
+-ACCESS_TOKEN_EXPIRE_MINUTES=480
++ACCESS_TOKEN_EXPIRE_MINUTES=720
+ QR_SIGNING_SECRET=change-me-qr-local-development-only
+ QR_EXPIRATION_HOURS=24
+ CHECKIN_GREEN_BEFORE_MINUTES=120
+diff --git a/access-manager/README.md b/access-manager/README.md
+index df45663..57f80be 100644
+--- a/access-manager/README.md
++++ b/access-manager/README.md
+@@ -70,6 +70,7 @@ Se crean, si no existen:
+ 
+ - `admin1@example.com`
+ - `admin2@example.com`
++- `recepcion-demo@example.com`
+ 
+ También se crean roles base (`ADMIN_SISTEMA`, `ADMIN_NEGOCIO`, `RECEPCIONISTA`, `MEDICO`, `OPERADOR`, `GUARDIA_CONTINGENCIA`, `USUARIO_KIOSKO`), paciente demo, citas demo, pantalla demo y un QR activo. Usa la contraseña temporal definida por `SEED_ADMIN_PASSWORD` y cámbiala antes de cualquier despliegue real.
+ 
+@@ -78,6 +79,7 @@ También se crean roles base (`ADMIN_SISTEMA`, `ADMIN_NEGOCIO`, `RECEPCIONISTA`,
+ - Web administrativa: [http://localhost:8080](http://localhost:8080)
+ - Kiosko: [http://localhost:8080/kiosk/](http://localhost:8080/kiosk/)
+ - Mobile PWA: [http://localhost:8080/mobile/](http://localhost:8080/mobile/)
++- App Android: `mobile/build/app/outputs/flutter-apk/app-debug.apk`
+ - Display demo: [http://localhost:8080/display/demo-lobby](http://localhost:8080/display/demo-lobby)
+ - API health: [http://localhost:8080/api/health](http://localhost:8080/api/health)
+ - API docs: [http://localhost:8080/api/docs](http://localhost:8080/api/docs)
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 1dacf06..f4836a7 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -13,7 +13,7 @@ from app.core.security import require_role
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
+-from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, SalaEspera
++from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, UsuarioRol
+ from app.models.usuario import Usuario
+ from app.schemas.flow import (
+     CheckinRequest,
+@@ -24,6 +24,7 @@ from app.schemas.flow import (
+     CitaRead,
+     CitaSearchResult,
+     CitaUpdate,
++    MobileSessionResponse,
+     PacienteCreate,
+     PacienteRead,
+     PacienteUpdate,
+@@ -42,8 +43,11 @@ from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, n
+ pacientes_router = APIRouter()
+ citas_router = APIRouter()
+ qr_router = APIRouter()
++mobile_router = APIRouter()
+ 
+ OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
++MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
++MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
+ 
+ 
+ def business_today() -> date:
+@@ -72,6 +76,20 @@ def normalized_digits(value: str | None) -> str | None:
+     return digits or None
+ 
+ 
++def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
++    return set(
++        db.execute(
++            select(Role.codigo)
++            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++            .where(
++                UsuarioRol.usuario_id == usuario.id,
++                UsuarioRol.activo.is_(True),
++                Role.activo.is_(True),
++            )
++        ).scalars()
++    )
++
++
+ def patient_full_name(paciente: Paciente | None) -> str | None:
+     if paciente is None:
+         return None
+@@ -811,6 +829,10 @@ def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_
+ @citas_router.get("/{cita_id}/ticket", response_model=TicketResponse)
+ def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    return ticket_response_for_cita(db, cita)
++
++
++def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
+     _qr_token, token = get_active_qr_payload(db, cita)
+     db.commit()
+     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")
+@@ -827,6 +849,167 @@ def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user:
+     )
+ 
+ 
++def authenticated_lobby_checkin(
++    cita: Cita,
++    payload: CheckinRequest,
++    request: Request,
++    db: Session,
++    current_user: Usuario,
++) -> CheckinResponse:
++    if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
++        return CheckinResponse(
++            resultado="ROJO",
++            mensaje=f"La cita está en estado {cita.estado}.",
++            cita_id=cita.id,
++            folio_turno=cita.folio_turno,
++            estado_cita=cita.estado,
++        )
++    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
++    if resultado != "ROJO":
++        event = create_arrival_event(
++            db,
++            cita,
++            "CHECKIN_LOBBY",
++            payload.canal,
++            request,
++            payload.sala_id,
++            current_user.id,
++            payload.dispositivo_id,
++        )
++        record_audit_event(
++            db,
++            evento="CHECKIN_LOBBY",
++            entidad="eventos_llegada",
++            entidad_id=event.id,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
++        )
++        db.commit()
++        db.refresh(cita)
++    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++
++
++@mobile_router.get("/session", response_model=MobileSessionResponse)
++def mobile_session(db: Session = Depends(get_db), current_user: Usuario = MobileSessionUser) -> MobileSessionResponse:
++    roles = active_role_codes(db, current_user)
++    return MobileSessionResponse(
++        usuario_id=current_user.id,
++        nombre=current_user.nombre,
++        email=current_user.email,
++        roles=sorted(roles),
++        can_checkin=bool(roles.intersection({"ADMIN_SISTEMA", "RECEPCIONISTA"})),
++        can_view_logs=bool(roles.intersection({"ADMIN_SISTEMA", "ADMIN_NEGOCIO"})),
++    )
++
++
++@mobile_router.get("/citas/buscar", response_model=list[CitaSearchResult])
++def mobile_buscar_citas(
++    paciente: str = Query(min_length=1),
++    celular: str | None = None,
++    fecha_nacimiento: date | None = None,
++    fecha: date | None = None,
++    db: Session = Depends(get_db),
++    _current_user: Usuario = MobileCheckinUser,
++) -> list[CitaSearchResult]:
++    if not normalized_digits(celular) and fecha_nacimiento is None:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Indique celular o fecha de nacimiento para buscar la cita.",
++        )
++    rows = db.execute(
++        query_citas(
++            db,
++            fecha or business_today(),
++            paciente=paciente,
++            celular=celular,
++            fecha_nacimiento=fecha_nacimiento,
++        ).limit(20)
++    ).scalars()
++    return [cita_search_item(db, row) for row in rows]
++
++
++@mobile_router.get("/citas/{cita_id}/ticket", response_model=TicketResponse)
++def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = MobileCheckinUser) -> TicketResponse:
++    cita = exists_or_404(db, Cita, cita_id, "Cita")
++    return ticket_response_for_cita(db, cita)
++
++
++@mobile_router.post("/citas/{cita_id}/checkin-lobby", response_model=CheckinResponse)
++def mobile_checkin_lobby_cita(
++    cita_id: UUID,
++    payload: CheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = MobileCheckinUser,
++) -> CheckinResponse:
++    cita = exists_or_404(db, Cita, cita_id, "Cita")
++    return authenticated_lobby_checkin(cita, payload, request, db, current_user)
++
++
++@mobile_router.post("/qr/checkin", response_model=CheckinResponse)
++def mobile_checkin_qr(
++    payload: QrCheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = MobileCheckinUser,
++) -> CheckinResponse:
++    result = validate_qr(db, payload.token)
++    if not result.valid or result.cita is None:
++        record_audit_event(
++            db,
++            evento="QR_VALIDADO",
++            entidad="qr_tokens",
++            entidad_id=result.qr_token.id if result.qr_token else None,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"valido": False, "resultado": result.status},
++        )
++        db.commit()
++        return CheckinResponse(resultado="ROJO", mensaje=result.message)
++
++    cita = result.cita
++    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
++    if resultado != "ROJO":
++        event = create_arrival_event(
++            db,
++            cita,
++            "CHECKIN_LOBBY",
++            payload.canal,
++            request,
++            payload.sala_id,
++            current_user.id,
++            payload.dispositivo_id,
++        )
++        if result.qr_token is not None:
++            result.qr_token.estado = "USADO"
++        record_audit_event(
++            db,
++            evento="CHECKIN_LOBBY",
++            entidad="eventos_llegada",
++            entidad_id=event.id,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
++        )
++    record_audit_event(
++        db,
++        evento="QR_VALIDADO",
++        entidad="qr_tokens",
++        entidad_id=result.qr_token.id if result.qr_token else None,
++        usuario_id=current_user.id,
++        canal=payload.canal,
++        ip_origen=client_ip(request),
++        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
++    )
++    db.commit()
++    db.refresh(cita)
++    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++
++
+ @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)
+ def checkin_lobby_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db)):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index 96080f3..e3e215b 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -12,6 +12,7 @@ api_router.include_router(complejos.router, prefix="/complejos", tags=["complejo
+ api_router.include_router(flow.pacientes_router, prefix="/pacientes", tags=["pacientes"])
+ api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
+ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
++api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
+ api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
+ api_router.include_router(kiosks.router, tags=["kiosks"])
+ api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
+diff --git a/access-manager/backend/app/core/config.py b/access-manager/backend/app/core/config.py
+index 5e0a373..7f6918f 100644
+--- a/access-manager/backend/app/core/config.py
++++ b/access-manager/backend/app/core/config.py
+@@ -18,7 +18,7 @@ class Settings(BaseSettings):
+     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
+     jwt_secret: str = Field(default="change-me-local-dev-only", alias="JWT_SECRET")
+     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+-    access_token_expire_minutes: int = Field(default=480, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
++    access_token_expire_minutes: int = Field(default=720, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+     qr_signing_secret: str | None = Field(default=None, alias="QR_SIGNING_SECRET")
+     qr_expiration_hours: int = Field(default=24, alias="QR_EXPIRATION_HOURS")
+     checkin_green_before_minutes: int = Field(default=120, alias="CHECKIN_GREEN_BEFORE_MINUTES")
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 6ff5a7d..d97abc9 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -247,6 +247,15 @@ class TicketResponse(BaseModel):
+     hora: str
+ 
+ 
++class MobileSessionResponse(BaseModel):
++    usuario_id: UUID
++    nombre: str
++    email: str
++    roles: list[str]
++    can_checkin: bool
++    can_view_logs: bool
++
++
+ class CitaActionResponse(BaseModel):
+     id: UUID
+     estado: str
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 0c25510..610ae8d 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -235,6 +235,36 @@ def main() -> None:
+             db.add(medico)
+             db.flush()
+ 
++        recepcionista_user = db.execute(select(Usuario).where(Usuario.email == "recepcion-demo@example.com")).scalar_one_or_none()
++        if recepcionista_user is None:
++            recepcionista_user = Usuario(
++                nombre="Recepción Demo",
++                email="recepcion-demo@example.com",
++                password_hash=hash_password(settings.seed_admin_password),
++                estado="ACTIVO",
++            )
++            db.add(recepcionista_user)
++            db.flush()
++
++        recepcionista_role = roles["RECEPCIONISTA"]
++        recepcionista_role_assignment = db.execute(
++            select(UsuarioRol).where(
++                UsuarioRol.usuario_id == recepcionista_user.id,
++                UsuarioRol.rol_id == recepcionista_role.id,
++                UsuarioRol.institucion_id == institucion.id,
++                UsuarioRol.complejo_id == complejo.id,
++            )
++        ).scalar_one_or_none()
++        if recepcionista_role_assignment is None:
++            db.add(
++                UsuarioRol(
++                    usuario_id=recepcionista_user.id,
++                    rol_id=recepcionista_role.id,
++                    institucion_id=institucion.id,
++                    complejo_id=complejo.id,
++                )
++            )
++
+         operador_user = db.execute(select(Usuario).where(Usuario.email == "operador-demo@example.com")).scalar_one_or_none()
+         if operador_user is None:
+             operador_user = Usuario(
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 164cd78..374e46e 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -644,11 +644,83 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     assert ticket["turno"] == cita["folio_turno"]
+     assert ticket["qr_payload"]
+ 
+-    checkin_response = client.post("/api/qr/checkin", json={"token": token, "canal": "KIOSKO"})
++    roles_response = client.get("/api/roles", headers=auth_headers)
++    assert roles_response.status_code == 200, roles_response.text
++    recepcionista_role = next(role for role in roles_response.json() if role["codigo"] == "RECEPCIONISTA")
++    recepcionista_user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "nombre": f"Recepcionista Mobile {suffix}",
++                "email": f"recepcion-mobile-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++    assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={
++                "usuario_id": recepcionista_user["id"],
++                "rol_id": recepcionista_role["id"],
++                "institucion_id": institucion["id"],
++                "complejo_id": complejo["id"],
++            },
++        )
++    )
++    recepcionista_login = client.post(
++        "/api/auth/login",
++        json={"email": recepcionista_user["email"], "password": "Temporal123!"},
++    )
++    assert recepcionista_login.status_code == 200, recepcionista_login.text
++    recepcionista_headers = {"Authorization": f"Bearer {recepcionista_login.json()['access_token']}"}
++
++    mobile_session = client.get("/api/mobile/session", headers=recepcionista_headers)
++    assert mobile_session.status_code == 200, mobile_session.text
++    assert mobile_session.json()["can_checkin"] is True
++    assert mobile_session.json()["can_view_logs"] is False
++
++    open_search = client.get("/api/mobile/citas/buscar", params={"paciente": f"Alias {suffix}", "celular": paciente["celular"]})
++    assert open_search.status_code == 401, open_search.text
++
++    incomplete_search = client.get("/api/mobile/citas/buscar", headers=recepcionista_headers, params={"paciente": f"Alias {suffix}"})
++    assert incomplete_search.status_code == 422, incomplete_search.text
++
++    mobile_search = client.get(
++        "/api/mobile/citas/buscar",
++        headers=recepcionista_headers,
++        params={
++            "paciente": f"Alias {suffix}",
++            "celular": paciente["celular"],
++            "fecha": appointment_at.date().isoformat(),
++        },
++    )
++    assert mobile_search.status_code == 200, mobile_search.text
++    assert any(item["id"] == cita["id"] for item in mobile_search.json())
++
++    mobile_ticket_response = client.get(f"/api/mobile/citas/{cita['id']}/ticket", headers=recepcionista_headers)
++    assert mobile_ticket_response.status_code == 200, mobile_ticket_response.text
++    assert mobile_ticket_response.json()["turno"] == cita["folio_turno"]
++
++    checkin_response = client.post(
++        "/api/mobile/qr/checkin",
++        headers=recepcionista_headers,
++        json={"token": token, "canal": "APP_MOVIL", "dispositivo_id": "android-test"},
++    )
+     assert checkin_response.status_code == 200, checkin_response.text
+     assert checkin_response.json()["resultado"] == "VERDE"
+     assert checkin_response.json()["estado_cita"] == "LLEGO_LOBBY"
+ 
+     audit_response = client.get("/api/auditoria", headers=auth_headers)
+-    events = {item["evento"] for item in audit_response.json()}
++    audit_items = audit_response.json()
++    events = {item["evento"] for item in audit_items}
+     assert {"PACIENTE_CREADO", "CITA_CREADA", "QR_GENERADO", "QR_VALIDADO", "CHECKIN_LOBBY"}.issubset(events)
++    assert any(
++        item["evento"] == "CHECKIN_LOBBY"
++        and item["usuario_id"] == recepcionista_user["id"]
++        and item["canal"] == "APP_MOVIL"
++        and item["valor_despues"]["cita_id"] == cita["id"]
++        for item in audit_items
++    )
+diff --git a/access-manager/compose.yaml b/access-manager/compose.yaml
+index 03e93db..fa84f9e 100644
+--- a/access-manager/compose.yaml
++++ b/access-manager/compose.yaml
+@@ -36,7 +36,7 @@ services:
+       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+       JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
++      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
+       QR_SIGNING_SECRET: ${QR_SIGNING_SECRET:-change-me-qr-local-development-only}
+       QR_EXPIRATION_HOURS: ${QR_EXPIRATION_HOURS:-24}
+       CHECKIN_GREEN_BEFORE_MINUTES: ${CHECKIN_GREEN_BEFORE_MINUTES:-120}
+@@ -67,7 +67,7 @@ services:
+       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+       JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
++      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
+       QR_SIGNING_SECRET: ${QR_SIGNING_SECRET:-change-me-qr-local-development-only}
+       QR_EXPIRATION_HOURS: ${QR_EXPIRATION_HOURS:-24}
+       CHECKIN_GREEN_BEFORE_MINUTES: ${CHECKIN_GREEN_BEFORE_MINUTES:-120}

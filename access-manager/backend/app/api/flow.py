@@ -13,7 +13,7 @@ from app.core.security import require_role
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
-from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, SalaEspera
+from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, UsuarioRol
 from app.models.usuario import Usuario
 from app.schemas.flow import (
     CheckinRequest,
@@ -24,6 +24,7 @@ from app.schemas.flow import (
     CitaRead,
     CitaSearchResult,
     CitaUpdate,
+    MobileSessionResponse,
     PacienteCreate,
     PacienteRead,
     PacienteUpdate,
@@ -42,8 +43,11 @@ from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, n
 pacientes_router = APIRouter()
 citas_router = APIRouter()
 qr_router = APIRouter()
+mobile_router = APIRouter()
 
 OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
+MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
 
 
 def business_today() -> date:
@@ -70,6 +74,20 @@ def normalized_digits(value: str | None) -> str | None:
         return None
     digits = "".join(char for char in value if char.isdigit())
     return digits or None
+
+
+def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
+    return set(
+        db.execute(
+            select(Role.codigo)
+            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
+            .where(
+                UsuarioRol.usuario_id == usuario.id,
+                UsuarioRol.activo.is_(True),
+                Role.activo.is_(True),
+            )
+        ).scalars()
+    )
 
 
 def patient_full_name(paciente: Paciente | None) -> str | None:
@@ -811,6 +829,10 @@ def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_
 @citas_router.get("/{cita_id}/ticket", response_model=TicketResponse)
 def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    return ticket_response_for_cita(db, cita)
+
+
+def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
     _qr_token, token = get_active_qr_payload(db, cita)
     db.commit()
     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")
@@ -825,6 +847,167 @@ def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user:
         piso=piso_label(piso) or "",
         hora=cita.hora_cita.strftime("%H:%M"),
     )
+
+
+def authenticated_lobby_checkin(
+    cita: Cita,
+    payload: CheckinRequest,
+    request: Request,
+    db: Session,
+    current_user: Usuario,
+) -> CheckinResponse:
+    if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
+        return CheckinResponse(
+            resultado="ROJO",
+            mensaje=f"La cita está en estado {cita.estado}.",
+            cita_id=cita.id,
+            folio_turno=cita.folio_turno,
+            estado_cita=cita.estado,
+        )
+    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+    if resultado != "ROJO":
+        event = create_arrival_event(
+            db,
+            cita,
+            "CHECKIN_LOBBY",
+            payload.canal,
+            request,
+            payload.sala_id,
+            current_user.id,
+            payload.dispositivo_id,
+        )
+        record_audit_event(
+            db,
+            evento="CHECKIN_LOBBY",
+            entidad="eventos_llegada",
+            entidad_id=event.id,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+        )
+        db.commit()
+        db.refresh(cita)
+    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+
+
+@mobile_router.get("/session", response_model=MobileSessionResponse)
+def mobile_session(db: Session = Depends(get_db), current_user: Usuario = MobileSessionUser) -> MobileSessionResponse:
+    roles = active_role_codes(db, current_user)
+    return MobileSessionResponse(
+        usuario_id=current_user.id,
+        nombre=current_user.nombre,
+        email=current_user.email,
+        roles=sorted(roles),
+        can_checkin=bool(roles.intersection({"ADMIN_SISTEMA", "RECEPCIONISTA"})),
+        can_view_logs=bool(roles.intersection({"ADMIN_SISTEMA", "ADMIN_NEGOCIO"})),
+    )
+
+
+@mobile_router.get("/citas/buscar", response_model=list[CitaSearchResult])
+def mobile_buscar_citas(
+    paciente: str = Query(min_length=1),
+    celular: str | None = None,
+    fecha_nacimiento: date | None = None,
+    fecha: date | None = None,
+    db: Session = Depends(get_db),
+    _current_user: Usuario = MobileCheckinUser,
+) -> list[CitaSearchResult]:
+    if not normalized_digits(celular) and fecha_nacimiento is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Indique celular o fecha de nacimiento para buscar la cita.",
+        )
+    rows = db.execute(
+        query_citas(
+            db,
+            fecha or business_today(),
+            paciente=paciente,
+            celular=celular,
+            fecha_nacimiento=fecha_nacimiento,
+        ).limit(20)
+    ).scalars()
+    return [cita_search_item(db, row) for row in rows]
+
+
+@mobile_router.get("/citas/{cita_id}/ticket", response_model=TicketResponse)
+def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = MobileCheckinUser) -> TicketResponse:
+    cita = exists_or_404(db, Cita, cita_id, "Cita")
+    return ticket_response_for_cita(db, cita)
+
+
+@mobile_router.post("/citas/{cita_id}/checkin-lobby", response_model=CheckinResponse)
+def mobile_checkin_lobby_cita(
+    cita_id: UUID,
+    payload: CheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = MobileCheckinUser,
+) -> CheckinResponse:
+    cita = exists_or_404(db, Cita, cita_id, "Cita")
+    return authenticated_lobby_checkin(cita, payload, request, db, current_user)
+
+
+@mobile_router.post("/qr/checkin", response_model=CheckinResponse)
+def mobile_checkin_qr(
+    payload: QrCheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = MobileCheckinUser,
+) -> CheckinResponse:
+    result = validate_qr(db, payload.token)
+    if not result.valid or result.cita is None:
+        record_audit_event(
+            db,
+            evento="QR_VALIDADO",
+            entidad="qr_tokens",
+            entidad_id=result.qr_token.id if result.qr_token else None,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"valido": False, "resultado": result.status},
+        )
+        db.commit()
+        return CheckinResponse(resultado="ROJO", mensaje=result.message)
+
+    cita = result.cita
+    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+    if resultado != "ROJO":
+        event = create_arrival_event(
+            db,
+            cita,
+            "CHECKIN_LOBBY",
+            payload.canal,
+            request,
+            payload.sala_id,
+            current_user.id,
+            payload.dispositivo_id,
+        )
+        if result.qr_token is not None:
+            result.qr_token.estado = "USADO"
+        record_audit_event(
+            db,
+            evento="CHECKIN_LOBBY",
+            entidad="eventos_llegada",
+            entidad_id=event.id,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+        )
+    record_audit_event(
+        db,
+        evento="QR_VALIDADO",
+        entidad="qr_tokens",
+        entidad_id=result.qr_token.id if result.qr_token else None,
+        usuario_id=current_user.id,
+        canal=payload.canal,
+        ip_origen=client_ip(request),
+        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
+    )
+    db.commit()
+    db.refresh(cita)
+    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
 
 
 @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)

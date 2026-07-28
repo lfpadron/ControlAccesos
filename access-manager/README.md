@@ -70,6 +70,7 @@ Se crean, si no existen:
 
 - `admin1@example.com`
 - `admin2@example.com`
+- `recepcion-demo@example.com`
 
 También se crean roles base (`ADMIN_SISTEMA`, `ADMIN_NEGOCIO`, `RECEPCIONISTA`, `MEDICO`, `OPERADOR`, `GUARDIA_CONTINGENCIA`, `USUARIO_KIOSKO`), paciente demo, citas demo, pantalla demo y un QR activo. Usa la contraseña temporal definida por `SEED_ADMIN_PASSWORD` y cámbiala antes de cualquier despliegue real.
 
@@ -78,6 +79,7 @@ También se crean roles base (`ADMIN_SISTEMA`, `ADMIN_NEGOCIO`, `RECEPCIONISTA`,
 - Web administrativa: [http://localhost:8080](http://localhost:8080)
 - Kiosko: [http://localhost:8080/kiosk/](http://localhost:8080/kiosk/)
 - Mobile PWA: [http://localhost:8080/mobile/](http://localhost:8080/mobile/)
+- App Android: `mobile/build/app/outputs/flutter-apk/app-debug.apk`
 - Display demo: [http://localhost:8080/display/demo-lobby](http://localhost:8080/display/demo-lobby)
 - API health: [http://localhost:8080/api/health](http://localhost:8080/api/health)
 - API docs: [http://localhost:8080/api/docs](http://localhost:8080/api/docs)

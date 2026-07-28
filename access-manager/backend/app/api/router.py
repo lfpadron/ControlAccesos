@@ -12,6 +12,7 @@ api_router.include_router(complejos.router, prefix="/complejos", tags=["complejo
 api_router.include_router(flow.pacientes_router, prefix="/pacientes", tags=["pacientes"])
 api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
 api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
+api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
 api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
 api_router.include_router(kiosks.router, tags=["kiosks"])
 api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])

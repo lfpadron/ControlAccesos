@@ -644,11 +644,83 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     assert ticket["turno"] == cita["folio_turno"]
     assert ticket["qr_payload"]
 
-    checkin_response = client.post("/api/qr/checkin", json={"token": token, "canal": "KIOSKO"})
+    roles_response = client.get("/api/roles", headers=auth_headers)
+    assert roles_response.status_code == 200, roles_response.text
+    recepcionista_role = next(role for role in roles_response.json() if role["codigo"] == "RECEPCIONISTA")
+    recepcionista_user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "nombre": f"Recepcionista Mobile {suffix}",
+                "email": f"recepcion-mobile-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+    assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={
+                "usuario_id": recepcionista_user["id"],
+                "rol_id": recepcionista_role["id"],
+                "institucion_id": institucion["id"],
+                "complejo_id": complejo["id"],
+            },
+        )
+    )
+    recepcionista_login = client.post(
+        "/api/auth/login",
+        json={"email": recepcionista_user["email"], "password": "Temporal123!"},
+    )
+    assert recepcionista_login.status_code == 200, recepcionista_login.text
+    recepcionista_headers = {"Authorization": f"Bearer {recepcionista_login.json()['access_token']}"}
+
+    mobile_session = client.get("/api/mobile/session", headers=recepcionista_headers)
+    assert mobile_session.status_code == 200, mobile_session.text
+    assert mobile_session.json()["can_checkin"] is True
+    assert mobile_session.json()["can_view_logs"] is False
+
+    open_search = client.get("/api/mobile/citas/buscar", params={"paciente": f"Alias {suffix}", "celular": paciente["celular"]})
+    assert open_search.status_code == 401, open_search.text
+
+    incomplete_search = client.get("/api/mobile/citas/buscar", headers=recepcionista_headers, params={"paciente": f"Alias {suffix}"})
+    assert incomplete_search.status_code == 422, incomplete_search.text
+
+    mobile_search = client.get(
+        "/api/mobile/citas/buscar",
+        headers=recepcionista_headers,
+        params={
+            "paciente": f"Alias {suffix}",
+            "celular": paciente["celular"],
+            "fecha": appointment_at.date().isoformat(),
+        },
+    )
+    assert mobile_search.status_code == 200, mobile_search.text
+    assert any(item["id"] == cita["id"] for item in mobile_search.json())
+
+    mobile_ticket_response = client.get(f"/api/mobile/citas/{cita['id']}/ticket", headers=recepcionista_headers)
+    assert mobile_ticket_response.status_code == 200, mobile_ticket_response.text
+    assert mobile_ticket_response.json()["turno"] == cita["folio_turno"]
+
+    checkin_response = client.post(
+        "/api/mobile/qr/checkin",
+        headers=recepcionista_headers,
+        json={"token": token, "canal": "APP_MOVIL", "dispositivo_id": "android-test"},
+    )
     assert checkin_response.status_code == 200, checkin_response.text
     assert checkin_response.json()["resultado"] == "VERDE"
     assert checkin_response.json()["estado_cita"] == "LLEGO_LOBBY"
 
     audit_response = client.get("/api/auditoria", headers=auth_headers)
-    events = {item["evento"] for item in audit_response.json()}
+    audit_items = audit_response.json()
+    events = {item["evento"] for item in audit_items}
     assert {"PACIENTE_CREADO", "CITA_CREADA", "QR_GENERADO", "QR_VALIDADO", "CHECKIN_LOBBY"}.issubset(events)
+    assert any(
+        item["evento"] == "CHECKIN_LOBBY"
+        and item["usuario_id"] == recepcionista_user["id"]
+        and item["canal"] == "APP_MOVIL"
+        and item["valor_despues"]["cita_id"] == cita["id"]
+        for item in audit_items
+    )

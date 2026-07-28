@@ -247,6 +247,15 @@ class TicketResponse(BaseModel):
     hora: str
 
 
+class MobileSessionResponse(BaseModel):
+    usuario_id: UUID
+    nombre: str
+    email: str
+    roles: list[str]
+    can_checkin: bool
+    can_view_logs: bool
+
+
 class CitaActionResponse(BaseModel):
     id: UUID
     estado: str

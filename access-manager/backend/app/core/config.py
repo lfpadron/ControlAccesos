@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
     jwt_secret: str = Field(default="change-me-local-dev-only", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
-    access_token_expire_minutes: int = Field(default=480, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    access_token_expire_minutes: int = Field(default=720, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     qr_signing_secret: str | None = Field(default=None, alias="QR_SIGNING_SECRET")
     qr_expiration_hours: int = Field(default=24, alias="QR_EXPIRATION_HOURS")
     checkin_green_before_minutes: int = Field(default=120, alias="CHECKIN_GREEN_BEFORE_MINUTES")

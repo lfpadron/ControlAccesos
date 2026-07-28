@@ -235,6 +235,36 @@ def main() -> None:
             db.add(medico)
             db.flush()
 
+        recepcionista_user = db.execute(select(Usuario).where(Usuario.email == "recepcion-demo@example.com")).scalar_one_or_none()
+        if recepcionista_user is None:
+            recepcionista_user = Usuario(
+                nombre="Recepción Demo",
+                email="recepcion-demo@example.com",
+                password_hash=hash_password(settings.seed_admin_password),
+                estado="ACTIVO",
+            )
+            db.add(recepcionista_user)
+            db.flush()
+
+        recepcionista_role = roles["RECEPCIONISTA"]
+        recepcionista_role_assignment = db.execute(
+            select(UsuarioRol).where(
+                UsuarioRol.usuario_id == recepcionista_user.id,
+                UsuarioRol.rol_id == recepcionista_role.id,
+                UsuarioRol.institucion_id == institucion.id,
+                UsuarioRol.complejo_id == complejo.id,
+            )
+        ).scalar_one_or_none()
+        if recepcionista_role_assignment is None:
+            db.add(
+                UsuarioRol(
+                    usuario_id=recepcionista_user.id,
+                    rol_id=recepcionista_role.id,
+                    institucion_id=institucion.id,
+                    complejo_id=complejo.id,
+                )
+            )
+
         operador_user = db.execute(select(Usuario).where(Usuario.email == "operador-demo@example.com")).scalar_one_or_none()
         if operador_user is None:
             operador_user = Usuario(
