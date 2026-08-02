@@ -2,8 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client';
-import astrogatoLogo from './astrogato-logo.png';
-import clinicasLogo from './clinicas-alfa.png';
+import astrogatoLogo from './astrogato-logo-v02.png';
+import capitalHeaderLogo from './capital-logo-encabezado.png';
+import capitalMenuLogo from './capital-logo-menu.png';
 
 const router = useRouter();
 const route = useRoute();
@@ -73,7 +74,9 @@ watch(
     <RouterView v-if="fullscreen" />
     <footer class="app-footer">
       <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
-      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
+        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      </a>
       <span class="app-footer-clock">
         Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
       </span>
@@ -82,10 +85,10 @@ watch(
   <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <img class="brand-logo" :src="clinicasLogo" alt="Clínicas Alfa" />
+        <img class="brand-logo" :src="capitalMenuLogo" alt="Capital Medical Center" />
         <div>
           <strong>Control de acceso</strong>
-          <small>Clínicas Alfa</small>
+          <small>Capital Medical Center</small>
         </div>
       </div>
       <nav>
@@ -121,6 +124,7 @@ watch(
       <button v-if="getToken()" class="secondary" type="button" @click="logout">Cerrar sesión</button>
     </aside>
     <main class="content">
+      <img class="app-header-logo" :src="capitalHeaderLogo" alt="Capital Medical Center" />
       <div v-if="showUserBadge" class="user-badge-row">
         <RouterLink class="user-badge" to="/perfil">
           <span>Usuario</span>
@@ -132,7 +136,9 @@ watch(
     </main>
     <footer class="app-footer">
       <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
-      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
+        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+      </a>
       <span class="app-footer-clock">
         Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
       </span>

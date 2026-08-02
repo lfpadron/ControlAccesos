@@ -64,6 +64,17 @@ class MobileSession {
       canViewLogs: json['can_view_logs'] as bool? ?? false,
     );
   }
+
+  factory MobileSession.fromLegacyUser(Map<String, dynamic> json) {
+    return MobileSession(
+      userId: json['id'] as String? ?? '',
+      name: json['nombre'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      roles: const ['API_REAL'],
+      canCheckin: true,
+      canViewLogs: false,
+    );
+  }
 }
 
 class CitaSearchResult {

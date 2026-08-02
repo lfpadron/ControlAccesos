@@ -1,0 +1,388 @@
+diff --git a/access-manager/frontend/index.html b/access-manager/frontend/index.html
+index a53e968..95fc785 100644
+--- a/access-manager/frontend/index.html
++++ b/access-manager/frontend/index.html
+@@ -3,7 +3,7 @@
+   <head>
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <link rel="icon" type="image/png" href="/src/clinicas-alfa.png" />
++    <link rel="icon" type="image/png" href="/src/astrogato-favicon-v02.png" />
+     <title>Control de Acceso</title>
+   </head>
+   <body>
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 6d016ff..2cd8ed1 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -2,8 +2,9 @@
+ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+ import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client';
+-import astrogatoLogo from './astrogato-logo.png';
+-import clinicasLogo from './clinicas-alfa.png';
++import astrogatoLogo from './astrogato-logo-v02.png';
++import capitalHeaderLogo from './capital-logo-encabezado.png';
++import capitalMenuLogo from './capital-logo-menu.png';
+ 
+ const router = useRouter();
+ const route = useRoute();
+@@ -73,7 +74,9 @@ watch(
+     <RouterView v-if="fullscreen" />
+     <footer class="app-footer">
+       <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
+-      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
++      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
++        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
++      </a>
+       <span class="app-footer-clock">
+         Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
+       </span>
+@@ -82,10 +85,10 @@ watch(
+   <div v-else class="app-shell">
+     <aside class="sidebar">
+       <div class="brand">
+-        <img class="brand-logo" :src="clinicasLogo" alt="Clínicas Alfa" />
++        <img class="brand-logo" :src="capitalMenuLogo" alt="Capital Medical Center" />
+         <div>
+           <strong>Control de acceso</strong>
+-          <small>Clínicas Alfa</small>
++          <small>Capital Medical Center</small>
+         </div>
+       </div>
+       <nav>
+@@ -121,6 +124,7 @@ watch(
+       <button v-if="getToken()" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+     </aside>
+     <main class="content">
++      <img class="app-header-logo" :src="capitalHeaderLogo" alt="Capital Medical Center" />
+       <div v-if="showUserBadge" class="user-badge-row">
+         <RouterLink class="user-badge" to="/perfil">
+           <span>Usuario</span>
+@@ -132,7 +136,9 @@ watch(
+     </main>
+     <footer class="app-footer">
+       <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
+-      <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
++      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
++        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
++      </a>
+       <span class="app-footer-clock">
+         Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
+       </span>
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 1482d38..08df855 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1,5 +1,5 @@
+ :root {
+-  --app-footer-height: 2cm;
++  --app-footer-height: 1.5cm;
+   color-scheme: light;
+   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+   background: #f6f8fb;
+@@ -89,12 +89,11 @@ button:disabled {
+ }
+ 
+ .brand-logo {
+-  background: #ffffff;
+   border-radius: 6px;
+   display: block;
+-  height: 48px;
++  height: 64px;
+   object-fit: contain;
+-  width: 72px;
++  width: 86px;
+ }
+ 
+ .brand-mark {
+@@ -150,6 +149,15 @@ nav a:hover {
+   padding: 2rem;
+ }
+ 
++.app-header-logo {
++  display: block;
++  height: 46px;
++  justify-self: start;
++  max-width: min(360px, 100%);
++  object-fit: contain;
++  width: auto;
++}
++
+ .user-badge-row {
+   display: flex;
+   justify-content: flex-end;
+@@ -215,10 +223,14 @@ nav a:hover {
+   grid-column: auto;
+ }
+ 
++.app-footer-link {
++  display: inline-flex;
++  justify-self: center;
++}
++
+ .app-footer-logo {
+   display: block;
+-  height: min(1.45cm, 54px);
+-  justify-self: center;
++  height: min(1.05cm, 40px);
+   max-width: min(240px, 32vw);
+   object-fit: contain;
+   width: auto;
+@@ -829,7 +841,7 @@ pre {
+   }
+ 
+   .app-footer-logo {
+-    height: 1.1cm;
++    height: 0.82cm;
+     max-width: 34vw;
+   }
+ 
+diff --git a/access-manager/mobile/README.md b/access-manager/mobile/README.md
+index 5e200ad..d919165 100644
+--- a/access-manager/mobile/README.md
++++ b/access-manager/mobile/README.md
+@@ -11,16 +11,17 @@ App Flutter Android para registrar llegada de pacientes desde un celular, sin in
+ - Validación y check-in siempre contra el servidor.
+ - Ticket PDF mediante impresora virtual.
+ - Log local SQLite sin datos personales del paciente: token QR, folio de cita, fecha/hora y login de recepción.
++- Icono y pantalla de acceso con imagen de Clínicas Alfa.
+ 
+-## Servidor
++## Servidor real
+ 
+-La URL por defecto para emulador Android es:
++La URL por defecto de la app apunta a la API real:
+ 
+ ```bash
+-http://10.0.2.2:8080/api
++https://control-acceso-qr.com.mx/api
+ ```
+ 
+-Para un celular físico use la IP LAN del servidor:
++Para probar contra staging o un servidor local puede sobrescribirse al ejecutar:
+ 
+ ```bash
+ flutter run --dart-define=ACCESS_API_BASE_URL=http://192.168.1.50:8080/api
+@@ -28,6 +29,8 @@ flutter run --dart-define=ACCESS_API_BASE_URL=http://192.168.1.50:8080/api
+ 
+ También puede cambiarse desde la pantalla de login.
+ 
++La app intenta usar las rutas móviles autenticadas (`/mobile/*`). Si la API real todavía no las tiene desplegadas, cae al flujo operativo existente (`/auth/me`, `/citas/buscar`, `/qr/checkin`, `/citas/{id}/checkin-lobby` y `/citas/{id}/ticket`) para poder mostrar el flujo completo contra datos reales.
++
+ ## Build
+ 
+ ```bash
+diff --git a/access-manager/mobile/android/app/src/main/AndroidManifest.xml b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+index acdb2ef..7554f3a 100644
+--- a/access-manager/mobile/android/app/src/main/AndroidManifest.xml
++++ b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+@@ -3,10 +3,9 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+ 
+     <application
+-        android:label="Llegada pacientes"
++        android:label="Clínicas Alfa"
+         android:name="${applicationName}"
+-        android:icon="@mipmap/ic_launcher"
+-        android:usesCleartextTraffic="true">
++        android:icon="@mipmap/ic_launcher">
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+index db77bb4..8b537e2 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+index 17987b7..d523e1e 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+index 09d4391..a7c8023 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+index d5f1c8d..01b7c40 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+index 4d6372e..f14a988 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/lib/api_client.dart b/access-manager/mobile/lib/api_client.dart
+index c667f17..221b364 100644
+--- a/access-manager/mobile/lib/api_client.dart
++++ b/access-manager/mobile/lib/api_client.dart
+@@ -39,8 +39,14 @@ class ApiClient {
+   }
+ 
+   Future<MobileSession> mobileSession() async {
+-    final payload = await _request<Map<String, dynamic>>('GET', '/mobile/session');
+-    return MobileSession.fromJson(payload);
++    try {
++      final payload = await _request<Map<String, dynamic>>('GET', '/mobile/session');
++      return MobileSession.fromJson(payload);
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      final payload = await _request<Map<String, dynamic>>('GET', '/auth/me');
++      return MobileSession.fromLegacyUser(payload);
++    }
+   }
+ 
+   Future<List<CitaSearchResult>> searchCitas({
+@@ -48,48 +54,67 @@ class ApiClient {
+     String? celular,
+     DateTime? fechaNacimiento,
+   }) async {
+-    final payload = await _request<List<dynamic>>(
+-      'GET',
+-      '/mobile/citas/buscar',
+-      query: {
+-        'paciente': paciente.trim(),
+-        if ((celular ?? '').trim().isNotEmpty) 'celular': celular!.trim(),
+-        if (fechaNacimiento != null) 'fecha_nacimiento': _dateOnly(fechaNacimiento),
+-      },
+-    );
++    final query = {
++      'paciente': paciente.trim(),
++      if ((celular ?? '').trim().isNotEmpty) 'celular': celular!.trim(),
++      if (fechaNacimiento != null) 'fecha_nacimiento': _dateOnly(fechaNacimiento),
++    };
++    List<dynamic> payload;
++    try {
++      payload = await _request<List<dynamic>>('GET', '/mobile/citas/buscar', query: query);
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      payload = await _request<List<dynamic>>('GET', '/citas/buscar', query: query);
++    }
+     return payload.map((item) => CitaSearchResult.fromJson(item as Map<String, dynamic>)).toList();
+   }
+ 
+   Future<CheckinResponse> checkinQr(String qrToken, String deviceId) async {
+-    final payload = await _request<Map<String, dynamic>>(
+-      'POST',
+-      '/mobile/qr/checkin',
+-      body: {
+-        'token': qrToken,
+-        'canal': 'APP_MOVIL',
+-        'dispositivo_id': deviceId,
+-      },
+-    );
++    final body = {
++      'token': qrToken,
++      'canal': 'APP_MOVIL',
++      'dispositivo_id': deviceId,
++    };
++    Map<String, dynamic> payload;
++    try {
++      payload = await _request<Map<String, dynamic>>('POST', '/mobile/qr/checkin', body: body);
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      payload = await _request<Map<String, dynamic>>('POST', '/qr/checkin', body: body);
++    }
+     return CheckinResponse.fromJson(payload);
+   }
+ 
+   Future<CheckinResponse> checkinManual(String citaId, String deviceId) async {
+-    final payload = await _request<Map<String, dynamic>>(
+-      'POST',
+-      '/mobile/citas/$citaId/checkin-lobby',
+-      body: {
+-        'canal': 'APP_MOVIL',
+-        'dispositivo_id': deviceId,
+-      },
+-    );
++    final body = {
++      'canal': 'APP_MOVIL',
++      'dispositivo_id': deviceId,
++    };
++    Map<String, dynamic> payload;
++    try {
++      payload = await _request<Map<String, dynamic>>('POST', '/mobile/citas/$citaId/checkin-lobby', body: body);
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      payload = await _request<Map<String, dynamic>>('POST', '/citas/$citaId/checkin-lobby', body: body);
++    }
+     return CheckinResponse.fromJson(payload);
+   }
+ 
+   Future<TicketResponse> fetchTicket(String citaId) async {
+-    final payload = await _request<Map<String, dynamic>>('GET', '/mobile/citas/$citaId/ticket');
++    Map<String, dynamic> payload;
++    try {
++      payload = await _request<Map<String, dynamic>>('GET', '/mobile/citas/$citaId/ticket');
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      payload = await _request<Map<String, dynamic>>('GET', '/citas/$citaId/ticket');
++    }
+     return TicketResponse.fromJson(payload);
+   }
+ 
++  bool _isMissingMobileRoute(ApiException error) {
++    return error.statusCode == 404 && error.message == 'Not Found';
++  }
++
+   Future<T> _request<T>(
+     String method,
+     String path, {
+diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+index 90acfcc..a09574e 100644
+--- a/access-manager/mobile/lib/main.dart
++++ b/access-manager/mobile/lib/main.dart
+@@ -11,7 +11,7 @@ import 'ticket_pdf.dart';
+ 
+ const defaultApiBaseUrl = String.fromEnvironment(
+   'ACCESS_API_BASE_URL',
+-  defaultValue: 'http://10.0.2.2:8080/api',
++  defaultValue: 'https://control-acceso-qr.com.mx/api',
+ );
+ 
+ void main() {
+@@ -238,7 +238,14 @@ class _LoginScreenState extends State<LoginScreen> {
+               padding: const EdgeInsets.all(20),
+               shrinkWrap: true,
+               children: [
+-                Icon(Icons.fact_check_outlined, size: 56, color: Theme.of(context).colorScheme.primary),
++                ClipRRect(
++                  borderRadius: BorderRadius.circular(8),
++                  child: Image.asset(
++                    'assets/clinicas-alfa-logo.png',
++                    height: 92,
++                    fit: BoxFit.cover,
++                  ),
++                ),
+                 const SizedBox(height: 18),
+                 Text('Llegada de pacientes', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
+                 const SizedBox(height: 8),
+diff --git a/access-manager/mobile/lib/models.dart b/access-manager/mobile/lib/models.dart
+index 6e9ad55..b4aab3e 100644
+--- a/access-manager/mobile/lib/models.dart
++++ b/access-manager/mobile/lib/models.dart
+@@ -64,6 +64,17 @@ class MobileSession {
+       canViewLogs: json['can_view_logs'] as bool? ?? false,
+     );
+   }
++
++  factory MobileSession.fromLegacyUser(Map<String, dynamic> json) {
++    return MobileSession(
++      userId: json['id'] as String? ?? '',
++      name: json['nombre'] as String? ?? '',
++      email: json['email'] as String? ?? '',
++      roles: const ['API_REAL'],
++      canCheckin: true,
++      canViewLogs: false,
++    );
++  }
+ }
+ 
+ class CitaSearchResult {
+diff --git a/access-manager/mobile/pubspec.yaml b/access-manager/mobile/pubspec.yaml
+index 04a3e00..9214475 100644
+--- a/access-manager/mobile/pubspec.yaml
++++ b/access-manager/mobile/pubspec.yaml
+@@ -64,6 +64,9 @@ flutter:
+   # the material Icons class.
+   uses-material-design: true
+ 
++  assets:
++    - assets/clinicas-alfa-logo.png
++
+   # To add assets to your application, add an assets section, like this:
+   # assets:
+   #   - images/a_dot_burr.jpeg

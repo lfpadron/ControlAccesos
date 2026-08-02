@@ -39,8 +39,14 @@ class ApiClient {
   }
 
   Future<MobileSession> mobileSession() async {
-    final payload = await _request<Map<String, dynamic>>('GET', '/mobile/session');
-    return MobileSession.fromJson(payload);
+    try {
+      final payload = await _request<Map<String, dynamic>>('GET', '/mobile/session');
+      return MobileSession.fromJson(payload);
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      final payload = await _request<Map<String, dynamic>>('GET', '/auth/me');
+      return MobileSession.fromLegacyUser(payload);
+    }
   }
 
   Future<List<CitaSearchResult>> searchCitas({
@@ -48,46 +54,65 @@ class ApiClient {
     String? celular,
     DateTime? fechaNacimiento,
   }) async {
-    final payload = await _request<List<dynamic>>(
-      'GET',
-      '/mobile/citas/buscar',
-      query: {
-        'paciente': paciente.trim(),
-        if ((celular ?? '').trim().isNotEmpty) 'celular': celular!.trim(),
-        if (fechaNacimiento != null) 'fecha_nacimiento': _dateOnly(fechaNacimiento),
-      },
-    );
+    final query = {
+      'paciente': paciente.trim(),
+      if ((celular ?? '').trim().isNotEmpty) 'celular': celular!.trim(),
+      if (fechaNacimiento != null) 'fecha_nacimiento': _dateOnly(fechaNacimiento),
+    };
+    List<dynamic> payload;
+    try {
+      payload = await _request<List<dynamic>>('GET', '/mobile/citas/buscar', query: query);
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      payload = await _request<List<dynamic>>('GET', '/citas/buscar', query: query);
+    }
     return payload.map((item) => CitaSearchResult.fromJson(item as Map<String, dynamic>)).toList();
   }
 
   Future<CheckinResponse> checkinQr(String qrToken, String deviceId) async {
-    final payload = await _request<Map<String, dynamic>>(
-      'POST',
-      '/mobile/qr/checkin',
-      body: {
-        'token': qrToken,
-        'canal': 'APP_MOVIL',
-        'dispositivo_id': deviceId,
-      },
-    );
+    final body = {
+      'token': qrToken,
+      'canal': 'APP_MOVIL',
+      'dispositivo_id': deviceId,
+    };
+    Map<String, dynamic> payload;
+    try {
+      payload = await _request<Map<String, dynamic>>('POST', '/mobile/qr/checkin', body: body);
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      payload = await _request<Map<String, dynamic>>('POST', '/qr/checkin', body: body);
+    }
     return CheckinResponse.fromJson(payload);
   }
 
   Future<CheckinResponse> checkinManual(String citaId, String deviceId) async {
-    final payload = await _request<Map<String, dynamic>>(
-      'POST',
-      '/mobile/citas/$citaId/checkin-lobby',
-      body: {
-        'canal': 'APP_MOVIL',
-        'dispositivo_id': deviceId,
-      },
-    );
+    final body = {
+      'canal': 'APP_MOVIL',
+      'dispositivo_id': deviceId,
+    };
+    Map<String, dynamic> payload;
+    try {
+      payload = await _request<Map<String, dynamic>>('POST', '/mobile/citas/$citaId/checkin-lobby', body: body);
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      payload = await _request<Map<String, dynamic>>('POST', '/citas/$citaId/checkin-lobby', body: body);
+    }
     return CheckinResponse.fromJson(payload);
   }
 
   Future<TicketResponse> fetchTicket(String citaId) async {
-    final payload = await _request<Map<String, dynamic>>('GET', '/mobile/citas/$citaId/ticket');
+    Map<String, dynamic> payload;
+    try {
+      payload = await _request<Map<String, dynamic>>('GET', '/mobile/citas/$citaId/ticket');
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      payload = await _request<Map<String, dynamic>>('GET', '/citas/$citaId/ticket');
+    }
     return TicketResponse.fromJson(payload);
+  }
+
+  bool _isMissingMobileRoute(ApiException error) {
+    return error.statusCode == 404 && error.message == 'Not Found';
   }
 
   Future<T> _request<T>(

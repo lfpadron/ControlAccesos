@@ -11,22 +11,25 @@ App Flutter Android para registrar llegada de pacientes desde un celular, sin in
 - Validación y check-in siempre contra el servidor.
 - Ticket PDF mediante impresora virtual.
 - Log local SQLite sin datos personales del paciente: token QR, folio de cita, fecha/hora y login de recepción.
+- Icono y pantalla de acceso con imagen de Clínicas Alfa.
 
-## Servidor
+## Servidor real
 
-La URL por defecto para emulador Android es:
+La URL por defecto de la app apunta a la API real:
 
 ```bash
-http://10.0.2.2:8080/api
+https://control-acceso-qr.com.mx/api
 ```
 
-Para un celular físico use la IP LAN del servidor:
+Para probar contra staging o un servidor local puede sobrescribirse al ejecutar:
 
 ```bash
 flutter run --dart-define=ACCESS_API_BASE_URL=http://192.168.1.50:8080/api
 ```
 
 También puede cambiarse desde la pantalla de login.
+
+La app intenta usar las rutas móviles autenticadas (`/mobile/*`). Si la API real todavía no las tiene desplegadas, cae al flujo operativo existente (`/auth/me`, `/citas/buscar`, `/qr/checkin`, `/citas/{id}/checkin-lobby` y `/citas/{id}/ticket`) para poder mostrar el flujo completo contra datos reales.
 
 ## Build
 

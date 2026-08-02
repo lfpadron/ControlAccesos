@@ -11,7 +11,7 @@ import 'ticket_pdf.dart';
 
 const defaultApiBaseUrl = String.fromEnvironment(
   'ACCESS_API_BASE_URL',
-  defaultValue: 'http://10.0.2.2:8080/api',
+  defaultValue: 'https://control-acceso-qr.com.mx/api',
 );
 
 void main() {
@@ -238,7 +238,14 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.all(20),
               shrinkWrap: true,
               children: [
-                Icon(Icons.fact_check_outlined, size: 56, color: Theme.of(context).colorScheme.primary),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset(
+                    'assets/clinicas-alfa-logo.png',
+                    height: 92,
+                    fit: BoxFit.cover,
+                  ),
+                ),
                 const SizedBox(height: 18),
                 Text('Llegada de pacientes', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 8),
