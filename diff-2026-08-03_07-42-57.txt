@@ -1,0 +1,3 @@
+diff --git a/access-manager/frontend/src/astrogato-logo-v02.png b/access-manager/frontend/src/astrogato-logo-v02.png
+index 95aab93..9547c6d 100644
+Binary files a/access-manager/frontend/src/astrogato-logo-v02.png and b/access-manager/frontend/src/astrogato-logo-v02.png differ
