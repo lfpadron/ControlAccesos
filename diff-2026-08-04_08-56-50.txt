@@ -1,0 +1,40 @@
+diff --git a/access-manager/compose.yaml b/access-manager/compose.yaml
+index fa84f9e..aa8808d 100644
+--- a/access-manager/compose.yaml
++++ b/access-manager/compose.yaml
+@@ -30,8 +30,10 @@ services:
+     build:
+       context: ./backend
+       dockerfile: Containerfile
++    env_file:
++      - path: .env
++        required: false
+     environment:
+-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://access_manager:access_manager@postgres:5432/access_manager}
+       APP_VERSION: ${APP_VERSION:-0.2.0}
+       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+       JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+@@ -61,8 +63,10 @@ services:
+       context: ./backend
+       dockerfile: Containerfile
+     command: ["python", "-m", "app.workers.worker"]
++    env_file:
++      - path: .env
++        required: false
+     environment:
+-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://access_manager:access_manager@postgres:5432/access_manager}
+       APP_VERSION: ${APP_VERSION:-0.2.0}
+       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+       JWT_SECRET: ${JWT_SECRET:-change-me-local-dev-only}
+diff --git a/subir_droplet.ps1 b/subir_droplet.ps1
+index 7e9fd18..d84729c 100644
+--- a/subir_droplet.ps1
++++ b/subir_droplet.ps1
+@@ -206,6 +206,7 @@ try {
+             "docker compose build kiosk",
+             "docker compose build mobile-pwa",
+             "docker compose up -d postgres redis",
++            'docker compose run --rm backend python -c "from app.core.config import get_settings; from urllib.parse import urlsplit; p=urlsplit(get_settings().database_url); print(\"DATABASE_URL host:\", p.hostname)"',
+             "docker compose run --rm backend uv run alembic upgrade head",
+             "docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa",
+             "docker compose up -d --force-recreate caddy || { docker compose logs --tail=120 backend; docker compose ps; exit 1; }",
