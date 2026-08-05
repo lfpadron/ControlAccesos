@@ -15,6 +15,7 @@ class Usuario(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    correo_alterno: Mapped[str | None] = mapped_column(String(255))
     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
     telefono: Mapped[str | None] = mapped_column(String(64))
     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)

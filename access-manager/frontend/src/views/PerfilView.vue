@@ -1,51 +1,76 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { changeMyPassword, getCurrentUser, type Usuario } from '../api/client';
+import { computed, onMounted, ref } from 'vue';
+import { changeMyPassword, getCurrentUser, updateMyProfile, type Usuario } from '../api/client';
 
 const profile = ref<Usuario | null>(null);
+const correoAlterno = ref('');
 const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
-const error = ref('');
-const success = ref('');
-const loading = ref(false);
+const profileError = ref('');
+const profileSuccess = ref('');
+const passwordError = ref('');
+const passwordSuccess = ref('');
+const profileLoading = ref(false);
+const passwordLoading = ref(false);
 const passwordRequirementsMessage = 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.';
+const roleText = computed(() => profile.value?.roles?.join(', ') || 'Sin rol asignado');
 
 async function loadProfile() {
-  error.value = '';
+  profileError.value = '';
   try {
     profile.value = await getCurrentUser();
+    correoAlterno.value = profile.value.correo_alterno ?? '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
+    profileError.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
+  }
+}
+
+async function submitProfile() {
+  profileError.value = '';
+  profileSuccess.value = '';
+  profileLoading.value = true;
+  try {
+    profile.value = await updateMyProfile({
+      correo_alterno: correoAlterno.value.trim() || null,
+    });
+    correoAlterno.value = profile.value.correo_alterno ?? '';
+    profileSuccess.value = 'Perfil actualizado correctamente.';
+    window.dispatchEvent(new CustomEvent('current-user-updated'));
+  } catch (err) {
+    profileError.value = err instanceof Error ? err.message : 'No fue posible actualizar su perfil.';
+  } finally {
+    profileLoading.value = false;
   }
 }
 
 async function submitPasswordChange() {
-  error.value = '';
-  success.value = '';
+  passwordError.value = '';
+  passwordSuccess.value = '';
   if (newPassword.value.length < 8 || !/\d/.test(newPassword.value)) {
-    error.value = passwordRequirementsMessage;
+    passwordError.value = passwordRequirementsMessage;
     return;
   }
   if (newPassword.value !== confirmPassword.value) {
-    error.value = 'La confirmación de contraseña no coincide.';
+    passwordError.value = 'La confirmación de contraseña no coincide.';
     return;
   }
-  loading.value = true;
+  passwordLoading.value = true;
   try {
     profile.value = await changeMyPassword({
       current_password: currentPassword.value,
       new_password: newPassword.value,
     });
+    correoAlterno.value = profile.value.correo_alterno ?? '';
     currentPassword.value = '';
     newPassword.value = '';
     confirmPassword.value = '';
-    success.value = 'Contraseña actualizada correctamente.';
+    passwordSuccess.value = 'Contraseña actualizada correctamente.';
     window.dispatchEvent(new CustomEvent('current-user-updated'));
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible cambiar la contraseña.';
+    passwordError.value = err instanceof Error ? err.message : 'No fue posible cambiar la contraseña.';
   } finally {
-    loading.value = false;
+    passwordLoading.value = false;
   }
 }
 
@@ -62,9 +87,8 @@ onMounted(loadProfile);
     </header>
 
     <div class="grid profile-grid">
-      <section class="panel">
+      <form class="panel form compact-form" autocomplete="off" @submit.prevent="submitProfile">
         <h2>Datos de usuario</h2>
-        <p class="message">Para cambios en su perfil, favor de dirigirse con su administrador.</p>
         <dl v-if="profile" class="profile-list">
           <div>
             <dt>Nombre</dt>
@@ -75,6 +99,10 @@ onMounted(loadProfile);
             <dd>{{ profile.email }}</dd>
           </div>
           <div>
+            <dt>Rol</dt>
+            <dd>{{ roleText }}</dd>
+          </div>
+          <div>
             <dt>Teléfono</dt>
             <dd>{{ profile.telefono || 'Sin capturar' }}</dd>
           </div>
@@ -83,7 +111,14 @@ onMounted(loadProfile);
             <dd>{{ profile.estado }}</dd>
           </div>
         </dl>
-      </section>
+        <div class="form-row">
+          <label for="correo-alterno">Correo alterno</label>
+          <input id="correo-alterno" v-model="correoAlterno" type="email" autocomplete="email" maxlength="255" />
+        </div>
+        <p v-if="profileError" class="error">{{ profileError }}</p>
+        <p v-if="profileSuccess" class="success-message">{{ profileSuccess }}</p>
+        <button type="submit" :disabled="profileLoading">{{ profileLoading ? 'Guardando...' : 'Actualizar perfil' }}</button>
+      </form>
 
       <form class="panel form compact-form" autocomplete="off" @submit.prevent="submitPasswordChange">
         <h2>Cambiar contraseña</h2>
@@ -126,9 +161,9 @@ onMounted(loadProfile);
             required
           />
         </div>
-        <p v-if="error" class="error">{{ error }}</p>
-        <p v-if="success" class="success-message">{{ success }}</p>
-        <button type="submit" :disabled="loading">{{ loading ? 'Guardando...' : 'Actualizar contraseña' }}</button>
+        <p v-if="passwordError" class="error">{{ passwordError }}</p>
+        <p v-if="passwordSuccess" class="success-message">{{ passwordSuccess }}</p>
+        <button type="submit" :disabled="passwordLoading">{{ passwordLoading ? 'Guardando...' : 'Actualizar contraseña' }}</button>
       </form>
     </div>
   </section>

@@ -85,10 +85,12 @@ export type Usuario = {
   id: string;
   nombre: string;
   email: string;
+  correo_alterno?: string | null;
   telefono?: string | null;
   two_factor_enabled: boolean;
   force_password_change: boolean;
   estado: string;
+  roles?: string[];
   created_at: string;
   updated_at: string;
 };
@@ -518,6 +520,13 @@ export async function login(email: string, password: string) {
 
 export function getCurrentUser() {
   return apiFetch<Usuario>('/auth/me');
+}
+
+export function updateMyProfile(payload: { correo_alterno?: string | null }) {
+  return apiFetch<Usuario>('/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function changeMyPassword(payload: { current_password: string; new_password: string }) {

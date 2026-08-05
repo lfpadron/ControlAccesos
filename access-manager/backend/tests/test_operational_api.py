@@ -99,6 +99,24 @@ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str,
     me_response = client.get("/api/auth/me", headers=forced_headers)
     assert me_response.status_code == 200, me_response.text
     assert me_response.json()["force_password_change"] is True
+    assert "Administrador de negocio" in me_response.json()["roles"]
+
+    profile_response = client.patch(
+        "/api/auth/me",
+        headers=forced_headers,
+        json={"correo_alterno": f"ALTERNO-{suffix}@Example.COM"},
+    )
+    assert profile_response.status_code == 200, profile_response.text
+    assert profile_response.json()["correo_alterno"] == f"alterno-{suffix}@example.com"
+    assert "Administrador de negocio" in profile_response.json()["roles"]
+
+    clear_profile_response = client.patch(
+        "/api/auth/me",
+        headers=forced_headers,
+        json={"correo_alterno": ""},
+    )
+    assert clear_profile_response.status_code == 200, clear_profile_response.text
+    assert clear_profile_response.json()["correo_alterno"] is None
 
     blocked_response = client.get("/api/roles", headers=forced_headers)
     assert blocked_response.status_code == 403, blocked_response.text

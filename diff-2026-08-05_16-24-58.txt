@@ -1,0 +1,431 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index faa1778..3067d27 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -6,14 +6,47 @@ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+ from app.core.security import create_access_token, get_current_user, hash_password, verify_password
++from app.models.operational import Role, UsuarioRol
+ from app.models.usuario import Usuario
+ from app.schemas.auth import LoginRequest, PasswordChangeRequest, TokenResponse
+-from app.schemas.usuario import UsuarioRead
++from app.schemas.usuario import UsuarioProfileUpdate, UsuarioRead
+ from app.services.audit_service import record_audit_event
+ 
+ router = APIRouter()
+ 
+ 
++def normalize_profile_email(value: object) -> str | None:
++    if value is None:
++        return None
++    normalized = str(value).strip().lower()
++    return normalized or None
++
++
++def active_role_labels(db: Session, user: Usuario) -> list[str]:
++    rows = db.execute(
++        select(Role.nombre, Role.codigo)
++        .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++        .where(
++            UsuarioRol.usuario_id == user.id,
++            UsuarioRol.activo.is_(True),
++            Role.activo.is_(True),
++        )
++        .order_by(Role.nombre, Role.codigo)
++    ).all()
++    labels: list[str] = []
++    seen: set[str] = set()
++    for nombre, codigo in rows:
++        label = nombre or codigo
++        if label not in seen:
++            labels.append(label)
++            seen.add(label)
++    return labels
++
++
++def user_read(db: Session, user: Usuario) -> UsuarioRead:
++    return UsuarioRead.model_validate(user).model_copy(update={"roles": active_role_labels(db, user)})
++
++
+ @router.post("/login", response_model=TokenResponse)
+ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+     email = str(payload.email).strip().lower()
+@@ -32,8 +65,37 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
+ 
+ 
+ @router.get("/me", response_model=UsuarioRead)
+-def me(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+-    return current_user
++def me(
++    db: Session = Depends(get_db),
++    current_user: Usuario = Depends(get_current_user),
++) -> UsuarioRead:
++    return user_read(db, current_user)
++
++
++@router.patch("/me", response_model=UsuarioRead)
++def update_profile(
++    payload: UsuarioProfileUpdate,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = Depends(get_current_user),
++) -> UsuarioRead:
++    before = {"correo_alterno": current_user.correo_alterno}
++    current_user.correo_alterno = normalize_profile_email(payload.correo_alterno)
++    db.flush()
++    record_audit_event(
++        db,
++        evento="PERFIL_ACTUALIZADO",
++        entidad="usuarios",
++        entidad_id=current_user.id,
++        usuario_id=current_user.id,
++        canal="WEB",
++        ip_origen=request.client.host if request.client else None,
++        valor_antes=before,
++        valor_despues={"correo_alterno": current_user.correo_alterno},
++    )
++    db.commit()
++    db.refresh(current_user)
++    return user_read(db, current_user)
+ 
+ 
+ @router.post("/password", response_model=UsuarioRead)
+@@ -63,4 +125,4 @@ def change_password(
+     )
+     db.commit()
+     db.refresh(current_user)
+-    return current_user
++    return user_read(db, current_user)
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index f048d64..99d1764 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -389,6 +389,8 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
+ def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
+     password = data.pop("password")
+     data["email"] = str(data["email"]).strip().lower()
++    if data.get("correo_alterno") is not None:
++        data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
+     data["password_hash"] = hash_password(password)
+     return data
+ 
+@@ -397,6 +399,8 @@ def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
+     password = data.pop("password", None)
+     if data.get("email") is not None:
+         data["email"] = str(data["email"]).strip().lower()
++    if data.get("correo_alterno") is not None:
++        data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
+     if password:
+         data["password_hash"] = hash_password(password)
+     return data
+diff --git a/access-manager/backend/app/models/usuario.py b/access-manager/backend/app/models/usuario.py
+index 46827ab..74e510b 100644
+--- a/access-manager/backend/app/models/usuario.py
++++ b/access-manager/backend/app/models/usuario.py
+@@ -15,6 +15,7 @@ class Usuario(TimestampMixin, Base):
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
++    correo_alterno: Mapped[str | None] = mapped_column(String(255))
+     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+     telefono: Mapped[str | None] = mapped_column(String(64))
+     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index c4f81aa..c8d97ea 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -8,9 +8,17 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+ from app.schemas.password_policy import validate_user_password
+ 
+ 
++def normalize_optional_email(value: object) -> object:
++    if isinstance(value, str):
++        normalized = value.strip()
++        return normalized or None
++    return value
++
++
+ class UsuarioCreate(BaseModel):
+     nombre: str = Field(min_length=1, max_length=180)
+     email: EmailStr
++    correo_alterno: EmailStr | None = Field(default=None, max_length=255)
+     password: str = Field(min_length=8, max_length=128)
+     telefono: str | None = Field(default=None, max_length=64)
+     two_factor_enabled: bool = False
+@@ -22,10 +30,16 @@ class UsuarioCreate(BaseModel):
+     def validate_password(cls, value: str) -> str:
+         return validate_user_password(value)
+ 
++    @field_validator("correo_alterno", mode="before")
++    @classmethod
++    def normalize_correo_alterno(cls, value: object) -> object:
++        return normalize_optional_email(value)
++
+ 
+ class UsuarioUpdate(BaseModel):
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+     email: EmailStr | None = None
++    correo_alterno: EmailStr | None = Field(default=None, max_length=255)
+     password: str | None = Field(default=None, min_length=8, max_length=128)
+     telefono: str | None = Field(default=None, max_length=64)
+     two_factor_enabled: bool | None = None
+@@ -37,15 +51,31 @@ class UsuarioUpdate(BaseModel):
+     def validate_password(cls, value: str | None) -> str | None:
+         return validate_user_password(value)
+ 
++    @field_validator("correo_alterno", mode="before")
++    @classmethod
++    def normalize_correo_alterno(cls, value: object) -> object:
++        return normalize_optional_email(value)
++
++
++class UsuarioProfileUpdate(BaseModel):
++    correo_alterno: EmailStr | None = Field(default=None, max_length=255)
++
++    @field_validator("correo_alterno", mode="before")
++    @classmethod
++    def normalize_correo_alterno(cls, value: object) -> object:
++        return normalize_optional_email(value)
++
+ 
+ class UsuarioRead(BaseModel):
+     id: UUID
+     nombre: str
+     email: EmailStr
++    correo_alterno: EmailStr | None
+     telefono: str | None
+     two_factor_enabled: bool
+     force_password_change: bool
+     estado: str
++    roles: list[str] = Field(default_factory=list)
+     created_at: datetime
+     updated_at: datetime
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 9acb63e..7673766 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -99,6 +99,24 @@ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str,
+     me_response = client.get("/api/auth/me", headers=forced_headers)
+     assert me_response.status_code == 200, me_response.text
+     assert me_response.json()["force_password_change"] is True
++    assert "Administrador de negocio" in me_response.json()["roles"]
++
++    profile_response = client.patch(
++        "/api/auth/me",
++        headers=forced_headers,
++        json={"correo_alterno": f"ALTERNO-{suffix}@Example.COM"},
++    )
++    assert profile_response.status_code == 200, profile_response.text
++    assert profile_response.json()["correo_alterno"] == f"alterno-{suffix}@example.com"
++    assert "Administrador de negocio" in profile_response.json()["roles"]
++
++    clear_profile_response = client.patch(
++        "/api/auth/me",
++        headers=forced_headers,
++        json={"correo_alterno": ""},
++    )
++    assert clear_profile_response.status_code == 200, clear_profile_response.text
++    assert clear_profile_response.json()["correo_alterno"] is None
+ 
+     blocked_response = client.get("/api/roles", headers=forced_headers)
+     assert blocked_response.status_code == 403, blocked_response.text
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 68bfbf7..51a05ef 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -85,10 +85,12 @@ export type Usuario = {
+   id: string;
+   nombre: string;
+   email: string;
++  correo_alterno?: string | null;
+   telefono?: string | null;
+   two_factor_enabled: boolean;
+   force_password_change: boolean;
+   estado: string;
++  roles?: string[];
+   created_at: string;
+   updated_at: string;
+ };
+@@ -520,6 +522,13 @@ export function getCurrentUser() {
+   return apiFetch<Usuario>('/auth/me');
+ }
+ 
++export function updateMyProfile(payload: { correo_alterno?: string | null }) {
++  return apiFetch<Usuario>('/auth/me', {
++    method: 'PATCH',
++    body: JSON.stringify(payload),
++  });
++}
++
+ export function changeMyPassword(payload: { current_password: string; new_password: string }) {
+   return apiFetch<Usuario>('/auth/password', {
+     method: 'POST',
+diff --git a/access-manager/frontend/src/views/InstitucionesView.vue b/access-manager/frontend/src/views/InstitucionesView.vue
+index c589da4..807f997 100644
+--- a/access-manager/frontend/src/views/InstitucionesView.vue
++++ b/access-manager/frontend/src/views/InstitucionesView.vue
+@@ -136,6 +136,7 @@ onMounted(() => loadData());
+             <thead>
+               <tr>
+                 <th>Nombre</th>
++                <th>Razón social</th>
+                 <th>Estado</th>
+               </tr>
+             </thead>
+@@ -148,6 +149,7 @@ onMounted(() => loadData());
+                 @click="setForm(item)"
+               >
+                 <td>{{ item.nombre }}</td>
++                <td>{{ item.razon_social || 'Sin capturar' }}</td>
+                 <td><span class="status" :class="item.activo ? 'ok' : 'muted'">{{ item.activo ? 'Activa' : 'Inactiva' }}</span></td>
+               </tr>
+             </tbody>
+diff --git a/access-manager/frontend/src/views/PerfilView.vue b/access-manager/frontend/src/views/PerfilView.vue
+index 215bdf2..dbfdbff 100644
+--- a/access-manager/frontend/src/views/PerfilView.vue
++++ b/access-manager/frontend/src/views/PerfilView.vue
+@@ -1,51 +1,76 @@
+ <script setup lang="ts">
+-import { onMounted, ref } from 'vue';
+-import { changeMyPassword, getCurrentUser, type Usuario } from '../api/client';
++import { computed, onMounted, ref } from 'vue';
++import { changeMyPassword, getCurrentUser, updateMyProfile, type Usuario } from '../api/client';
+ 
+ const profile = ref<Usuario | null>(null);
++const correoAlterno = ref('');
+ const currentPassword = ref('');
+ const newPassword = ref('');
+ const confirmPassword = ref('');
+-const error = ref('');
+-const success = ref('');
+-const loading = ref(false);
++const profileError = ref('');
++const profileSuccess = ref('');
++const passwordError = ref('');
++const passwordSuccess = ref('');
++const profileLoading = ref(false);
++const passwordLoading = ref(false);
+ const passwordRequirementsMessage = 'La contraseña debe tener al menos 8 caracteres y al menos 1 número.';
++const roleText = computed(() => profile.value?.roles?.join(', ') || 'Sin rol asignado');
+ 
+ async function loadProfile() {
+-  error.value = '';
++  profileError.value = '';
+   try {
+     profile.value = await getCurrentUser();
++    correoAlterno.value = profile.value.correo_alterno ?? '';
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
++    profileError.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
++  }
++}
++
++async function submitProfile() {
++  profileError.value = '';
++  profileSuccess.value = '';
++  profileLoading.value = true;
++  try {
++    profile.value = await updateMyProfile({
++      correo_alterno: correoAlterno.value.trim() || null,
++    });
++    correoAlterno.value = profile.value.correo_alterno ?? '';
++    profileSuccess.value = 'Perfil actualizado correctamente.';
++    window.dispatchEvent(new CustomEvent('current-user-updated'));
++  } catch (err) {
++    profileError.value = err instanceof Error ? err.message : 'No fue posible actualizar su perfil.';
++  } finally {
++    profileLoading.value = false;
+   }
+ }
+ 
+ async function submitPasswordChange() {
+-  error.value = '';
+-  success.value = '';
++  passwordError.value = '';
++  passwordSuccess.value = '';
+   if (newPassword.value.length < 8 || !/\d/.test(newPassword.value)) {
+-    error.value = passwordRequirementsMessage;
++    passwordError.value = passwordRequirementsMessage;
+     return;
+   }
+   if (newPassword.value !== confirmPassword.value) {
+-    error.value = 'La confirmación de contraseña no coincide.';
++    passwordError.value = 'La confirmación de contraseña no coincide.';
+     return;
+   }
+-  loading.value = true;
++  passwordLoading.value = true;
+   try {
+     profile.value = await changeMyPassword({
+       current_password: currentPassword.value,
+       new_password: newPassword.value,
+     });
++    correoAlterno.value = profile.value.correo_alterno ?? '';
+     currentPassword.value = '';
+     newPassword.value = '';
+     confirmPassword.value = '';
+-    success.value = 'Contraseña actualizada correctamente.';
++    passwordSuccess.value = 'Contraseña actualizada correctamente.';
+     window.dispatchEvent(new CustomEvent('current-user-updated'));
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible cambiar la contraseña.';
++    passwordError.value = err instanceof Error ? err.message : 'No fue posible cambiar la contraseña.';
+   } finally {
+-    loading.value = false;
++    passwordLoading.value = false;
+   }
+ }
+ 
+@@ -62,9 +87,8 @@ onMounted(loadProfile);
+     </header>
+ 
+     <div class="grid profile-grid">
+-      <section class="panel">
++      <form class="panel form compact-form" autocomplete="off" @submit.prevent="submitProfile">
+         <h2>Datos de usuario</h2>
+-        <p class="message">Para cambios en su perfil, favor de dirigirse con su administrador.</p>
+         <dl v-if="profile" class="profile-list">
+           <div>
+             <dt>Nombre</dt>
+@@ -74,6 +98,10 @@ onMounted(loadProfile);
+             <dt>Correo</dt>
+             <dd>{{ profile.email }}</dd>
+           </div>
++          <div>
++            <dt>Rol</dt>
++            <dd>{{ roleText }}</dd>
++          </div>
+           <div>
+             <dt>Teléfono</dt>
+             <dd>{{ profile.telefono || 'Sin capturar' }}</dd>
+@@ -83,7 +111,14 @@ onMounted(loadProfile);
+             <dd>{{ profile.estado }}</dd>
+           </div>
+         </dl>
+-      </section>
++        <div class="form-row">
++          <label for="correo-alterno">Correo alterno</label>
++          <input id="correo-alterno" v-model="correoAlterno" type="email" autocomplete="email" maxlength="255" />
++        </div>
++        <p v-if="profileError" class="error">{{ profileError }}</p>
++        <p v-if="profileSuccess" class="success-message">{{ profileSuccess }}</p>
++        <button type="submit" :disabled="profileLoading">{{ profileLoading ? 'Guardando...' : 'Actualizar perfil' }}</button>
++      </form>
+ 
+       <form class="panel form compact-form" autocomplete="off" @submit.prevent="submitPasswordChange">
+         <h2>Cambiar contraseña</h2>
+@@ -126,9 +161,9 @@ onMounted(loadProfile);
+             required
+           />
+         </div>
+-        <p v-if="error" class="error">{{ error }}</p>
+-        <p v-if="success" class="success-message">{{ success }}</p>
+-        <button type="submit" :disabled="loading">{{ loading ? 'Guardando...' : 'Actualizar contraseña' }}</button>
++        <p v-if="passwordError" class="error">{{ passwordError }}</p>
++        <p v-if="passwordSuccess" class="success-message">{{ passwordSuccess }}</p>
++        <button type="submit" :disabled="passwordLoading">{{ passwordLoading ? 'Guardando...' : 'Actualizar contraseña' }}</button>
+       </form>
+     </div>
+   </section>

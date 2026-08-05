@@ -389,6 +389,8 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
 def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password")
     data["email"] = str(data["email"]).strip().lower()
+    if data.get("correo_alterno") is not None:
+        data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
     data["password_hash"] = hash_password(password)
     return data
 
@@ -397,6 +399,8 @@ def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password", None)
     if data.get("email") is not None:
         data["email"] = str(data["email"]).strip().lower()
+    if data.get("correo_alterno") is not None:
+        data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
     if password:
         data["password_hash"] = hash_password(password)
     return data

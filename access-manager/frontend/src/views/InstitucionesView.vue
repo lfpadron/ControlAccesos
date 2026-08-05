@@ -136,6 +136,7 @@ onMounted(() => loadData());
             <thead>
               <tr>
                 <th>Nombre</th>
+                <th>Razón social</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -148,6 +149,7 @@ onMounted(() => loadData());
                 @click="setForm(item)"
               >
                 <td>{{ item.nombre }}</td>
+                <td>{{ item.razon_social || 'Sin capturar' }}</td>
                 <td><span class="status" :class="item.activo ? 'ok' : 'muted'">{{ item.activo ? 'Activa' : 'Inactiva' }}</span></td>
               </tr>
             </tbody>
