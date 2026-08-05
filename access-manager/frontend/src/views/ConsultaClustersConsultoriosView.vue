@@ -144,7 +144,7 @@ onMounted(loadData);
           </select>
         </div>
         <div class="form-row">
-          <label for="consulta-complejo">Complejo</label>
+          <label for="consulta-complejo">Campus</label>
           <select id="consulta-complejo" v-model="filters.complejo_id" :disabled="!filters.institucion_id" @change="syncComplex(); consultar()">
             <option v-for="item in scopedComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>

@@ -370,7 +370,7 @@ async function submit() {
     syncScopedInstitution();
     syncScopedComplex();
     if (!selectedInstitutionId.value || !form.complejo_id) {
-      error.value = 'Seleccione institución y complejo.';
+      error.value = 'Seleccione institución y campus.';
       loading.value = false;
       return;
     }

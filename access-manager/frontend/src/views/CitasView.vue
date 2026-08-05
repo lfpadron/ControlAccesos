@@ -288,7 +288,7 @@ onMounted(load);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="complejo">Complejo</label>
+          <label for="complejo">Campus</label>
           <input
             id="complejo"
             v-model="complejoSearch"

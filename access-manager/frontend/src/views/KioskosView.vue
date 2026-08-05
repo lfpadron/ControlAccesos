@@ -317,7 +317,7 @@ async function loadData() {
     torres.value = torresData;
     pisos.value = pisosData;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones, complejos y pisos.';
+    error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones, campus y pisos.';
   }
 
   try {
@@ -484,7 +484,7 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="punto-complejo">Complejo</label>
+          <label for="punto-complejo">Campus</label>
           <input id="punto-complejo" v-model="puntoSearch.complejo" list="punto-complejos" required :disabled="!puntoForm.institucion_id" @input="syncPuntoComplex" @change="syncPuntoComplex" />
           <datalist id="punto-complejos">
             <option v-for="item in puntoComplejos" :key="item.id" :value="item.nombre" />
@@ -529,7 +529,7 @@ onMounted(loadData);
             <thead>
               <tr>
                 <th>Nombre</th>
-                <th>Complejo</th>
+                <th>Campus</th>
                 <th>Piso</th>
                 <th>Estado</th>
                 <th>Acciones</th>
@@ -566,7 +566,7 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="kiosko-complejo">Complejo</label>
+          <label for="kiosko-complejo">Campus</label>
           <input id="kiosko-complejo" v-model="kioskoSearch.complejo" list="kiosko-complejos" required :disabled="!kioskoForm.institucion_id" @input="syncKioskoComplex" @change="syncKioskoComplex" />
           <datalist id="kiosko-complejos">
             <option v-for="item in kioskoComplejos" :key="item.id" :value="item.nombre" />

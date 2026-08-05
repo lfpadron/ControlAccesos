@@ -97,7 +97,7 @@ watch(
         <RouterLink to="/perfil">Perfil</RouterLink>
         <span class="nav-section">Instituciones</span>
         <RouterLink to="/instituciones">Instituciones</RouterLink>
-        <RouterLink to="/complejos">Complejos</RouterLink>
+        <RouterLink to="/complejos">Campus</RouterLink>
         <RouterLink to="/torres">Torres</RouterLink>
         <RouterLink to="/pisos">Pisos</RouterLink>
         <RouterLink to="/salas-espera">Salas de espera</RouterLink>

@@ -440,7 +440,7 @@ onMounted(loadData);
     <header class="page-header">
       <div>
         <h1>Pantallas de turnos</h1>
-        <p>Alta, edición y visualización de dispositivos por institución, complejo, piso y clúster.</p>
+        <p>Alta, edición y visualización de dispositivos por institución, campus, piso y clúster.</p>
       </div>
       <button class="secondary" type="button" @click="loadData">Actualizar</button>
     </header>
@@ -464,7 +464,7 @@ onMounted(loadData);
         </div>
 
         <div class="form-row">
-          <label for="complejo-pantalla">Complejo</label>
+          <label for="complejo-pantalla">Campus</label>
           <input
             id="complejo-pantalla"
             v-model="complejoSearch"

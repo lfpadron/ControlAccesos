@@ -52,7 +52,7 @@ async function loadData() {
       institucionFiltradaId.value = institucionesData[0]?.id ?? '';
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible cargar complejos.';
+    error.value = err instanceof Error ? err.message : 'No fue posible cargar campus.';
   }
 }
 
@@ -85,15 +85,15 @@ async function submit() {
     };
     if (selected.value) {
       await updateComplejo(selected.value.id, data);
-      message.value = 'Complejo actualizado.';
+      message.value = 'Campus actualizado.';
     } else {
       await createComplejo(data);
-      message.value = 'Complejo creado.';
+      message.value = 'Campus creado.';
     }
     await loadData();
     setForm(null);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible guardar el complejo.';
+    error.value = err instanceof Error ? err.message : 'No fue posible guardar el campus.';
   } finally {
     loading.value = false;
   }
@@ -106,10 +106,10 @@ async function setActive(item: Complejo, active: boolean) {
   try {
     if (active) {
       await activateComplejo(item.id);
-      message.value = 'Complejo activado.';
+      message.value = 'Campus activado.';
     } else {
       await deactivateComplejo(item.id);
-      message.value = 'Complejo desactivado.';
+      message.value = 'Campus desactivado.';
     }
     await loadData();
     if (selected.value?.id === item.id) setForm(null);
@@ -133,7 +133,7 @@ onMounted(loadData);
   <section class="page">
     <header class="page-header">
       <div>
-        <h1>Complejos</h1>
+        <h1>Campus</h1>
         <p>Torres, edificios o sedes asociadas a una institución.</p>
       </div>
     </header>
@@ -152,7 +152,7 @@ onMounted(loadData);
 
     <div class="grid">
       <form class="panel form compact-form" @submit.prevent="submit">
-        <h2>{{ selected ? 'Editar complejo' : 'Crear complejo' }}</h2>
+        <h2>{{ selected ? 'Editar campus' : 'Crear campus' }}</h2>
         <div class="form-row">
           <label for="institucion">Institución</label>
           <input id="institucion" :value="selectedInstitutionName" readonly required />
@@ -233,7 +233,7 @@ onMounted(loadData);
             </tr>
           </tbody>
         </table>
-        <p v-if="complejosFiltrados.length === 0" class="message">No hay complejos para mostrar.</p>
+        <p v-if="complejosFiltrados.length === 0" class="message">No hay campus para mostrar.</p>
       </section>
     </div>
   </section>

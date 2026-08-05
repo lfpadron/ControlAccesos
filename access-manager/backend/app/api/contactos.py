@@ -35,7 +35,7 @@ def validate_complexes(db: Session, complejo_ids: list[UUID]) -> None:
     found = set(db.execute(select(Complejo.id).where(Complejo.id.in_(complejo_ids))).scalars())
     missing = [str(item_id) for item_id in complejo_ids if item_id not in found]
     if missing:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Complejos no encontrados: {', '.join(missing)}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Campus no encontrados: {', '.join(missing)}")
 
 
 def complex_ids_for(db: Session, contacto_id: UUID) -> list[UUID]:

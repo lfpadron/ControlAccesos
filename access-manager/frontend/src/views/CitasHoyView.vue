@@ -358,7 +358,7 @@ onMounted(async () => {
           </datalist>
         </div>
         <div class="form-row">
-          <label for="filtro-complejo">Complejo</label>
+          <label for="filtro-complejo">Campus</label>
           <input id="filtro-complejo" v-model="complejoSearch" list="filtro-complejos" @input="syncComplex" @change="syncComplex" />
           <datalist id="filtro-complejos">
             <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />

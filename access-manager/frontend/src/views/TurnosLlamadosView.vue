@@ -198,9 +198,9 @@ onMounted(async () => {
           </select>
         </div>
         <div class="form-row">
-          <label for="complejo-turnos">Complejo</label>
+          <label for="complejo-turnos">Campus</label>
           <select id="complejo-turnos" v-model="complejoId" @change="onComplejoChange">
-            <option value="">Selecciona un complejo</option>
+            <option value="">Selecciona un campus</option>
             <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>

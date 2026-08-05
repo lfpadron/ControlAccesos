@@ -31,7 +31,7 @@ async function submit() {
       <div class="page-header">
         <div>
           <h1>Iniciar sesión</h1>
-          <p>Acceso administrativo para torres y complejos.</p>
+          <p>Acceso administrativo para torres y campus.</p>
         </div>
       </div>
       <form class="form" @submit.prevent="submit">

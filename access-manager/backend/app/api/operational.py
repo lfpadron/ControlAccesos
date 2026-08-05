@@ -168,9 +168,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
     if institucion_id is not None:
         exists_or_404(db, Institucion, institucion_id, "Institución")
     if complejo_id is not None:
-        complejo = exists_or_404(db, Complejo, complejo_id, "Complejo")
+        complejo = exists_or_404(db, Complejo, complejo_id, "Campus")
         if institucion_id is not None and complejo.institucion_id != institucion_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El complejo no pertenece a la institución indicada.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El campus no pertenece a la institución indicada.")
 
 
 def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
@@ -182,7 +182,7 @@ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | N
 
 def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     if data.get("complejo_id") is not None:
-        exists_or_404(db, Complejo, data["complejo_id"], "Complejo")
+        exists_or_404(db, Complejo, data["complejo_id"], "Campus")
     if item is None:
         return
     current_floor_count = floor_count_for_torre(db, item.id)
@@ -202,12 +202,12 @@ def validate_piso(db: Session, data: dict[str, Any], item: object | None = None)
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     torre_id = data.get("torre_id", getattr(item, "torre_id", None))
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if torre_id is None:
         return
     torre = exists_or_404(db, Torre, torre_id, "Torre")
     if complejo_id is not None and torre.complejo_id != complejo_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al complejo indicado.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
     if item is None or item.torre_id != torre.id:
         existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
         if existing_count >= torre.numero_pisos:
@@ -221,22 +221,22 @@ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
         piso = exists_or_404(db, Piso, piso_id, "Piso")
         if complejo_id is not None and piso.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
 
 
 def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
         piso = exists_or_404(db, Piso, piso_id, "Piso")
         if complejo_id is not None and piso.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
 
 
 def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
@@ -257,7 +257,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
         if cluster.complejo_id != complejo_id or cluster.piso_id != piso_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Los clústers deben pertenecer al mismo complejo y piso del consultorio.",
+                detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
             )
     if (
         db.execute(
@@ -343,7 +343,7 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None 
     if item is not None:
         query = query.where(Consultorio.id != item.id)
     if db.execute(query).scalar_one_or_none() is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de consultorio ya existe en este complejo.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de consultorio ya existe en este campus.")
 
 
 def validate_medico(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
@@ -379,11 +379,11 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
     if medico_id is not None:
         exists_or_404(db, Medico, medico_id, "Médico")
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if consultorio_id is not None:
         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
         if complejo_id is not None and consultorio.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
 
 
 def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:

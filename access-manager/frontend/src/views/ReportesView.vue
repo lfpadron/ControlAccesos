@@ -24,7 +24,7 @@ type ReportRow = Record<string, string | boolean | null>;
 
 const levelOptions: Array<{ value: Level; label: string }> = [
   { value: 'instituciones', label: 'Instituciones' },
-  { value: 'complejos', label: 'Complejos' },
+  { value: 'complejos', label: 'Campus' },
   { value: 'pisos', label: 'Pisos' },
   { value: 'consultorios', label: 'Consultorios' },
   { value: 'salas', label: 'Salas de espera' },
@@ -137,7 +137,7 @@ const rows = computed<ReportRow[]>(() => {
     return filteredComplejos.value
       .filter((item) => passesActive(item.activo))
       .map((item) => ({
-        tipo: 'Complejo',
+        tipo: 'Campus',
         institucion: institucionName(item.institucion_id),
         complejo: item.nombre,
         piso: '',
@@ -207,7 +207,7 @@ const rows = computed<ReportRow[]>(() => {
 const columns = [
   { key: 'tipo', label: 'Tipo' },
   { key: 'institucion', label: 'Institución' },
-  { key: 'complejo', label: 'Complejo' },
+  { key: 'complejo', label: 'Campus' },
   { key: 'piso', label: 'Piso' },
   { key: 'nombre', label: 'Nombre' },
   { key: 'estado', label: 'Estado' },
@@ -262,7 +262,7 @@ onMounted(loadData);
     <header class="page-header">
       <div>
         <h1>Reportes</h1>
-        <p>Inventario jerárquico por institución, complejo, piso y áreas operativas.</p>
+        <p>Inventario jerárquico por institución, campus, piso y áreas operativas.</p>
       </div>
       <button class="secondary" type="button" @click="loadData">Actualizar</button>
     </header>
@@ -290,7 +290,7 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="reporte-complejo">Complejo</label>
+          <label for="reporte-complejo">Campus</label>
           <input
             id="reporte-complejo"
             v-model="complejoSearch"

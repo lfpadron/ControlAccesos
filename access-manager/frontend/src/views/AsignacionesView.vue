@@ -324,7 +324,7 @@ onMounted(loadData);
           </select>
         </div>
         <div class="form-row">
-          <label for="complejo">Complejo</label>
+          <label for="complejo">Campus</label>
           <select id="complejo" v-model="operadorForm.complejo_id" required>
             <option v-for="item in complejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
@@ -417,7 +417,7 @@ onMounted(loadData);
           <thead>
             <tr>
               <th>Operador</th>
-              <th>Complejo</th>
+              <th>Campus</th>
               <th>Médico</th>
               <th>Consultorio</th>
               <th>Prioridad</th>

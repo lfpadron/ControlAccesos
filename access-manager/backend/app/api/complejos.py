@@ -25,7 +25,7 @@ def client_ip(request: Request) -> str | None:
 def exists_or_404(db: Session, item_id: UUID) -> Complejo:
     item = db.get(Complejo, item_id)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complejo no encontrado.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campus no encontrado.")
     return item
 
 

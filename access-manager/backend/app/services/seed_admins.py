@@ -36,8 +36,8 @@ from app.services.qr_service import generate_qr
 ADMIN_EMAILS = ("admin1@example.com", "admin2@example.com")
 ROLE_SEEDS = (
     ("ADMIN_SISTEMA", "Administrador de sistema", "Administración global de la plataforma."),
-    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o complejo."),
-    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por complejo."),
+    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o campus."),
+    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por campus."),
     ("MEDICO", "Médico", "Acceso de médico a sus datos operativos."),
     ("OPERADOR", "Operador", "Operación de flujos asignados."),
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
@@ -106,7 +106,7 @@ def main() -> None:
             complejo = Complejo(
                 institucion_id=institucion.id,
                 nombre="Torre Demo",
-                descripcion="Complejo demo para desarrollo local.",
+                descripcion="Campus demo para desarrollo local.",
                 zona_horaria="America/Mexico_City",
             )
             db.add(complejo)

@@ -200,7 +200,7 @@ const columns = [
   { key: 'roles', label: 'Roles' },
   { key: 'estado', label: 'Estado' },
   { key: 'instituciones', label: 'Instituciones' },
-  { key: 'complejos', label: 'Complejos' },
+  { key: 'complejos', label: 'Campus' },
   { key: 'pisos', label: 'Pisos' },
 ];
 
@@ -303,7 +303,7 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="usuarios-complejo">Complejo</label>
+          <label for="usuarios-complejo">Campus</label>
           <input id="usuarios-complejo" v-model="complejoSearch" list="usuarios-complejos" @input="syncComplex" @change="syncComplex" />
           <datalist id="usuarios-complejos">
             <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />

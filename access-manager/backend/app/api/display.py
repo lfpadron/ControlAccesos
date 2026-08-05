@@ -110,7 +110,7 @@ def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Clústers no encontrados: {', '.join(missing)}")
     for cluster in clusters:
         if complejo_id is not None and cluster.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al campus indicado.")
         if piso_id is not None and cluster.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al piso indicado.")
 
@@ -198,15 +198,15 @@ def validate_screen_scope(db: Session, data: dict, item: PantallaTurnos | None =
     codigo_dispositivo = data.get("codigo_dispositivo")
 
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
         piso = exists_or_404(db, Piso, piso_id, "Piso")
         if complejo_id is not None and piso.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
     if consultorio_id is not None:
         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
         if complejo_id is not None and consultorio.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
         if piso_id is not None and consultorio.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
     if cluster_ids is not None:

@@ -15,7 +15,7 @@ import {
 
 const metrics = ref([
   { label: 'Instituciones', value: '...' },
-  { label: 'Complejos', value: '...' },
+  { label: 'Campus', value: '...' },
   { label: 'Usuarios', value: '...' },
   { label: 'Roles', value: '...' },
   { label: 'Consultorios', value: '...' },
@@ -51,7 +51,7 @@ onMounted(async () => {
   apiStatus.value = health.status.toUpperCase();
   metrics.value = [
     { label: 'Instituciones', value: String(institucionesData.length) },
-    { label: 'Complejos', value: String(complejosData.length) },
+    { label: 'Campus', value: String(complejosData.length) },
     { label: 'Usuarios', value: String(usuariosData.length) },
     { label: 'Roles', value: String(rolesData.length) },
     { label: 'Consultorios', value: String(consultoriosData.length) },

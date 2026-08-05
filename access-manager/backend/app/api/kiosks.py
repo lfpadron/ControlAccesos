@@ -34,11 +34,11 @@ def validate_scope(db: Session, data: dict, item: object | None = None) -> tuple
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
         piso = exists_or_404(db, Piso, piso_id, "Piso")
         if complejo_id is not None and piso.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
     return complejo_id, piso_id
 
 
@@ -52,7 +52,7 @@ def validate_kiosko(db: Session, data: dict, item: Kiosko | None = None) -> None
     if punto_id is not None:
         punto = exists_or_404(db, PuntoAcceso, punto_id, "Punto de acceso")
         if complejo_id is not None and punto.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al campus indicado.")
         if piso_id is not None and punto.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al piso indicado.")
     codigo = data.get("codigo_dispositivo")

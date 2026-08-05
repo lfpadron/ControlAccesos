@@ -212,15 +212,15 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
     if medico_id is not None:
         exists_or_404(db, Medico, medico_id, "Médico")
     if complejo_id is not None:
-        exists_or_404(db, Complejo, complejo_id, "Complejo")
+        exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
         piso = exists_or_404(db, Piso, piso_id, "Piso")
         if complejo_id is not None and piso.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
     if consultorio_id is not None:
         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
         if complejo_id is not None and consultorio.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
         if piso_id is not None and consultorio.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
         if not consultorio_has_display_coverage(db, consultorio.id):
@@ -231,7 +231,7 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
     if sala_prevista_id is not None:
         sala = exists_or_404(db, SalaEspera, sala_prevista_id, "Sala de espera")
         if complejo_id is not None and sala.complejo_id != complejo_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al complejo indicado.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al campus indicado.")
         if piso_id is not None and sala.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al piso indicado.")
 

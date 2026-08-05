@@ -1,0 +1,782 @@
+diff --git a/access-manager/backend/app/api/complejos.py b/access-manager/backend/app/api/complejos.py
+index e9d7265..6d540b7 100644
+--- a/access-manager/backend/app/api/complejos.py
++++ b/access-manager/backend/app/api/complejos.py
+@@ -25,7 +25,7 @@ def client_ip(request: Request) -> str | None:
+ def exists_or_404(db: Session, item_id: UUID) -> Complejo:
+     item = db.get(Complejo, item_id)
+     if item is None:
+-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complejo no encontrado.")
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campus no encontrado.")
+     return item
+ 
+ 
+diff --git a/access-manager/backend/app/api/contactos.py b/access-manager/backend/app/api/contactos.py
+index e633bb2..df7f843 100644
+--- a/access-manager/backend/app/api/contactos.py
++++ b/access-manager/backend/app/api/contactos.py
+@@ -35,7 +35,7 @@ def validate_complexes(db: Session, complejo_ids: list[UUID]) -> None:
+     found = set(db.execute(select(Complejo.id).where(Complejo.id.in_(complejo_ids))).scalars())
+     missing = [str(item_id) for item_id in complejo_ids if item_id not in found]
+     if missing:
+-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Complejos no encontrados: {', '.join(missing)}")
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Campus no encontrados: {', '.join(missing)}")
+ 
+ 
+ def complex_ids_for(db: Session, contacto_id: UUID) -> list[UUID]:
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 8994fc1..38bc3b9 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -110,7 +110,7 @@ def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Clústers no encontrados: {', '.join(missing)}")
+     for cluster in clusters:
+         if complejo_id is not None and cluster.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al campus indicado.")
+         if piso_id is not None and cluster.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al piso indicado.")
+ 
+@@ -198,15 +198,15 @@ def validate_screen_scope(db: Session, data: dict, item: PantallaTurnos | None =
+     codigo_dispositivo = data.get("codigo_dispositivo")
+ 
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+         piso = exists_or_404(db, Piso, piso_id, "Piso")
+         if complejo_id is not None and piso.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+     if consultorio_id is not None:
+         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
+         if complejo_id is not None and consultorio.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
+         if piso_id is not None and consultorio.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+     if cluster_ids is not None:
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 3ef7c21..e955136 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -212,15 +212,15 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
+     if medico_id is not None:
+         exists_or_404(db, Medico, medico_id, "Médico")
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+         piso = exists_or_404(db, Piso, piso_id, "Piso")
+         if complejo_id is not None and piso.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+     if consultorio_id is not None:
+         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
+         if complejo_id is not None and consultorio.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
+         if piso_id is not None and consultorio.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+         if not consultorio_has_display_coverage(db, consultorio.id):
+@@ -231,7 +231,7 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
+     if sala_prevista_id is not None:
+         sala = exists_or_404(db, SalaEspera, sala_prevista_id, "Sala de espera")
+         if complejo_id is not None and sala.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al campus indicado.")
+         if piso_id is not None and sala.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La sala no pertenece al piso indicado.")
+ 
+diff --git a/access-manager/backend/app/api/kiosks.py b/access-manager/backend/app/api/kiosks.py
+index 2a182cf..04df8a0 100644
+--- a/access-manager/backend/app/api/kiosks.py
++++ b/access-manager/backend/app/api/kiosks.py
+@@ -34,11 +34,11 @@ def validate_scope(db: Session, data: dict, item: object | None = None) -> tuple
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+         piso = exists_or_404(db, Piso, piso_id, "Piso")
+         if complejo_id is not None and piso.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+     return complejo_id, piso_id
+ 
+ 
+@@ -52,7 +52,7 @@ def validate_kiosko(db: Session, data: dict, item: Kiosko | None = None) -> None
+     if punto_id is not None:
+         punto = exists_or_404(db, PuntoAcceso, punto_id, "Punto de acceso")
+         if complejo_id is not None and punto.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al campus indicado.")
+         if piso_id is not None and punto.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El punto de acceso no pertenece al piso indicado.")
+     codigo = data.get("codigo_dispositivo")
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 99d1764..f57ddc8 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -168,9 +168,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
+     if institucion_id is not None:
+         exists_or_404(db, Institucion, institucion_id, "Institución")
+     if complejo_id is not None:
+-        complejo = exists_or_404(db, Complejo, complejo_id, "Complejo")
++        complejo = exists_or_404(db, Complejo, complejo_id, "Campus")
+         if institucion_id is not None and complejo.institucion_id != institucion_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El complejo no pertenece a la institución indicada.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El campus no pertenece a la institución indicada.")
+ 
+ 
+ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
+@@ -182,7 +182,7 @@ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | N
+ 
+ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     if data.get("complejo_id") is not None:
+-        exists_or_404(db, Complejo, data["complejo_id"], "Complejo")
++        exists_or_404(db, Complejo, data["complejo_id"], "Campus")
+     if item is None:
+         return
+     current_floor_count = floor_count_for_torre(db, item.id)
+@@ -202,12 +202,12 @@ def validate_piso(db: Session, data: dict[str, Any], item: object | None = None)
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     torre_id = data.get("torre_id", getattr(item, "torre_id", None))
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if torre_id is None:
+         return
+     torre = exists_or_404(db, Torre, torre_id, "Torre")
+     if complejo_id is not None and torre.complejo_id != complejo_id:
+-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al complejo indicado.")
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
+     if item is None or item.torre_id != torre.id:
+         existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
+         if existing_count >= torre.numero_pisos:
+@@ -221,22 +221,22 @@ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+         piso = exists_or_404(db, Piso, piso_id, "Piso")
+         if complejo_id is not None and piso.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+ 
+ 
+ def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+         piso = exists_or_404(db, Piso, piso_id, "Piso")
+         if complejo_id is not None and piso.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+ 
+ 
+ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
+@@ -257,7 +257,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
+         if cluster.complejo_id != complejo_id or cluster.piso_id != piso_id:
+             raise HTTPException(
+                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+-                detail="Los clústers deben pertenecer al mismo complejo y piso del consultorio.",
++                detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
+             )
+     if (
+         db.execute(
+@@ -343,7 +343,7 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None
+     if item is not None:
+         query = query.where(Consultorio.id != item.id)
+     if db.execute(query).scalar_one_or_none() is not None:
+-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de consultorio ya existe en este complejo.")
++        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de consultorio ya existe en este campus.")
+ 
+ 
+ def validate_medico(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
+@@ -379,11 +379,11 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
+     if medico_id is not None:
+         exists_or_404(db, Medico, medico_id, "Médico")
+     if complejo_id is not None:
+-        exists_or_404(db, Complejo, complejo_id, "Complejo")
++        exists_or_404(db, Complejo, complejo_id, "Campus")
+     if consultorio_id is not None:
+         consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
+         if complejo_id is not None and consultorio.complejo_id != complejo_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al complejo indicado.")
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
+ 
+ 
+ def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
+diff --git a/access-manager/backend/app/services/reset_data.py b/access-manager/backend/app/services/reset_data.py
+index 981aa6c..a1c6b76 100644
+--- a/access-manager/backend/app/services/reset_data.py
++++ b/access-manager/backend/app/services/reset_data.py
+@@ -35,8 +35,8 @@ from app.models.usuario import Usuario
+ ADMIN_EMAILS = ("admin1@example.com", "admin2@example.com")
+ ROLE_SEEDS = (
+     ("ADMIN_SISTEMA", "Administrador de sistema", "Administración global de la plataforma."),
+-    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o complejo."),
+-    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por complejo."),
++    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o campus."),
++    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por campus."),
+     ("MEDICO", "Médico", "Acceso de médico a sus datos operativos."),
+     ("OPERADOR", "Operador", "Operación de flujos asignados."),
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index cdbeb7f..7a91488 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -36,8 +36,8 @@ from app.services.qr_service import generate_qr
+ ADMIN_EMAILS = ("admin1@example.com", "admin2@example.com")
+ ROLE_SEEDS = (
+     ("ADMIN_SISTEMA", "Administrador de sistema", "Administración global de la plataforma."),
+-    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o complejo."),
+-    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por complejo."),
++    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o campus."),
++    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por campus."),
+     ("MEDICO", "Médico", "Acceso de médico a sus datos operativos."),
+     ("OPERADOR", "Operador", "Operación de flujos asignados."),
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+@@ -106,7 +106,7 @@ def main() -> None:
+             complejo = Complejo(
+                 institucion_id=institucion.id,
+                 nombre="Torre Demo",
+-                descripcion="Complejo demo para desarrollo local.",
++                descripcion="Campus demo para desarrollo local.",
+                 zona_horaria="America/Mexico_City",
+             )
+             db.add(complejo)
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 4052933..5ab4bb4 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -97,7 +97,7 @@ watch(
+         <RouterLink to="/perfil">Perfil</RouterLink>
+         <span class="nav-section">Instituciones</span>
+         <RouterLink to="/instituciones">Instituciones</RouterLink>
+-        <RouterLink to="/complejos">Complejos</RouterLink>
++        <RouterLink to="/complejos">Campus</RouterLink>
+         <RouterLink to="/torres">Torres</RouterLink>
+         <RouterLink to="/pisos">Pisos</RouterLink>
+         <RouterLink to="/salas-espera">Salas de espera</RouterLink>
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 5dc6a39..d44af66 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -111,7 +111,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+   'usuario-roles': {
+     key: 'usuario-roles',
+     title: 'Roles de Usuario',
+-    description: 'Asignación de roles globales o acotados por institución y complejo.',
++    description: 'Asignación de roles globales o acotados por institución y campus.',
+     resource: 'usuario-roles',
+     entityName: 'asignación de rol',
+     activeField: 'activo',
+@@ -119,28 +119,28 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'usuario_id', label: 'Usuario', type: 'select', lookup: 'usuarios', required: true },
+       { name: 'rol_id', label: 'Rol', type: 'select', lookup: 'roles', required: true },
+       { name: 'institucion_id', label: 'Institución', type: 'select', lookup: 'instituciones' },
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos' },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+       { name: 'usuario_id', label: 'Usuario', lookup: 'usuarios' },
+       { name: 'rol_id', label: 'Rol', lookup: 'roles' },
+       { name: 'institucion_id', label: 'Institución', lookup: 'instituciones' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
+   torres: {
+     key: 'torres',
+     title: 'Torres',
+-    description: 'Torres asociadas a cada complejo y su capacidad de pisos.',
++    description: 'Torres asociadas a cada campus y su capacidad de pisos.',
+     resource: 'torres',
+     entityName: 'torre',
+     activeField: 'activo',
+     institutionScoped: true,
+     showCancelOnCreate: true,
+     fields: [
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+       { name: 'numero_pisos', label: 'Pisos definidos', type: 'number', required: true, defaultValue: 1 },
+@@ -148,7 +148,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     ],
+     columns: [
+       { name: 'nombre', label: 'Nombre' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'numero_pisos', label: 'Pisos definidos' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+@@ -156,14 +156,14 @@ export const catalogs: Record<string, CatalogConfig> = {
+   pisos: {
+     key: 'pisos',
+     title: 'Pisos',
+-    description: 'Catálogo físico de niveles dentro de cada complejo.',
++    description: 'Catálogo físico de niveles dentro de cada campus.',
+     resource: 'pisos',
+     entityName: 'piso',
+     activeField: 'activo',
+     institutionScoped: true,
+     showCancelOnCreate: true,
+     fields: [
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true },
+       { name: 'numero', label: 'Código de piso', required: true, maxLength: 40 },
+       { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 180 },
+@@ -171,7 +171,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'torre_id', label: 'Torre', lookup: 'torres' },
+       { name: 'numero', label: 'Código' },
+       { name: 'nombre_visible', label: 'Nombre visible' },
+@@ -188,7 +188,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     institutionScoped: true,
+     showCancelOnCreate: true,
+     fields: [
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+@@ -198,7 +198,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     ],
+     columns: [
+       { name: 'nombre', label: 'Nombre' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+       { name: 'activa', label: 'Estado', boolean: true },
+     ],
+@@ -213,7 +213,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     institutionScoped: true,
+     showCancelOnCreate: true,
+     fields: [
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+@@ -222,7 +222,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     ],
+     columns: [
+       { name: 'nombre', label: 'Nombre' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+@@ -237,7 +237,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     institutionScoped: true,
+     showCancelOnCreate: true,
+     fields: [
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
+       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
+@@ -249,7 +249,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     columns: [
+       { name: 'codigo', label: 'Código' },
+       { name: 'nombre_visible', label: 'Nombre visible' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+       { name: 'cluster_ids', label: 'Clústers', lookup: 'clusters-turnos' },
+       { name: 'activo', label: 'Estado', boolean: true },
+@@ -289,7 +289,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+   operadores: {
+     key: 'operadores',
+     title: 'Operadores',
+-    description: 'Personal operativo que podrá apoyar médicos, consultorios o complejos.',
++    description: 'Personal operativo que podrá apoyar médicos, consultorios o campus.',
+     resource: 'operadores',
+     entityName: 'operador',
+     activeField: 'activo',
+@@ -313,7 +313,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'codigo_dispositivo', label: 'Código de dispositivo', required: true, maxLength: 120 },
+       { name: 'token', label: 'Token de dispositivo', type: 'password', createOnly: true },
+       { name: 'nombre', label: 'Nombre', maxLength: 180 },
+-      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos' },
+       { name: 'cluster_espera_id', label: 'Clúster de espera' },
+       { name: 'consultorio_id', label: 'Consultorio', type: 'select', lookup: 'consultorios' },
+@@ -332,7 +332,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+     columns: [
+       { name: 'codigo_dispositivo', label: 'Código' },
+       { name: 'nombre', label: 'Nombre' },
+-      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+       { name: 'polling_interval_seconds', label: 'Polling' },
+       { name: 'activa', label: 'Estado', boolean: true },
+diff --git a/access-manager/frontend/src/views/AsignacionesView.vue b/access-manager/frontend/src/views/AsignacionesView.vue
+index 807b9df..c1accf4 100644
+--- a/access-manager/frontend/src/views/AsignacionesView.vue
++++ b/access-manager/frontend/src/views/AsignacionesView.vue
+@@ -324,7 +324,7 @@ onMounted(loadData);
+           </select>
+         </div>
+         <div class="form-row">
+-          <label for="complejo">Complejo</label>
++          <label for="complejo">Campus</label>
+           <select id="complejo" v-model="operadorForm.complejo_id" required>
+             <option v-for="item in complejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+@@ -417,7 +417,7 @@ onMounted(loadData);
+           <thead>
+             <tr>
+               <th>Operador</th>
+-              <th>Complejo</th>
++              <th>Campus</th>
+               <th>Médico</th>
+               <th>Consultorio</th>
+               <th>Prioridad</th>
+diff --git a/access-manager/frontend/src/views/BusquedaUsuariosView.vue b/access-manager/frontend/src/views/BusquedaUsuariosView.vue
+index 5483bda..b9787ae 100644
+--- a/access-manager/frontend/src/views/BusquedaUsuariosView.vue
++++ b/access-manager/frontend/src/views/BusquedaUsuariosView.vue
+@@ -200,7 +200,7 @@ const columns = [
+   { key: 'roles', label: 'Roles' },
+   { key: 'estado', label: 'Estado' },
+   { key: 'instituciones', label: 'Instituciones' },
+-  { key: 'complejos', label: 'Complejos' },
++  { key: 'complejos', label: 'Campus' },
+   { key: 'pisos', label: 'Pisos' },
+ ];
+ 
+@@ -303,7 +303,7 @@ onMounted(loadData);
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="usuarios-complejo">Complejo</label>
++          <label for="usuarios-complejo">Campus</label>
+           <input id="usuarios-complejo" v-model="complejoSearch" list="usuarios-complejos" @input="syncComplex" @change="syncComplex" />
+           <datalist id="usuarios-complejos">
+             <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 5d33eb5..e2abd05 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -370,7 +370,7 @@ async function submit() {
+     syncScopedInstitution();
+     syncScopedComplex();
+     if (!selectedInstitutionId.value || !form.complejo_id) {
+-      error.value = 'Seleccione institución y complejo.';
++      error.value = 'Seleccione institución y campus.';
+       loading.value = false;
+       return;
+     }
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 1fbb1ca..9f50f6a 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -358,7 +358,7 @@ onMounted(async () => {
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="filtro-complejo">Complejo</label>
++          <label for="filtro-complejo">Campus</label>
+           <input id="filtro-complejo" v-model="complejoSearch" list="filtro-complejos" @input="syncComplex" @change="syncComplex" />
+           <datalist id="filtro-complejos">
+             <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 5659b79..e804a8f 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -288,7 +288,7 @@ onMounted(load);
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="complejo">Complejo</label>
++          <label for="complejo">Campus</label>
+           <input
+             id="complejo"
+             v-model="complejoSearch"
+diff --git a/access-manager/frontend/src/views/ComplejosView.vue b/access-manager/frontend/src/views/ComplejosView.vue
+index eda681e..335d6df 100644
+--- a/access-manager/frontend/src/views/ComplejosView.vue
++++ b/access-manager/frontend/src/views/ComplejosView.vue
+@@ -52,7 +52,7 @@ async function loadData() {
+       institucionFiltradaId.value = institucionesData[0]?.id ?? '';
+     }
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible cargar complejos.';
++    error.value = err instanceof Error ? err.message : 'No fue posible cargar campus.';
+   }
+ }
+ 
+@@ -85,15 +85,15 @@ async function submit() {
+     };
+     if (selected.value) {
+       await updateComplejo(selected.value.id, data);
+-      message.value = 'Complejo actualizado.';
++      message.value = 'Campus actualizado.';
+     } else {
+       await createComplejo(data);
+-      message.value = 'Complejo creado.';
++      message.value = 'Campus creado.';
+     }
+     await loadData();
+     setForm(null);
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible guardar el complejo.';
++    error.value = err instanceof Error ? err.message : 'No fue posible guardar el campus.';
+   } finally {
+     loading.value = false;
+   }
+@@ -106,10 +106,10 @@ async function setActive(item: Complejo, active: boolean) {
+   try {
+     if (active) {
+       await activateComplejo(item.id);
+-      message.value = 'Complejo activado.';
++      message.value = 'Campus activado.';
+     } else {
+       await deactivateComplejo(item.id);
+-      message.value = 'Complejo desactivado.';
++      message.value = 'Campus desactivado.';
+     }
+     await loadData();
+     if (selected.value?.id === item.id) setForm(null);
+@@ -133,7 +133,7 @@ onMounted(loadData);
+   <section class="page">
+     <header class="page-header">
+       <div>
+-        <h1>Complejos</h1>
++        <h1>Campus</h1>
+         <p>Torres, edificios o sedes asociadas a una institución.</p>
+       </div>
+     </header>
+@@ -152,7 +152,7 @@ onMounted(loadData);
+ 
+     <div class="grid">
+       <form class="panel form compact-form" @submit.prevent="submit">
+-        <h2>{{ selected ? 'Editar complejo' : 'Crear complejo' }}</h2>
++        <h2>{{ selected ? 'Editar campus' : 'Crear campus' }}</h2>
+         <div class="form-row">
+           <label for="institucion">Institución</label>
+           <input id="institucion" :value="selectedInstitutionName" readonly required />
+@@ -233,7 +233,7 @@ onMounted(loadData);
+             </tr>
+           </tbody>
+         </table>
+-        <p v-if="complejosFiltrados.length === 0" class="message">No hay complejos para mostrar.</p>
++        <p v-if="complejosFiltrados.length === 0" class="message">No hay campus para mostrar.</p>
+       </section>
+     </div>
+   </section>
+diff --git a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+index d6c4ac4..855387a 100644
+--- a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
++++ b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+@@ -144,7 +144,7 @@ onMounted(loadData);
+           </select>
+         </div>
+         <div class="form-row">
+-          <label for="consulta-complejo">Complejo</label>
++          <label for="consulta-complejo">Campus</label>
+           <select id="consulta-complejo" v-model="filters.complejo_id" :disabled="!filters.institucion_id" @change="syncComplex(); consultar()">
+             <option v-for="item in scopedComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+diff --git a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+index 41ccf97..8f9792f 100644
+--- a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
++++ b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+@@ -136,7 +136,7 @@ onMounted(async () => {
+           </div>
+         </div>
+         <div class="form-row">
+-          <label for="complejos">Complejos asignados</label>
++          <label for="complejos">Campus asignados</label>
+           <select id="complejos" v-model="form.complejo_ids" multiple size="5">
+             <option v-for="complejo in complejos" :key="complejo.id" :value="complejo.id">{{ complejo.nombre }}</option>
+           </select>
+@@ -161,7 +161,7 @@ onMounted(async () => {
+                 <th>Nombre</th>
+                 <th>Tipo</th>
+                 <th>Medios</th>
+-                <th>Complejos</th>
++                <th>Campus</th>
+               </tr>
+             </thead>
+             <tbody>
+diff --git a/access-manager/frontend/src/views/DashboardView.vue b/access-manager/frontend/src/views/DashboardView.vue
+index 5f90c9d..b4803d5 100644
+--- a/access-manager/frontend/src/views/DashboardView.vue
++++ b/access-manager/frontend/src/views/DashboardView.vue
+@@ -15,7 +15,7 @@ import {
+ 
+ const metrics = ref([
+   { label: 'Instituciones', value: '...' },
+-  { label: 'Complejos', value: '...' },
++  { label: 'Campus', value: '...' },
+   { label: 'Usuarios', value: '...' },
+   { label: 'Roles', value: '...' },
+   { label: 'Consultorios', value: '...' },
+@@ -51,7 +51,7 @@ onMounted(async () => {
+   apiStatus.value = health.status.toUpperCase();
+   metrics.value = [
+     { label: 'Instituciones', value: String(institucionesData.length) },
+-    { label: 'Complejos', value: String(complejosData.length) },
++    { label: 'Campus', value: String(complejosData.length) },
+     { label: 'Usuarios', value: String(usuariosData.length) },
+     { label: 'Roles', value: String(rolesData.length) },
+     { label: 'Consultorios', value: String(consultoriosData.length) },
+diff --git a/access-manager/frontend/src/views/KioskosView.vue b/access-manager/frontend/src/views/KioskosView.vue
+index 1a6692a..6a99ad0 100644
+--- a/access-manager/frontend/src/views/KioskosView.vue
++++ b/access-manager/frontend/src/views/KioskosView.vue
+@@ -317,7 +317,7 @@ async function loadData() {
+     torres.value = torresData;
+     pisos.value = pisosData;
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones, complejos y pisos.';
++    error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones, campus y pisos.';
+   }
+ 
+   try {
+@@ -484,7 +484,7 @@ onMounted(loadData);
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="punto-complejo">Complejo</label>
++          <label for="punto-complejo">Campus</label>
+           <input id="punto-complejo" v-model="puntoSearch.complejo" list="punto-complejos" required :disabled="!puntoForm.institucion_id" @input="syncPuntoComplex" @change="syncPuntoComplex" />
+           <datalist id="punto-complejos">
+             <option v-for="item in puntoComplejos" :key="item.id" :value="item.nombre" />
+@@ -529,7 +529,7 @@ onMounted(loadData);
+             <thead>
+               <tr>
+                 <th>Nombre</th>
+-                <th>Complejo</th>
++                <th>Campus</th>
+                 <th>Piso</th>
+                 <th>Estado</th>
+                 <th>Acciones</th>
+@@ -566,7 +566,7 @@ onMounted(loadData);
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="kiosko-complejo">Complejo</label>
++          <label for="kiosko-complejo">Campus</label>
+           <input id="kiosko-complejo" v-model="kioskoSearch.complejo" list="kiosko-complejos" required :disabled="!kioskoForm.institucion_id" @input="syncKioskoComplex" @change="syncKioskoComplex" />
+           <datalist id="kiosko-complejos">
+             <option v-for="item in kioskoComplejos" :key="item.id" :value="item.nombre" />
+diff --git a/access-manager/frontend/src/views/LoginView.vue b/access-manager/frontend/src/views/LoginView.vue
+index d70539f..147223a 100644
+--- a/access-manager/frontend/src/views/LoginView.vue
++++ b/access-manager/frontend/src/views/LoginView.vue
+@@ -31,7 +31,7 @@ async function submit() {
+       <div class="page-header">
+         <div>
+           <h1>Iniciar sesión</h1>
+-          <p>Acceso administrativo para torres y complejos.</p>
++          <p>Acceso administrativo para torres y campus.</p>
+         </div>
+       </div>
+       <form class="form" @submit.prevent="submit">
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index d83ab84..f0c8c1b 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -440,7 +440,7 @@ onMounted(loadData);
+     <header class="page-header">
+       <div>
+         <h1>Pantallas de turnos</h1>
+-        <p>Alta, edición y visualización de dispositivos por institución, complejo, piso y clúster.</p>
++        <p>Alta, edición y visualización de dispositivos por institución, campus, piso y clúster.</p>
+       </div>
+       <button class="secondary" type="button" @click="loadData">Actualizar</button>
+     </header>
+@@ -464,7 +464,7 @@ onMounted(loadData);
+         </div>
+ 
+         <div class="form-row">
+-          <label for="complejo-pantalla">Complejo</label>
++          <label for="complejo-pantalla">Campus</label>
+           <input
+             id="complejo-pantalla"
+             v-model="complejoSearch"
+diff --git a/access-manager/frontend/src/views/ReportesView.vue b/access-manager/frontend/src/views/ReportesView.vue
+index 78f4e5a..8f77c00 100644
+--- a/access-manager/frontend/src/views/ReportesView.vue
++++ b/access-manager/frontend/src/views/ReportesView.vue
+@@ -24,7 +24,7 @@ type ReportRow = Record<string, string | boolean | null>;
+ 
+ const levelOptions: Array<{ value: Level; label: string }> = [
+   { value: 'instituciones', label: 'Instituciones' },
+-  { value: 'complejos', label: 'Complejos' },
++  { value: 'complejos', label: 'Campus' },
+   { value: 'pisos', label: 'Pisos' },
+   { value: 'consultorios', label: 'Consultorios' },
+   { value: 'salas', label: 'Salas de espera' },
+@@ -137,7 +137,7 @@ const rows = computed<ReportRow[]>(() => {
+     return filteredComplejos.value
+       .filter((item) => passesActive(item.activo))
+       .map((item) => ({
+-        tipo: 'Complejo',
++        tipo: 'Campus',
+         institucion: institucionName(item.institucion_id),
+         complejo: item.nombre,
+         piso: '',
+@@ -207,7 +207,7 @@ const rows = computed<ReportRow[]>(() => {
+ const columns = [
+   { key: 'tipo', label: 'Tipo' },
+   { key: 'institucion', label: 'Institución' },
+-  { key: 'complejo', label: 'Complejo' },
++  { key: 'complejo', label: 'Campus' },
+   { key: 'piso', label: 'Piso' },
+   { key: 'nombre', label: 'Nombre' },
+   { key: 'estado', label: 'Estado' },
+@@ -262,7 +262,7 @@ onMounted(loadData);
+     <header class="page-header">
+       <div>
+         <h1>Reportes</h1>
+-        <p>Inventario jerárquico por institución, complejo, piso y áreas operativas.</p>
++        <p>Inventario jerárquico por institución, campus, piso y áreas operativas.</p>
+       </div>
+       <button class="secondary" type="button" @click="loadData">Actualizar</button>
+     </header>
+@@ -290,7 +290,7 @@ onMounted(loadData);
+           </datalist>
+         </div>
+         <div class="form-row">
+-          <label for="reporte-complejo">Complejo</label>
++          <label for="reporte-complejo">Campus</label>
+           <input
+             id="reporte-complejo"
+             v-model="complejoSearch"
+diff --git a/access-manager/frontend/src/views/TurnosLlamadosView.vue b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+index 18b8766..e2ed0df 100644
+--- a/access-manager/frontend/src/views/TurnosLlamadosView.vue
++++ b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+@@ -198,9 +198,9 @@ onMounted(async () => {
+           </select>
+         </div>
+         <div class="form-row">
+-          <label for="complejo-turnos">Complejo</label>
++          <label for="complejo-turnos">Campus</label>
+           <select id="complejo-turnos" v-model="complejoId" @change="onComplejoChange">
+-            <option value="">Selecciona un complejo</option>
++            <option value="">Selecciona un campus</option>
+             <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+         </div>

@@ -35,8 +35,8 @@ from app.models.usuario import Usuario
 ADMIN_EMAILS = ("admin1@example.com", "admin2@example.com")
 ROLE_SEEDS = (
     ("ADMIN_SISTEMA", "Administrador de sistema", "Administración global de la plataforma."),
-    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o complejo."),
-    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por complejo."),
+    ("ADMIN_NEGOCIO", "Administrador de negocio", "Administración por institución o campus."),
+    ("RECEPCIONISTA", "Recepcionista", "Lectura operativa y recepción por campus."),
     ("MEDICO", "Médico", "Acceso de médico a sus datos operativos."),
     ("OPERADOR", "Operador", "Operación de flujos asignados."),
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
