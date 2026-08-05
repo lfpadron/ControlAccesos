@@ -88,6 +88,7 @@ const scopedPisos = computed(() => {
   const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
   const torreId = typeof form.torre_id === 'string' ? form.torre_id : '';
   if (!complejoId) return [];
+  if ('torre_id' in form && !torreId) return [];
   return (lookups.pisos ?? []).filter((item) => item.complejo_id === complejoId && (!torreId || item.torre_id === torreId));
 });
 
@@ -165,7 +166,7 @@ function syncScopedInstitution() {
   if (!selectedInstitutionId.value) {
     form.complejo_id = '';
     complexSearch.value = '';
-    resetScopedPiso();
+    resetScopedTorre();
     return;
   }
   if (!scopedComplejos.value.some((item) => item.id === form.complejo_id)) {
@@ -194,6 +195,11 @@ function setScopedLabelsFromComplex(complejoId: unknown) {
   const institucion = (lookups.instituciones ?? []).find((item) => item.id === complejo?.institucion_id);
   institutionSearch.value = institucion?.label ?? '';
   complexSearch.value = complejo?.label ?? '';
+}
+
+function setScopedTorreFromPiso(pisoId: unknown) {
+  if (!config.value.institutionScoped || !('torre_id' in form) || typeof pisoId !== 'string') return;
+  form.torre_id = (lookups.pisos ?? []).find((item) => item.id === pisoId)?.torre_id ?? '';
 }
 
 function resetForm() {
@@ -317,6 +323,9 @@ function normalizePayload() {
     if (field.createOnly && editingId.value) {
       continue;
     }
+    if (field.transient) {
+      continue;
+    }
     let value = form[field.name];
     if (typeof value === 'string' && (field.type === 'email' || field.type === 'password')) {
       value = value.trim();
@@ -400,6 +409,7 @@ function editRow(row: Row) {
     }
   }
   setScopedLabelsFromComplex(form.complejo_id);
+  setScopedTorreFromPiso(form.piso_id);
 }
 
 async function setActive(row: Row, active: boolean) {
@@ -518,7 +528,7 @@ onMounted(loadData);
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
-            :disabled="!form.complejo_id"
+            :disabled="!form.complejo_id || ('torre_id' in form && !form.torre_id)"
             @change="updateField(field.name, $event)"
           >
             <option v-if="!field.required" value="">Sin asignar</option>

@@ -25,6 +25,7 @@ export type CatalogField = {
   options?: Array<{ value: string; label: string }>;
   createOnly?: boolean;
   editOptional?: boolean;
+  transient?: boolean;
   defaultValue?: string | number | boolean | null;
 };
 
@@ -188,6 +189,7 @@ export const catalogs: Record<string, CatalogConfig> = {
     showCancelOnCreate: true,
     fields: [
       { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
+      { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
@@ -212,6 +214,7 @@ export const catalogs: Record<string, CatalogConfig> = {
     showCancelOnCreate: true,
     fields: [
       { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
+      { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
@@ -235,6 +238,7 @@ export const catalogs: Record<string, CatalogConfig> = {
     showCancelOnCreate: true,
     fields: [
       { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
+      { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },

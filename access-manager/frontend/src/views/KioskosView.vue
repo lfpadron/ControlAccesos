@@ -12,6 +12,7 @@ import {
   listKioskos,
   listPisos,
   listPuntosAcceso,
+  listTorres,
   updateKiosko,
   updatePuntoAcceso,
   type Complejo,
@@ -19,11 +20,13 @@ import {
   type Kiosko,
   type Piso,
   type PuntoAcceso,
+  type Torre,
 } from '../api/client';
 import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
 
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const puntos = ref<PuntoAcceso[]>([]);
 const kioskos = ref<Kiosko[]>([]);
@@ -33,12 +36,13 @@ const error = ref('');
 const message = ref('');
 const loading = ref(false);
 
-const puntoSearch = reactive({ institucion: '', complejo: '', piso: '' });
-const kioskoSearch = reactive({ institucion: '', complejo: '', piso: '', punto: '' });
+const puntoSearch = reactive({ institucion: '', complejo: '', torre: '', piso: '' });
+const kioskoSearch = reactive({ institucion: '', complejo: '', torre: '', piso: '', punto: '' });
 
 const puntoForm = reactive({
   institucion_id: '',
   complejo_id: '',
+  torre_id: '',
   piso_id: '',
   nombre: '',
   descripcion: '',
@@ -52,6 +56,7 @@ const kioskoForm = reactive({
   nombre: '',
   descripcion: '',
   complejo_id: '',
+  torre_id: '',
   piso_id: '',
   punto_acceso_id: '',
   activo: true,
@@ -85,11 +90,21 @@ const colorFamilies = computed(() => {
 const puntoComplejos = computed(() =>
   puntoForm.institucion_id ? complejos.value.filter((item) => item.institucion_id === puntoForm.institucion_id) : [],
 );
-const puntoPisos = computed(() => (puntoForm.complejo_id ? pisos.value.filter((item) => item.complejo_id === puntoForm.complejo_id) : []));
+const puntoTorres = computed(() => (puntoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === puntoForm.complejo_id) : []));
+const puntoPisos = computed(() =>
+  puntoForm.complejo_id && puntoForm.torre_id
+    ? pisos.value.filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
+    : [],
+);
 const kioskoComplejos = computed(() =>
   kioskoForm.institucion_id ? complejos.value.filter((item) => item.institucion_id === kioskoForm.institucion_id) : [],
 );
-const kioskoPisos = computed(() => (kioskoForm.complejo_id ? pisos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id) : []));
+const kioskoTorres = computed(() => (kioskoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === kioskoForm.complejo_id) : []));
+const kioskoPisos = computed(() =>
+  kioskoForm.complejo_id && kioskoForm.torre_id
+    ? pisos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
+    : [],
+);
 const kioskoPuntos = computed(() =>
   puntos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id && item.piso_id === kioskoForm.piso_id),
 );
@@ -132,6 +147,10 @@ function pisoName(id: string | null | undefined) {
   return pisos.value.find((item) => item.id === id)?.nombre_visible ?? '-';
 }
 
+function torreLabel(item: Torre) {
+  return item.nombre;
+}
+
 function puntoName(id: string | null | undefined) {
   return puntos.value.find((item) => item.id === id)?.nombre ?? '-';
 }
@@ -153,12 +172,14 @@ function openKioskoUrl() {
 function setPuntoLabels() {
   puntoSearch.institucion = instituciones.value.find((item) => item.id === puntoForm.institucion_id)?.nombre ?? '';
   puntoSearch.complejo = complejos.value.find((item) => item.id === puntoForm.complejo_id)?.nombre ?? '';
+  puntoSearch.torre = torres.value.find((item) => item.id === puntoForm.torre_id)?.nombre ?? '';
   puntoSearch.piso = pisos.value.find((item) => item.id === puntoForm.piso_id)?.nombre_visible ?? '';
 }
 
 function setKioskoLabels() {
   kioskoSearch.institucion = instituciones.value.find((item) => item.id === kioskoForm.institucion_id)?.nombre ?? '';
   kioskoSearch.complejo = complejos.value.find((item) => item.id === kioskoForm.complejo_id)?.nombre ?? '';
+  kioskoSearch.torre = torres.value.find((item) => item.id === kioskoForm.torre_id)?.nombre ?? '';
   kioskoSearch.piso = pisos.value.find((item) => item.id === kioskoForm.piso_id)?.nombre_visible ?? '';
   kioskoSearch.punto = puntos.value.find((item) => item.id === kioskoForm.punto_acceso_id)?.nombre ?? '';
 }
@@ -168,6 +189,8 @@ function syncPuntoInstitution() {
   if (!puntoComplejos.value.some((item) => item.id === puntoForm.complejo_id)) {
     puntoForm.complejo_id = '';
     puntoSearch.complejo = '';
+    puntoForm.torre_id = '';
+    puntoSearch.torre = '';
     puntoForm.piso_id = '';
     puntoSearch.piso = '';
   }
@@ -175,6 +198,18 @@ function syncPuntoInstitution() {
 
 function syncPuntoComplex() {
   puntoForm.complejo_id = matchByLabel(puntoComplejos.value, puntoSearch.complejo, (item) => item.nombre)?.id ?? '';
+  if (!puntoTorres.value.some((item) => item.id === puntoForm.torre_id)) {
+    puntoForm.torre_id = '';
+    puntoSearch.torre = '';
+  }
+  if (!puntoPisos.value.some((item) => item.id === puntoForm.piso_id)) {
+    puntoForm.piso_id = '';
+    puntoSearch.piso = '';
+  }
+}
+
+function syncPuntoTorre() {
+  puntoForm.torre_id = matchByLabel(puntoTorres.value, puntoSearch.torre, torreLabel)?.id ?? '';
   if (!puntoPisos.value.some((item) => item.id === puntoForm.piso_id)) {
     puntoForm.piso_id = '';
     puntoSearch.piso = '';
@@ -190,6 +225,8 @@ function syncKioskoInstitution() {
   if (!kioskoComplejos.value.some((item) => item.id === kioskoForm.complejo_id)) {
     kioskoForm.complejo_id = '';
     kioskoSearch.complejo = '';
+    kioskoForm.torre_id = '';
+    kioskoSearch.torre = '';
     kioskoForm.piso_id = '';
     kioskoSearch.piso = '';
     kioskoForm.punto_acceso_id = '';
@@ -199,6 +236,20 @@ function syncKioskoInstitution() {
 
 function syncKioskoComplex() {
   kioskoForm.complejo_id = matchByLabel(kioskoComplejos.value, kioskoSearch.complejo, (item) => item.nombre)?.id ?? '';
+  if (!kioskoTorres.value.some((item) => item.id === kioskoForm.torre_id)) {
+    kioskoForm.torre_id = '';
+    kioskoSearch.torre = '';
+  }
+  if (!kioskoPisos.value.some((item) => item.id === kioskoForm.piso_id)) {
+    kioskoForm.piso_id = '';
+    kioskoSearch.piso = '';
+    kioskoForm.punto_acceso_id = '';
+    kioskoSearch.punto = '';
+  }
+}
+
+function syncKioskoTorre() {
+  kioskoForm.torre_id = matchByLabel(kioskoTorres.value, kioskoSearch.torre, torreLabel)?.id ?? '';
   if (!kioskoPisos.value.some((item) => item.id === kioskoForm.piso_id)) {
     kioskoForm.piso_id = '';
     kioskoSearch.piso = '';
@@ -223,6 +274,7 @@ function resetPuntoForm() {
   selectedPunto.value = null;
   puntoForm.institucion_id = instituciones.value[0]?.id ?? '';
   puntoForm.complejo_id = puntoComplejos.value[0]?.id ?? '';
+  puntoForm.torre_id = puntoTorres.value[0]?.id ?? '';
   puntoForm.piso_id = puntoPisos.value[0]?.id ?? '';
   puntoForm.nombre = '';
   puntoForm.descripcion = '';
@@ -234,6 +286,7 @@ function resetKioskoForm() {
   selectedKiosko.value = null;
   kioskoForm.institucion_id = instituciones.value[0]?.id ?? '';
   kioskoForm.complejo_id = kioskoComplejos.value[0]?.id ?? '';
+  kioskoForm.torre_id = kioskoTorres.value[0]?.id ?? '';
   kioskoForm.piso_id = kioskoPisos.value[0]?.id ?? '';
   kioskoForm.punto_acceso_id = kioskoPuntos.value[0]?.id ?? '';
   kioskoForm.codigo_dispositivo = '';
@@ -253,13 +306,15 @@ async function loadData() {
   loading.value = true;
   error.value = '';
   try {
-    const [institucionesData, complejosData, pisosData] = await Promise.all([
+    const [institucionesData, complejosData, torresData, pisosData] = await Promise.all([
       listInstituciones(),
       listComplejos(),
+      listTorres(),
       listPisos(),
     ]);
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = torresData;
     pisos.value = pisosData;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones, complejos y pisos.';
@@ -284,8 +339,10 @@ async function loadData() {
 function setPuntoForm(item: PuntoAcceso) {
   selectedPunto.value = item;
   const complejo = complejos.value.find((row) => row.id === item.complejo_id);
+  const piso = pisos.value.find((row) => row.id === item.piso_id);
   puntoForm.institucion_id = complejo?.institucion_id ?? '';
   puntoForm.complejo_id = item.complejo_id;
+  puntoForm.torre_id = piso?.torre_id ?? '';
   puntoForm.piso_id = item.piso_id;
   puntoForm.nombre = item.nombre;
   puntoForm.descripcion = item.descripcion ?? '';
@@ -296,8 +353,10 @@ function setPuntoForm(item: PuntoAcceso) {
 function setKioskoForm(item: Kiosko) {
   selectedKiosko.value = item;
   const complejo = complejos.value.find((row) => row.id === item.complejo_id);
+  const piso = pisos.value.find((row) => row.id === item.piso_id);
   kioskoForm.institucion_id = complejo?.institucion_id ?? '';
   kioskoForm.complejo_id = item.complejo_id;
+  kioskoForm.torre_id = piso?.torre_id ?? '';
   kioskoForm.piso_id = item.piso_id;
   kioskoForm.punto_acceso_id = item.punto_acceso_id;
   kioskoForm.codigo_dispositivo = item.codigo_dispositivo;
@@ -432,8 +491,15 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
+          <label for="punto-torre">Torre</label>
+          <input id="punto-torre" v-model="puntoSearch.torre" list="punto-torres" required :disabled="!puntoForm.complejo_id" @input="syncPuntoTorre" @change="syncPuntoTorre" />
+          <datalist id="punto-torres">
+            <option v-for="item in puntoTorres" :key="item.id" :value="torreLabel(item)" />
+          </datalist>
+        </div>
+        <div class="form-row">
           <label for="punto-piso">Piso</label>
-          <input id="punto-piso" v-model="puntoSearch.piso" list="punto-pisos" required :disabled="!puntoForm.complejo_id" @input="syncPuntoPiso" @change="syncPuntoPiso" />
+          <input id="punto-piso" v-model="puntoSearch.piso" list="punto-pisos" required :disabled="!puntoForm.torre_id" @input="syncPuntoPiso" @change="syncPuntoPiso" />
           <datalist id="punto-pisos">
             <option v-for="item in puntoPisos" :key="item.id" :value="item.nombre_visible" />
           </datalist>
@@ -507,8 +573,15 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
+          <label for="kiosko-torre">Torre</label>
+          <input id="kiosko-torre" v-model="kioskoSearch.torre" list="kiosko-torres" required :disabled="!kioskoForm.complejo_id" @input="syncKioskoTorre" @change="syncKioskoTorre" />
+          <datalist id="kiosko-torres">
+            <option v-for="item in kioskoTorres" :key="item.id" :value="torreLabel(item)" />
+          </datalist>
+        </div>
+        <div class="form-row">
           <label for="kiosko-piso">Piso</label>
-          <input id="kiosko-piso" v-model="kioskoSearch.piso" list="kiosko-pisos" required :disabled="!kioskoForm.complejo_id" @input="syncKioskoPiso" @change="syncKioskoPiso" />
+          <input id="kiosko-piso" v-model="kioskoSearch.piso" list="kiosko-pisos" required :disabled="!kioskoForm.torre_id" @input="syncKioskoPiso" @change="syncKioskoPiso" />
           <datalist id="kiosko-pisos">
             <option v-for="item in kioskoPisos" :key="item.id" :value="item.nombre_visible" />
           </datalist>

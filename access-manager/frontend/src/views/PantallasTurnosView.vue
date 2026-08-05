@@ -10,6 +10,7 @@ import {
   listInstituciones,
   listPantallasTurnos,
   listPisos,
+  listTorres,
   updatePantallaTurnos,
   type ClusterTurnos,
   type Complejo,
@@ -17,6 +18,7 @@ import {
   type PantallaTurnos,
   type Piso,
   type PublicDisplayTurno,
+  type Torre,
 } from '../api/client';
 import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
 
@@ -29,6 +31,7 @@ type PantallaForm = {
   nombre: string;
   descripcion: string;
   complejo_id: string;
+  torre_id: string;
   piso_id: string;
   cluster_ids: string[];
   activa: boolean;
@@ -47,12 +50,14 @@ type PantallaForm = {
 const pantallas = ref<PantallaTurnos[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const clusters = ref<ClusterTurnos[]>([]);
 const selected = ref<PantallaTurnos | null>(null);
 const turnos = ref<PublicDisplayTurno[]>([]);
 const institucionSearch = ref('');
 const complejoSearch = ref('');
+const torreSearch = ref('');
 const pisoSearch = ref('');
 const clusterSearch = ref('');
 const error = ref('');
@@ -66,6 +71,7 @@ const form = reactive<PantallaForm>({
   nombre: '',
   descripcion: '',
   complejo_id: '',
+  torre_id: '',
   piso_id: '',
   cluster_ids: [],
   activa: true,
@@ -99,15 +105,21 @@ const filteredComplejos = computed(() => {
   return complejos.value.filter((item) => item.institucion_id === form.institucion_id);
 });
 
+const filteredTorres = computed(() => {
+  if (!form.complejo_id) return [];
+  return torres.value.filter((item) => item.complejo_id === form.complejo_id);
+});
+
 const filteredPisos = computed(() => {
-  if (!form.complejo_id) return pisos.value;
-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id);
+  if (!form.complejo_id || !form.torre_id) return [];
+  return pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id);
 });
 
 const filteredClusters = computed(() => {
+  if (!form.complejo_id || !form.piso_id) return [];
   return clusters.value.filter((item) => {
-    if (form.complejo_id && item.complejo_id !== form.complejo_id) return false;
-    if (form.piso_id && item.piso_id !== form.piso_id) return false;
+    if (item.complejo_id !== form.complejo_id) return false;
+    if (item.piso_id !== form.piso_id) return false;
     return true;
   });
 });
@@ -138,6 +150,10 @@ function complejoLabel(item: Complejo) {
   return item.nombre;
 }
 
+function torreLabel(item: Torre) {
+  return item.nombre;
+}
+
 function pisoLabel(item: Piso) {
   return item.nombre_visible;
 }
@@ -149,6 +165,7 @@ function clusterLabel(item: ClusterTurnos) {
 function setAutocompleteLabels() {
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+  torreSearch.value = torres.value.find((item) => item.id === form.torre_id)?.nombre ?? '';
   pisoSearch.value = pisos.value.find((item) => item.id === form.piso_id)?.nombre_visible ?? '';
 }
 
@@ -166,6 +183,20 @@ function syncInstitution() {
 function syncComplex() {
   const match = matchByLabel(filteredComplejos.value, complejoSearch.value, complejoLabel);
   form.complejo_id = match?.id ?? '';
+  if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
+    form.torre_id = '';
+    torreSearch.value = '';
+  }
+  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+    form.piso_id = '';
+    pisoSearch.value = '';
+  }
+  form.cluster_ids = form.cluster_ids.filter((id) => filteredClusters.value.some((item) => item.id === id));
+}
+
+function syncTorre() {
+  const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
+  form.torre_id = match?.id ?? '';
   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
     form.piso_id = '';
     pisoSearch.value = '';
@@ -203,16 +234,18 @@ async function loadData() {
   loading.value = true;
   error.value = '';
   try {
-    const [pantallasData, institucionesData, complejosData, pisosData, clustersData] = await Promise.all([
+    const [pantallasData, institucionesData, complejosData, torresData, pisosData, clustersData] = await Promise.all([
       listPantallasTurnos(),
       listInstituciones(),
       listComplejos(),
+      listTorres(),
       listPisos(),
       listClustersTurnos(),
     ]);
     pantallas.value = pantallasData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = torresData;
     pisos.value = pisosData;
     clusters.value = clustersData;
     if (!selected.value) resetForm();
@@ -228,6 +261,7 @@ function resetForm() {
   turnos.value = [];
   form.institucion_id = instituciones.value[0]?.id ?? '';
   form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+  form.torre_id = filteredTorres.value[0]?.id ?? '';
   form.piso_id = filteredPisos.value[0]?.id ?? '';
   form.cluster_ids = [];
   clusterSearch.value = '';
@@ -252,8 +286,10 @@ function resetForm() {
 function setForm(item: PantallaTurnos) {
   selected.value = item;
   const complejo = complejos.value.find((row) => row.id === item.complejo_id);
+  const piso = pisos.value.find((row) => row.id === item.piso_id);
   form.institucion_id = complejo?.institucion_id ?? '';
   form.complejo_id = item.complejo_id;
+  form.torre_id = piso?.torre_id ?? '';
   form.piso_id = item.piso_id ?? '';
   form.cluster_ids = [...(item.cluster_ids ?? [])];
   setAutocompleteLabels();
@@ -443,12 +479,29 @@ onMounted(loadData);
         </div>
 
         <div class="form-row">
+          <label for="torre-pantalla">Torre</label>
+          <input
+            id="torre-pantalla"
+            v-model="torreSearch"
+            list="torres-pantalla-options"
+            required
+            :disabled="!form.complejo_id"
+            @input="syncTorre"
+            @change="syncTorre"
+          />
+          <datalist id="torres-pantalla-options">
+            <option v-for="item in filteredTorres" :key="item.id" :value="torreLabel(item)" />
+          </datalist>
+        </div>
+
+        <div class="form-row">
           <label for="piso-pantalla">Piso</label>
           <input
             id="piso-pantalla"
             v-model="pisoSearch"
             list="pisos-pantalla-options"
             required
+            :disabled="!form.torre_id"
             @input="syncPiso"
             @change="syncPiso"
           />
