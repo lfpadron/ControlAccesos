@@ -1,0 +1,17 @@
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 23bcd46..eda47c3 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -40,7 +40,11 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
+   instituciones: async () =>
+     (await listInstituciones()).map((item) => ({
+       id: item.id,
+-      label: item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre,
++      label: config.value.institutionScoped
++        ? item.nombre
++        : item.razon_social
++          ? `${item.nombre} · ${item.razon_social}`
++          : item.nombre,
+     })),
+   complejos: async () => (await listComplejos()).map((item) => ({ id: item.id, label: item.nombre, institucion_id: item.institucion_id })),
+   torres: async () => (await listTorres()).map((item) => ({ id: item.id, label: item.nombre, complejo_id: item.complejo_id })),
