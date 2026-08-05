@@ -5,6 +5,7 @@ export type LookupKey =
   | 'complejos'
   | 'usuarios'
   | 'roles'
+  | 'torres'
   | 'pisos'
   | 'clusters-turnos'
   | 'consultorios'
@@ -128,6 +129,29 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'activo', label: 'Estado', boolean: true },
     ],
   },
+  torres: {
+    key: 'torres',
+    title: 'Torres',
+    description: 'Torres asociadas a cada complejo y su capacidad de pisos.',
+    resource: 'torres',
+    entityName: 'torre',
+    activeField: 'activo',
+    institutionScoped: true,
+    showCancelOnCreate: true,
+    fields: [
+      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
+      { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+      { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+      { name: 'numero_pisos', label: 'Pisos definidos', type: 'number', required: true, defaultValue: 1 },
+      { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+    ],
+    columns: [
+      { name: 'nombre', label: 'Nombre' },
+      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
+      { name: 'numero_pisos', label: 'Pisos definidos' },
+      { name: 'activo', label: 'Estado', boolean: true },
+    ],
+  },
   pisos: {
     key: 'pisos',
     title: 'Pisos',
@@ -139,14 +163,16 @@ export const catalogs: Record<string, CatalogConfig> = {
     showCancelOnCreate: true,
     fields: [
       { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
-      { name: 'numero', label: 'Número', required: true, maxLength: 40 },
+      { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true },
+      { name: 'numero', label: 'Código de piso', required: true, maxLength: 40 },
       { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 180 },
       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
     columns: [
       { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
-      { name: 'numero', label: 'Número' },
+      { name: 'torre_id', label: 'Torre', lookup: 'torres' },
+      { name: 'numero', label: 'Código' },
       { name: 'nombre_visible', label: 'Nombre visible' },
       { name: 'activo', label: 'Estado', boolean: true },
     ],
@@ -213,7 +239,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
-      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },
+      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos' },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
     columns: [

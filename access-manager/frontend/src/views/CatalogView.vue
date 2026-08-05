@@ -14,13 +14,14 @@ import {
   listPisos,
   listResource,
   listRoles,
+  listTorres,
   listUsuarios,
   updateResource,
 } from '../api/client';
 import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
 
 type Row = Record<string, unknown> & { id: string };
-type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; piso_id?: string };
+type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
 type SelectOption = { value: string; label: string };
 
 const route = useRoute();
@@ -42,9 +43,21 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
       label: item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre,
     })),
   complejos: async () => (await listComplejos()).map((item) => ({ id: item.id, label: item.nombre, institucion_id: item.institucion_id })),
+  torres: async () => (await listTorres()).map((item) => ({ id: item.id, label: item.nombre, complejo_id: item.complejo_id })),
   usuarios: async () => (await listUsuarios()).map((item) => ({ id: item.id, label: `${item.nombre} (${item.email})` })),
   roles: async () => (await listRoles()).map((item) => ({ id: item.id, label: item.codigo })),
-  pisos: async () => (await listPisos()).map((item) => ({ id: item.id, label: item.nombre_visible, complejo_id: item.complejo_id })),
+  pisos: async () => {
+    const [pisos, torres] = await Promise.all([listPisos(), listTorres()]);
+    return pisos.map((item) => {
+      const torre = torres.find((row) => row.id === item.torre_id);
+      return {
+        id: item.id,
+        label: torre ? `${torre.nombre} · ${item.nombre_visible}` : item.nombre_visible,
+        complejo_id: item.complejo_id,
+        torre_id: item.torre_id,
+      };
+    });
+  },
   'clusters-turnos': async () =>
     (await listClustersTurnos()).map((item) => ({ id: item.id, label: item.nombre, complejo_id: item.complejo_id, piso_id: item.piso_id })),
   consultorios: async () =>
@@ -69,8 +82,16 @@ const scopedComplejos = computed(() => {
 const scopedPisos = computed(() => {
   if (!config.value.institutionScoped) return lookups.pisos ?? [];
   const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
+  const torreId = typeof form.torre_id === 'string' ? form.torre_id : '';
   if (!complejoId) return [];
-  return (lookups.pisos ?? []).filter((item) => item.complejo_id === complejoId);
+  return (lookups.pisos ?? []).filter((item) => item.complejo_id === complejoId && (!torreId || item.torre_id === torreId));
+});
+
+const scopedTorres = computed(() => {
+  if (!config.value.institutionScoped) return lookups.torres ?? [];
+  const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
+  if (!complejoId) return [];
+  return (lookups.torres ?? []).filter((item) => item.complejo_id === complejoId);
 });
 
 const scopedClusters = computed(() => {
@@ -108,8 +129,19 @@ function isScopedPisoField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.name === 'piso_id');
 }
 
+function isScopedTorreField(field: CatalogField) {
+  return Boolean(config.value.institutionScoped && field.name === 'torre_id');
+}
+
 function isScopedClusterField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
+}
+
+function resetScopedTorre() {
+  if ('torre_id' in form) {
+    form.torre_id = '';
+  }
+  resetScopedPiso();
 }
 
 function resetScopedPiso() {
@@ -135,7 +167,7 @@ function syncScopedInstitution() {
   if (!scopedComplejos.value.some((item) => item.id === form.complejo_id)) {
     form.complejo_id = '';
     complexSearch.value = '';
-    resetScopedPiso();
+    resetScopedTorre();
   }
 }
 
@@ -143,6 +175,9 @@ function syncScopedComplex() {
   if (!config.value.institutionScoped) return;
   const match = findOptionByLabel(scopedComplejos.value, complexSearch.value);
   form.complejo_id = match?.id ?? '';
+  if ('torre_id' in form && !scopedTorres.value.some((item) => item.id === form.torre_id)) {
+    resetScopedTorre();
+  }
   if (!scopedPisos.value.some((item) => item.id === form.piso_id)) {
     resetScopedPiso();
   }
@@ -256,7 +291,10 @@ function fieldValue(name: string) {
 
 function updateField(name: string, event: Event) {
   form[name] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
-  if (config.value.institutionScoped && (name === 'piso_id' || name === 'complejo_id')) {
+  if (config.value.institutionScoped && name === 'torre_id' && !scopedPisos.value.some((item) => item.id === form.piso_id)) {
+    resetScopedPiso();
+  }
+  if (config.value.institutionScoped && (name === 'piso_id' || name === 'complejo_id' || name === 'torre_id')) {
     pruneScopedClusters();
   }
 }
@@ -470,6 +508,20 @@ onMounted(loadData);
               <option v-for="item in scopedComplejos" :key="item.id" :value="item.label" />
             </datalist>
           </template>
+          <select
+            v-else-if="isScopedTorreField(field)"
+            :id="fieldId(field)"
+            :name="fieldName(field)"
+            :value="fieldValue(field.name)"
+            :required="field.required"
+            :disabled="!form.complejo_id"
+            @change="updateField(field.name, $event)"
+          >
+            <option v-if="!field.required" value="">Sin asignar</option>
+            <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
+              {{ item.label }}
+            </option>
+          </select>
           <select
             v-else-if="isScopedPisoField(field)"
             :id="fieldId(field)"

@@ -18,6 +18,7 @@ import ContactosInstitucionalesView from '../views/ContactosInstitucionalesView.
 import ReportesView from '../views/ReportesView.vue';
 import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
 import KioskosView from '../views/KioskosView.vue';
+import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -36,10 +37,12 @@ const router = createRouter({
     { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
     { path: '/roles', component: CatalogView, meta: { catalog: 'roles' } },
     { path: '/usuario-roles', component: CatalogView, meta: { catalog: 'usuario-roles' } },
+    { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
     { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+    { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
     { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
     { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },

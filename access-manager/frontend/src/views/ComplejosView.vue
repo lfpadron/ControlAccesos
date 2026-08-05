@@ -15,30 +15,32 @@ import {
 const complejos = ref<Complejo[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const selected = ref<Complejo | null>(null);
-const institucionId = ref('');
 const nombre = ref('');
 const descripcion = ref('');
 const direccion = ref('');
 const telefono = ref('');
 const zonaHoraria = ref('America/Mexico_City');
 const activo = ref(true);
-const filtroInstitucion = ref('');
 const institucionFiltradaId = ref('');
 const error = ref('');
 const message = ref('');
 const loading = ref(false);
 const zonasHorarias = ref<string[]>([]);
 
+const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null);
+const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? '');
+
 const complejosFiltrados = computed(() => {
-  if (!institucionFiltradaId.value) return complejos.value;
-  return complejos.value.filter((item) => item.institucion_id === institucionFiltradaId.value);
+  return complejos.value
+    .filter((item) => item.institucion_id === institucionFiltradaId.value)
+    .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
 });
 
 async function loadData() {
   error.value = '';
   try {
     const [institucionesData, complejosData] = await Promise.all([
-      listInstituciones(filtroInstitucion.value.trim() || undefined),
+      listInstituciones(),
       listComplejos(),
     ]);
     instituciones.value = institucionesData;
@@ -46,8 +48,8 @@ async function loadData() {
     if (zonasHorarias.value.length === 0) {
       zonasHorarias.value = await listZonasHorarias();
     }
-    if (!institucionId.value || !institucionesData.some((item) => item.id === institucionId.value)) {
-      institucionId.value = institucionesData[0]?.id ?? '';
+    if (!institucionFiltradaId.value || !institucionesData.some((item) => item.id === institucionFiltradaId.value)) {
+      institucionFiltradaId.value = institucionesData[0]?.id ?? '';
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar complejos.';
@@ -56,7 +58,9 @@ async function loadData() {
 
 function setForm(item?: Complejo | null) {
   selected.value = item ?? null;
-  institucionId.value = item?.institucion_id ?? instituciones.value[0]?.id ?? '';
+  if (item?.institucion_id) {
+    institucionFiltradaId.value = item.institucion_id;
+  }
   nombre.value = item?.nombre ?? '';
   descripcion.value = item?.descripcion ?? '';
   direccion.value = item?.direccion ?? '';
@@ -71,7 +75,7 @@ async function submit() {
   loading.value = true;
   try {
     const data = {
-      institucion_id: institucionId.value,
+      institucion_id: institucionFiltradaId.value,
       nombre: nombre.value,
       descripcion: descripcion.value || undefined,
       direccion: direccion.value || undefined,
@@ -116,10 +120,10 @@ async function setActive(item: Complejo, active: boolean) {
   }
 }
 
-async function clearInstitutionFilter() {
-  filtroInstitucion.value = '';
-  institucionFiltradaId.value = '';
-  await loadData();
+function syncFormWithInstitution() {
+  if (selected.value && selected.value.institucion_id !== institucionFiltradaId.value) {
+    setForm(null);
+  }
 }
 
 onMounted(loadData);
@@ -135,17 +139,15 @@ onMounted(loadData);
     </header>
 
     <section class="panel">
-      <form class="inline-actions" @submit.prevent="loadData">
-        <input v-model="filtroInstitucion" class="narrow-input" placeholder="Buscar institución" />
-        <button type="submit">Filtrar</button>
-        <button class="secondary" type="button" @click="clearInstitutionFilter">Limpiar</button>
-        <select v-model="institucionFiltradaId">
-          <option value="">Todas las instituciones</option>
+      <div class="form-row">
+        <label for="filtro-institucion">Institución</label>
+        <select id="filtro-institucion" v-model="institucionFiltradaId" @change="syncFormWithInstitution">
+          <option value="" disabled>Seleccione institución</option>
           <option v-for="item in instituciones" :key="item.id" :value="item.id">
-            {{ item.nombre }}{{ item.razon_social ? ` · ${item.razon_social}` : '' }}
+            {{ item.nombre }}
           </option>
         </select>
-      </form>
+      </div>
     </section>
 
     <div class="grid">
@@ -153,12 +155,7 @@ onMounted(loadData);
         <h2>{{ selected ? 'Editar complejo' : 'Crear complejo' }}</h2>
         <div class="form-row">
           <label for="institucion">Institución</label>
-          <select id="institucion" v-model="institucionId" required>
-            <option value="" disabled>Seleccione institución</option>
-            <option v-for="item in instituciones" :key="item.id" :value="item.id">
-              {{ item.nombre }}{{ item.razon_social ? ` · ${item.razon_social}` : '' }}
-            </option>
-          </select>
+          <input id="institucion" :value="selectedInstitutionName" readonly required />
         </div>
         <div class="form-row">
           <label for="nombre">Nombre</label>
@@ -190,7 +187,7 @@ onMounted(loadData);
         <p v-if="message" class="message">{{ message }}</p>
         <p v-if="error" class="error">{{ error }}</p>
         <div class="actions-row">
-          <button type="submit" :disabled="loading || instituciones.length === 0">
+          <button type="submit" :disabled="loading || !institucionFiltradaId">
             {{ loading ? 'Guardando...' : '✓ Guardar' }}
           </button>
           <button class="danger solid" type="button" @click="setForm(null)">× Cancelar</button>

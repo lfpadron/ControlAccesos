@@ -468,6 +468,7 @@ Turno {{ ticket.turno }}
 [QR]
 
 Consultorio {{ ticket.consultorio }}
+Torre {{ ticket.torre }}
 {{ ticket.piso }}
 Cita {{ ticket.hora }} hrs</pre>
       <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>

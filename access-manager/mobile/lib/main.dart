@@ -918,7 +918,7 @@ class TicketPreview extends StatelessWidget {
             const SizedBox(height: 8),
             Text('${ticket.encabezadoFecha} · ${ticket.leyenda}'),
             Text('Turno ${ticket.turno}'),
-            Text('${ticket.consultorio} · ${ticket.piso}'),
+            Text([ticket.consultorio, ticket.torre, ticket.piso].where((value) => value.isNotEmpty).join(' · ')),
             Text('Hora ${ticket.hora}'),
           ],
         ),

@@ -54,8 +54,33 @@ class UsuarioRolRead(UsuarioRolCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TorreCreate(BaseModel):
+    complejo_id: UUID
+    nombre: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = None
+    numero_pisos: int = Field(default=1, ge=1, le=99)
+    activo: bool = True
+
+
+class TorreUpdate(BaseModel):
+    complejo_id: UUID | None = None
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = None
+    numero_pisos: int | None = Field(default=None, ge=1, le=99)
+    activo: bool | None = None
+
+
+class TorreRead(TorreCreate):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PisoCreate(BaseModel):
     complejo_id: UUID
+    torre_id: UUID
     numero: str = Field(min_length=1, max_length=40)
     nombre_visible: str = Field(min_length=1, max_length=180)
     descripcion: str | None = None
@@ -64,6 +89,7 @@ class PisoCreate(BaseModel):
 
 class PisoUpdate(BaseModel):
     complejo_id: UUID | None = None
+    torre_id: UUID | None = None
     numero: str | None = Field(default=None, min_length=1, max_length=40)
     nombre_visible: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = None
@@ -299,3 +325,36 @@ class AuditoriaRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ClusterConsultaRead(BaseModel):
+    id: UUID
+    nombre: str
+    descripcion: str | None = None
+    activo: bool
+
+
+class ConsultorioConsultaRead(BaseModel):
+    id: UUID
+    codigo: str
+    nombre_visible: str | None = None
+    consultorio: str
+    activo: bool
+
+
+class ConsultorioClusterConsultaRead(ConsultorioConsultaRead):
+    piso_id: UUID
+    piso: str
+    cluster_ids: list[UUID]
+    clusters: list[ClusterConsultaRead]
+
+
+class ClusterConConsultoriosRead(ClusterConsultaRead):
+    consultorios: list[ConsultorioConsultaRead]
+
+
+class PisoClusterConsultaRead(BaseModel):
+    piso_id: UUID
+    piso: str
+    clusters: list[ClusterConConsultoriosRead]
+    consultorios_sin_cluster: list[ConsultorioConsultaRead]

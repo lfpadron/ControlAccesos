@@ -26,6 +26,7 @@ from app.models.operational import (
     Piso,
     Role,
     SalaEspera,
+    Torre,
     UsuarioRol,
 )
 from app.models.usuario import Usuario
@@ -111,9 +112,20 @@ def main() -> None:
             db.add(complejo)
             db.flush()
 
-        piso = db.execute(select(Piso).where(Piso.complejo_id == complejo.id, Piso.numero == "1")).scalar_one_or_none()
+        torre = db.execute(select(Torre).where(Torre.complejo_id == complejo.id, Torre.nombre == "Torre Demo")).scalar_one_or_none()
+        if torre is None:
+            torre = Torre(
+                complejo_id=complejo.id,
+                nombre="Torre Demo",
+                descripcion="Torre demo para desarrollo local.",
+                numero_pisos=20,
+            )
+            db.add(torre)
+            db.flush()
+
+        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == "1")).scalar_one_or_none()
         if piso is None:
-            piso = Piso(complejo_id=complejo.id, numero="1", nombre_visible="Piso 1")
+            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero="1", nombre_visible="Piso 1")
             db.add(piso)
             db.flush()
 

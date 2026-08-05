@@ -139,6 +139,7 @@ class TicketResponse {
     required this.turno,
     required this.qrPayload,
     required this.consultorio,
+    required this.torre,
     required this.piso,
     required this.hora,
   });
@@ -148,6 +149,7 @@ class TicketResponse {
   final String turno;
   final String qrPayload;
   final String consultorio;
+  final String torre;
   final String piso;
   final String hora;
 
@@ -158,6 +160,7 @@ class TicketResponse {
       turno: json['turno'] as String? ?? '',
       qrPayload: json['qr_payload'] as String? ?? '',
       consultorio: json['consultorio'] as String? ?? '',
+      torre: json['torre'] as String? ?? '',
       piso: json['piso'] as String? ?? '',
       hora: json['hora'] as String? ?? '',
     );

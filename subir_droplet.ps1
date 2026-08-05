@@ -206,7 +206,6 @@ try {
             "docker compose build kiosk",
             "docker compose build mobile-pwa",
             "docker compose up -d postgres redis",
-            'docker compose run --rm backend python -c "from app.core.config import get_settings; from urllib.parse import urlsplit; p=urlsplit(get_settings().database_url); print(\"DATABASE_URL host:\", p.hostname)"',
             "docker compose run --rm backend uv run alembic upgrade head",
             "docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa",
             "docker compose up -d --force-recreate caddy || { docker compose logs --tail=120 backend; docker compose ps; exit 1; }",

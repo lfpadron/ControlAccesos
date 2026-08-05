@@ -18,10 +18,16 @@ api_router.include_router(kiosks.router, tags=["kiosks"])
 api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(operational.usuarios_router, prefix="/usuarios", tags=["usuarios"])
 api_router.include_router(operational.usuario_roles_router, prefix="/usuario-roles", tags=["usuario-roles"])
+api_router.include_router(operational.torres_router, prefix="/torres", tags=["torres"])
 api_router.include_router(operational.pisos_router, prefix="/pisos", tags=["pisos"])
 api_router.include_router(operational.salas_espera_router, prefix="/salas-espera", tags=["salas-espera"])
 api_router.include_router(operational.clusters_turnos_router, prefix="/clusters-turnos", tags=["clusters-turnos"])
 api_router.include_router(operational.consultorios_router, prefix="/consultorios", tags=["consultorios"])
+api_router.include_router(
+    operational.consultas_clusters_consultorios_router,
+    prefix="/consultas-clusters-consultorios",
+    tags=["consultas-clusters-consultorios"],
+)
 api_router.include_router(operational.medicos_router, prefix="/medicos", tags=["medicos"])
 api_router.include_router(operational.operadores_router, prefix="/operadores", tags=["operadores"])
 api_router.include_router(

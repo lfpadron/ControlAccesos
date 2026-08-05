@@ -27,6 +27,7 @@ from app.models.operational import (
     Piso,
     Role,
     SalaEspera,
+    Torre,
     UsuarioRol,
 )
 from app.models.usuario import Usuario
@@ -123,6 +124,7 @@ def main() -> None:
             "clusters_turnos": delete_all(db, ClusterTurnos),
             "salas_espera": delete_all(db, SalaEspera),
             "pisos": delete_all(db, Piso),
+            "torres": delete_all(db, Torre),
             "contactos_institucionales_complejos": delete_all(db, ContactoInstitucionalComplejo),
             "contactos_institucionales": delete_all(db, ContactoInstitucional),
             "complejos": delete_all(db, Complejo),

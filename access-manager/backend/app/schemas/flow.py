@@ -243,6 +243,7 @@ class TicketResponse(BaseModel):
     turno: str
     qr_payload: str
     consultorio: str
+    torre: str
     piso: str
     hora: str
 

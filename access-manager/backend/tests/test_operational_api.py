@@ -238,12 +238,24 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             },
         )
     )
+    torre = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "nombre": f"Torre Test {suffix}",
+                "numero_pisos": 20,
+            },
+        )
+    )
     piso = assert_created(
         client.post(
             "/api/pisos",
             headers=auth_headers,
             json={
                 "complejo_id": complejo["id"],
+                "torre_id": torre["id"],
                 "numero": f"T-{suffix}",
                 "nombre_visible": f"Piso Test {suffix}",
             },
@@ -321,6 +333,40 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             },
         )
     )
+    consultorio_sin_cluster = assert_created(
+        client.post(
+            "/api/consultorios",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "codigo": f"SC-{suffix}",
+                "nombre_visible": f"Sin Cluster {suffix}",
+            },
+        )
+    )
+    assert consultorio_sin_cluster["cluster_ids"] == []
+
+    consulta_sin_cluster = client.get(
+        "/api/consultas-clusters-consultorios/por-consultorio",
+        headers=auth_headers,
+        params={"torre_id": torre["id"], "q": "Sin Cluster", "sin_cluster": True},
+    )
+    assert consulta_sin_cluster.status_code == 200, consulta_sin_cluster.text
+    assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
+    assert consulta_sin_cluster.json()[0]["clusters"] == []
+
+    consulta_por_piso = client.get(
+        "/api/consultas-clusters-consultorios/por-piso",
+        headers=auth_headers,
+        params={"torre_id": torre["id"], "piso_id": piso["id"]},
+    )
+    assert consulta_por_piso.status_code == 200, consulta_por_piso.text
+    piso_consulta = consulta_por_piso.json()[0]
+    assert piso_consulta["piso"] == piso["nombre_visible"]
+    assert piso_consulta["clusters"][0]["activo"] is True
+    assert piso_consulta["clusters"][0]["consultorios"][0]["consultorio"] == consultorio["nombre_visible"]
+    assert piso_consulta["consultorios_sin_cluster"][0]["consultorio"] == consultorio_sin_cluster["nombre_visible"]
 
     medico_user = assert_created(
         client.post(
@@ -524,11 +570,23 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
             },
         )
     )
+    torre = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={"complejo_id": complejo["id"], "nombre": f"Torre Flujo {suffix}", "numero_pisos": 20},
+        )
+    )
     piso = assert_created(
         client.post(
             "/api/pisos",
             headers=auth_headers,
-            json={"complejo_id": complejo["id"], "numero": f"F-{suffix}", "nombre_visible": f"Piso Flujo {suffix}"},
+            json={
+                "complejo_id": complejo["id"],
+                "torre_id": torre["id"],
+                "numero": f"F-{suffix}",
+                "nombre_visible": f"Piso Flujo {suffix}",
+            },
         )
     )
     cluster = assert_created(
@@ -642,6 +700,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     assert ticket_response.status_code == 200, ticket_response.text
     ticket = ticket_response.json()
     assert ticket["turno"] == cita["folio_turno"]
+    assert ticket["torre"] == torre["nombre"]
+    assert ticket["piso"] == piso["nombre_visible"]
     assert ticket["qr_payload"]
 
     roles_response = client.get("/api/roles", headers=auth_headers)
@@ -703,6 +763,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     mobile_ticket_response = client.get(f"/api/mobile/citas/{cita['id']}/ticket", headers=recepcionista_headers)
     assert mobile_ticket_response.status_code == 200, mobile_ticket_response.text
     assert mobile_ticket_response.json()["turno"] == cita["folio_turno"]
+    assert mobile_ticket_response.json()["torre"] == torre["nombre"]
 
     checkin_response = client.post(
         "/api/mobile/qr/checkin",

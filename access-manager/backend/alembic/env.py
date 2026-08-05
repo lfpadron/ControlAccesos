@@ -29,6 +29,7 @@ from app.models.operational import (  # noqa: F401
     Piso,
     Role,
     SalaEspera,
+    Torre,
     UsuarioRol,
 )
 

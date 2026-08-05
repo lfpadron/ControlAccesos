@@ -13,7 +13,7 @@ from app.core.security import require_role
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
-from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, UsuarioRol
+from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
 from app.models.usuario import Usuario
 from app.schemas.flow import (
     CheckinRequest,
@@ -123,6 +123,12 @@ def piso_label(piso: Piso | None) -> str | None:
     if piso is None:
         return None
     return piso.nombre_visible or f"Piso {piso.numero}"
+
+
+def torre_label(torre: Torre | None) -> str | None:
+    if torre is None:
+        return None
+    return torre.nombre
 
 
 def medico_label(medico: Medico | None) -> str | None:
@@ -838,12 +844,14 @@ def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")
     consultorio = db.get(Consultorio, cita.consultorio_id)
     piso = db.get(Piso, cita.piso_id)
+    torre = db.get(Torre, piso.torre_id) if piso is not None else None
     return TicketResponse(
         encabezado_fecha=f"{dias[cita.fecha_cita.weekday()]}-{cita.fecha_cita.day:02d}",
         leyenda="VÁLIDO SOLO HOY",
         turno=cita.folio_turno,
         qr_payload=token,
         consultorio=consultorio_label(consultorio) or "",
+        torre=torre_label(torre) or "",
         piso=piso_label(piso) or "",
         hora=cita.hora_cita.strftime("%H:%M"),
     )

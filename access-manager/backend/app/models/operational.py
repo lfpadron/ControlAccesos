@@ -32,11 +32,26 @@ class UsuarioRol(TimestampMixin, Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 
+class Torre(TimestampMixin, Base):
+    __tablename__ = "torres"
+    __table_args__ = (
+        CheckConstraint("numero_pisos BETWEEN 1 AND 99", name="numero_pisos_range"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text)
+    numero_pisos: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+
+
 class Piso(TimestampMixin, Base):
     __tablename__ = "pisos"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
+    torre_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), nullable=False, index=True)
     numero: Mapped[str] = mapped_column(String(40), nullable=False)
     nombre_visible: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)

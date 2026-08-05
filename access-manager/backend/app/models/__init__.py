@@ -16,6 +16,7 @@ from app.models.operational import (
     Piso,
     Role,
     SalaEspera,
+    Torre,
     UsuarioRol,
 )
 from app.models.usuario import Usuario
@@ -44,6 +45,7 @@ __all__ = [
     "QrToken",
     "Role",
     "SalaEspera",
+    "Torre",
     "TurnoDisplay",
     "Usuario",
     "UsuarioRol",

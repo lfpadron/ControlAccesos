@@ -1,0 +1,1221 @@
+diff --git a/access-manager/backend/alembic/env.py b/access-manager/backend/alembic/env.py
+index 5010183..a9b3c91 100644
+--- a/access-manager/backend/alembic/env.py
++++ b/access-manager/backend/alembic/env.py
+@@ -29,6 +29,7 @@ from app.models.operational import (  # noqa: F401
+     Piso,
+     Role,
+     SalaEspera,
++    Torre,
+     UsuarioRol,
+ )
+ 
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index f4836a7..3ef7c21 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -13,7 +13,7 @@ from app.core.security import require_role
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
+-from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, UsuarioRol
++from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
+ from app.models.usuario import Usuario
+ from app.schemas.flow import (
+     CheckinRequest,
+@@ -125,6 +125,12 @@ def piso_label(piso: Piso | None) -> str | None:
+     return piso.nombre_visible or f"Piso {piso.numero}"
+ 
+ 
++def torre_label(torre: Torre | None) -> str | None:
++    if torre is None:
++        return None
++    return torre.nombre
++
++
+ def medico_label(medico: Medico | None) -> str | None:
+     if medico is None:
+         return None
+@@ -838,12 +844,14 @@ def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
+     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")
+     consultorio = db.get(Consultorio, cita.consultorio_id)
+     piso = db.get(Piso, cita.piso_id)
++    torre = db.get(Torre, piso.torre_id) if piso is not None else None
+     return TicketResponse(
+         encabezado_fecha=f"{dias[cita.fecha_cita.weekday()]}-{cita.fecha_cita.day:02d}",
+         leyenda="VÁLIDO SOLO HOY",
+         turno=cita.folio_turno,
+         qr_payload=token,
+         consultorio=consultorio_label(consultorio) or "",
++        torre=torre_label(torre) or "",
+         piso=piso_label(piso) or "",
+         hora=cita.hora_cita.strftime("%H:%M"),
+     )
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 02be7fd..f048d64 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -7,7 +7,7 @@ from uuid import UUID
+ 
+ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+ from pydantic import BaseModel, ValidationError
+-from sqlalchemy import func, select
++from sqlalchemy import func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+@@ -27,6 +27,7 @@ from app.models.operational import (
+     Piso,
+     Role,
+     SalaEspera,
++    Torre,
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+@@ -38,9 +39,13 @@ from app.schemas.operational import (
+     AsignacionOperadorRead,
+     AsignacionOperadorUpdate,
+     AuditoriaRead,
++    ClusterConConsultoriosRead,
++    ClusterConsultaRead,
+     ClusterTurnosCreate,
+     ClusterTurnosRead,
+     ClusterTurnosUpdate,
++    ConsultorioClusterConsultaRead,
++    ConsultorioConsultaRead,
+     ConsultorioCreate,
+     ConsultorioRead,
+     ConsultorioUpdate,
+@@ -59,6 +64,10 @@ from app.schemas.operational import (
+     SalaEsperaCreate,
+     SalaEsperaRead,
+     SalaEsperaUpdate,
++    PisoClusterConsultaRead,
++    TorreCreate,
++    TorreRead,
++    TorreUpdate,
+     UsuarioRolCreate,
+     UsuarioRolRead,
+     UsuarioRolUpdate,
+@@ -164,9 +173,48 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El complejo no pertenece a la institución indicada.")
+ 
+ 
+-def validate_piso(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
++def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
++    query = select(func.count(Piso.id)).where(Piso.torre_id == torre_id)
++    if exclude_piso_id is not None:
++        query = query.where(Piso.id != exclude_piso_id)
++    return int(db.execute(query).scalar_one())
++
++
++def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     if data.get("complejo_id") is not None:
+         exists_or_404(db, Complejo, data["complejo_id"], "Complejo")
++    if item is None:
++        return
++    current_floor_count = floor_count_for_torre(db, item.id)
++    if data.get("complejo_id") is not None and data["complejo_id"] != item.complejo_id and current_floor_count:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="No se puede mover una torre que ya tiene pisos.",
++        )
++    if data.get("numero_pisos") is not None and current_floor_count > data["numero_pisos"]:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="La torre ya tiene más pisos registrados que el nuevo límite.",
++        )
++
++
++def validate_piso(db: Session, data: dict[str, Any], item: object | None = None) -> None:
++    complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
++    torre_id = data.get("torre_id", getattr(item, "torre_id", None))
++    if complejo_id is not None:
++        exists_or_404(db, Complejo, complejo_id, "Complejo")
++    if torre_id is None:
++        return
++    torre = exists_or_404(db, Torre, torre_id, "Torre")
++    if complejo_id is not None and torre.complejo_id != complejo_id:
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al complejo indicado.")
++    if item is None or item.torre_id != torre.id:
++        existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
++        if existing_count >= torre.numero_pisos:
++            raise HTTPException(
++                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++                detail="El número de pisos no puede exceder los definidos en la torre.",
++            )
+ 
+ 
+ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+@@ -199,7 +247,7 @@ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]
+ 
+ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
+     if not cluster_ids:
+-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
++        return
+     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
+     found = {cluster.id for cluster in clusters}
+     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
+@@ -287,8 +335,6 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None
+     cluster_ids = data.get("cluster_ids")
+     if codigo is None or complejo_id is None:
+         return
+-    if item is None and cluster_ids is None:
+-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
+     if cluster_ids is None and item is not None:
+         cluster_ids = cluster_ids_for_consultorio(db, item.id)
+     if piso_id is not None:
+@@ -530,6 +576,9 @@ usuarios_router = create_crud_router(
+ usuario_roles_router = create_crud_router(
+     CrudConfig(UsuarioRol, UsuarioRolCreate, UsuarioRolUpdate, UsuarioRolRead, "usuario_roles", "ROL_ASIGNADO", "ROL_ASIGNADO_EDITADO", "created_at", validator=validate_usuario_rol)
+ )
++torres_router = create_crud_router(
++    CrudConfig(Torre, TorreCreate, TorreUpdate, TorreRead, "torres", "TORRE_CREADA", "TORRE_EDITADA", "nombre", validator=validate_torre)
++)
+ pisos_router = create_crud_router(
+     CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
+ )
+@@ -599,6 +648,149 @@ asignaciones_operador_router = create_crud_router(
+     )
+ )
+ 
++consultas_clusters_consultorios_router = APIRouter()
++
++
++def piso_label(piso: Piso) -> str:
++    return piso.nombre_visible or f"Piso {piso.numero}"
++
++
++def consultorio_label(item: Consultorio) -> str:
++    return item.nombre_visible or item.codigo
++
++
++def cluster_read(cluster: ClusterTurnos) -> ClusterConsultaRead:
++    return ClusterConsultaRead(
++        id=cluster.id,
++        nombre=cluster.nombre,
++        descripcion=cluster.descripcion,
++        activo=cluster.activo,
++    )
++
++
++def consultorio_read(item: Consultorio) -> ConsultorioConsultaRead:
++    return ConsultorioConsultaRead(
++        id=item.id,
++        codigo=item.codigo,
++        nombre_visible=item.nombre_visible,
++        consultorio=consultorio_label(item),
++        activo=item.activo,
++    )
++
++
++def clusters_for_consultorio(db: Session, consultorio_id: UUID) -> list[ClusterTurnos]:
++    return list(
++        db.execute(
++            select(ClusterTurnos)
++            .join(ConsultorioCluster, ConsultorioCluster.cluster_id == ClusterTurnos.id)
++            .where(ConsultorioCluster.consultorio_id == consultorio_id)
++            .order_by(ClusterTurnos.nombre)
++        ).scalars()
++    )
++
++
++@consultas_clusters_consultorios_router.get("/por-consultorio", response_model=list[ConsultorioClusterConsultaRead])
++def consulta_clusters_por_consultorio(
++    torre_id: UUID,
++    q: str | None = Query(default=None),
++    sin_cluster: bool = Query(default=False),
++    db: Session = Depends(get_db),
++    _current_user: Usuario = AdminUser,
++) -> list[ConsultorioClusterConsultaRead]:
++    exists_or_404(db, Torre, torre_id, "Torre")
++    query = (
++        select(Consultorio, Piso)
++        .join(Piso, Piso.id == Consultorio.piso_id)
++        .where(Piso.torre_id == torre_id)
++    )
++    if q:
++        term = f"%{q.strip().lower()}%"
++        query = query.where(
++            or_(
++                func.lower(Consultorio.codigo).like(term),
++                func.lower(func.coalesce(Consultorio.nombre_visible, "")).like(term),
++            )
++        )
++    has_cluster = select(ConsultorioCluster.consultorio_id).where(ConsultorioCluster.consultorio_id == Consultorio.id).exists()
++    query = query.where(~has_cluster if sin_cluster else has_cluster)
++    response: list[ConsultorioClusterConsultaRead] = []
++    for consultorio, piso in db.execute(query.order_by(Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
++        clusters = clusters_for_consultorio(db, consultorio.id)
++        response.append(
++            ConsultorioClusterConsultaRead(
++                **consultorio_read(consultorio).model_dump(),
++                piso_id=piso.id,
++                piso=piso_label(piso),
++                cluster_ids=[cluster.id for cluster in clusters],
++                clusters=[cluster_read(cluster) for cluster in clusters],
++            )
++        )
++    return response
++
++
++@consultas_clusters_consultorios_router.get("/por-piso", response_model=list[PisoClusterConsultaRead])
++def consulta_clusters_por_piso(
++    torre_id: UUID,
++    piso_id: UUID | None = Query(default=None),
++    db: Session = Depends(get_db),
++    _current_user: Usuario = AdminUser,
++) -> list[PisoClusterConsultaRead]:
++    exists_or_404(db, Torre, torre_id, "Torre")
++    pisos_query = select(Piso).where(Piso.torre_id == torre_id)
++    if piso_id is not None:
++        pisos_query = pisos_query.where(Piso.id == piso_id)
++    pisos = list(db.execute(pisos_query.order_by(Piso.numero, Piso.nombre_visible)).scalars())
++    if piso_id is not None and not pisos:
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Piso no encontrado en la torre indicada.")
++
++    response: list[PisoClusterConsultaRead] = []
++    for piso in pisos:
++        clusters = list(
++            db.execute(
++                select(ClusterTurnos)
++                .where(ClusterTurnos.piso_id == piso.id)
++                .order_by(ClusterTurnos.nombre)
++            ).scalars()
++        )
++        cluster_rows: list[ClusterConConsultoriosRead] = []
++        for cluster in clusters:
++            consultorios = list(
++                db.execute(
++                    select(Consultorio)
++                    .join(ConsultorioCluster, ConsultorioCluster.consultorio_id == Consultorio.id)
++                    .where(ConsultorioCluster.cluster_id == cluster.id)
++                    .order_by(Consultorio.nombre_visible, Consultorio.codigo)
++                ).scalars()
++            )
++            cluster_rows.append(
++                ClusterConConsultoriosRead(
++                    **cluster_read(cluster).model_dump(),
++                    consultorios=[consultorio_read(consultorio) for consultorio in consultorios],
++                )
++            )
++        unassigned = list(
++            db.execute(
++                select(Consultorio)
++                .where(
++                    Consultorio.piso_id == piso.id,
++                    ~select(ConsultorioCluster.consultorio_id)
++                    .where(ConsultorioCluster.consultorio_id == Consultorio.id)
++                    .exists(),
++                )
++                .order_by(Consultorio.nombre_visible, Consultorio.codigo)
++            ).scalars()
++        )
++        response.append(
++            PisoClusterConsultaRead(
++                piso_id=piso.id,
++                piso=piso_label(piso),
++                clusters=cluster_rows,
++                consultorios_sin_cluster=[consultorio_read(consultorio) for consultorio in unassigned],
++            )
++        )
++    return response
++
++
+ auditoria_router = APIRouter()
+ 
+ 
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index e3e215b..561f0ce 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -18,10 +18,16 @@ api_router.include_router(kiosks.router, tags=["kiosks"])
+ api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
+ api_router.include_router(operational.usuarios_router, prefix="/usuarios", tags=["usuarios"])
+ api_router.include_router(operational.usuario_roles_router, prefix="/usuario-roles", tags=["usuario-roles"])
++api_router.include_router(operational.torres_router, prefix="/torres", tags=["torres"])
+ api_router.include_router(operational.pisos_router, prefix="/pisos", tags=["pisos"])
+ api_router.include_router(operational.salas_espera_router, prefix="/salas-espera", tags=["salas-espera"])
+ api_router.include_router(operational.clusters_turnos_router, prefix="/clusters-turnos", tags=["clusters-turnos"])
+ api_router.include_router(operational.consultorios_router, prefix="/consultorios", tags=["consultorios"])
++api_router.include_router(
++    operational.consultas_clusters_consultorios_router,
++    prefix="/consultas-clusters-consultorios",
++    tags=["consultas-clusters-consultorios"],
++)
+ api_router.include_router(operational.medicos_router, prefix="/medicos", tags=["medicos"])
+ api_router.include_router(operational.operadores_router, prefix="/operadores", tags=["operadores"])
+ api_router.include_router(
+diff --git a/access-manager/backend/app/models/__init__.py b/access-manager/backend/app/models/__init__.py
+index 7a20c53..9cb0b62 100644
+--- a/access-manager/backend/app/models/__init__.py
++++ b/access-manager/backend/app/models/__init__.py
+@@ -16,6 +16,7 @@ from app.models.operational import (
+     Piso,
+     Role,
+     SalaEspera,
++    Torre,
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+@@ -44,6 +45,7 @@ __all__ = [
+     "QrToken",
+     "Role",
+     "SalaEspera",
++    "Torre",
+     "TurnoDisplay",
+     "Usuario",
+     "UsuarioRol",
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index b2c3523..1b81d6e 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -32,11 +32,26 @@ class UsuarioRol(TimestampMixin, Base):
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
++class Torre(TimestampMixin, Base):
++    __tablename__ = "torres"
++    __table_args__ = (
++        CheckConstraint("numero_pisos BETWEEN 1 AND 99", name="numero_pisos_range"),
++    )
++
++    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
++    complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
++    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
++    descripcion: Mapped[str | None] = mapped_column(Text)
++    numero_pisos: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
++    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
++
++
+ class Piso(TimestampMixin, Base):
+     __tablename__ = "pisos"
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
++    torre_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), nullable=False, index=True)
+     numero: Mapped[str] = mapped_column(String(40), nullable=False)
+     nombre_visible: Mapped[str] = mapped_column(String(180), nullable=False)
+     descripcion: Mapped[str | None] = mapped_column(Text)
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index d97abc9..04b602a 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -243,6 +243,7 @@ class TicketResponse(BaseModel):
+     turno: str
+     qr_payload: str
+     consultorio: str
++    torre: str
+     piso: str
+     hora: str
+ 
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 2da93dc..bd2ac16 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -54,8 +54,33 @@ class UsuarioRolRead(UsuarioRolCreate):
+     model_config = ConfigDict(from_attributes=True)
+ 
+ 
++class TorreCreate(BaseModel):
++    complejo_id: UUID
++    nombre: str = Field(min_length=1, max_length=180)
++    descripcion: str | None = None
++    numero_pisos: int = Field(default=1, ge=1, le=99)
++    activo: bool = True
++
++
++class TorreUpdate(BaseModel):
++    complejo_id: UUID | None = None
++    nombre: str | None = Field(default=None, min_length=1, max_length=180)
++    descripcion: str | None = None
++    numero_pisos: int | None = Field(default=None, ge=1, le=99)
++    activo: bool | None = None
++
++
++class TorreRead(TorreCreate):
++    id: UUID
++    created_at: datetime
++    updated_at: datetime
++
++    model_config = ConfigDict(from_attributes=True)
++
++
+ class PisoCreate(BaseModel):
+     complejo_id: UUID
++    torre_id: UUID
+     numero: str = Field(min_length=1, max_length=40)
+     nombre_visible: str = Field(min_length=1, max_length=180)
+     descripcion: str | None = None
+@@ -64,6 +89,7 @@ class PisoCreate(BaseModel):
+ 
+ class PisoUpdate(BaseModel):
+     complejo_id: UUID | None = None
++    torre_id: UUID | None = None
+     numero: str | None = Field(default=None, min_length=1, max_length=40)
+     nombre_visible: str | None = Field(default=None, min_length=1, max_length=180)
+     descripcion: str | None = None
+@@ -299,3 +325,36 @@ class AuditoriaRead(BaseModel):
+     created_at: datetime
+ 
+     model_config = ConfigDict(from_attributes=True)
++
++
++class ClusterConsultaRead(BaseModel):
++    id: UUID
++    nombre: str
++    descripcion: str | None = None
++    activo: bool
++
++
++class ConsultorioConsultaRead(BaseModel):
++    id: UUID
++    codigo: str
++    nombre_visible: str | None = None
++    consultorio: str
++    activo: bool
++
++
++class ConsultorioClusterConsultaRead(ConsultorioConsultaRead):
++    piso_id: UUID
++    piso: str
++    cluster_ids: list[UUID]
++    clusters: list[ClusterConsultaRead]
++
++
++class ClusterConConsultoriosRead(ClusterConsultaRead):
++    consultorios: list[ConsultorioConsultaRead]
++
++
++class PisoClusterConsultaRead(BaseModel):
++    piso_id: UUID
++    piso: str
++    clusters: list[ClusterConConsultoriosRead]
++    consultorios_sin_cluster: list[ConsultorioConsultaRead]
+diff --git a/access-manager/backend/app/services/reset_data.py b/access-manager/backend/app/services/reset_data.py
+index 919de1b..981aa6c 100644
+--- a/access-manager/backend/app/services/reset_data.py
++++ b/access-manager/backend/app/services/reset_data.py
+@@ -27,6 +27,7 @@ from app.models.operational import (
+     Piso,
+     Role,
+     SalaEspera,
++    Torre,
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+@@ -123,6 +124,7 @@ def main() -> None:
+             "clusters_turnos": delete_all(db, ClusterTurnos),
+             "salas_espera": delete_all(db, SalaEspera),
+             "pisos": delete_all(db, Piso),
++            "torres": delete_all(db, Torre),
+             "contactos_institucionales_complejos": delete_all(db, ContactoInstitucionalComplejo),
+             "contactos_institucionales": delete_all(db, ContactoInstitucional),
+             "complejos": delete_all(db, Complejo),
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 610ae8d..cdbeb7f 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -26,6 +26,7 @@ from app.models.operational import (
+     Piso,
+     Role,
+     SalaEspera,
++    Torre,
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+@@ -111,9 +112,20 @@ def main() -> None:
+             db.add(complejo)
+             db.flush()
+ 
+-        piso = db.execute(select(Piso).where(Piso.complejo_id == complejo.id, Piso.numero == "1")).scalar_one_or_none()
++        torre = db.execute(select(Torre).where(Torre.complejo_id == complejo.id, Torre.nombre == "Torre Demo")).scalar_one_or_none()
++        if torre is None:
++            torre = Torre(
++                complejo_id=complejo.id,
++                nombre="Torre Demo",
++                descripcion="Torre demo para desarrollo local.",
++                numero_pisos=20,
++            )
++            db.add(torre)
++            db.flush()
++
++        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == "1")).scalar_one_or_none()
+         if piso is None:
+-            piso = Piso(complejo_id=complejo.id, numero="1", nombre_visible="Piso 1")
++            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero="1", nombre_visible="Piso 1")
+             db.add(piso)
+             db.flush()
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 374e46e..9acb63e 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -238,12 +238,24 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+             },
+         )
+     )
++    torre = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "nombre": f"Torre Test {suffix}",
++                "numero_pisos": 20,
++            },
++        )
++    )
+     piso = assert_created(
+         client.post(
+             "/api/pisos",
+             headers=auth_headers,
+             json={
+                 "complejo_id": complejo["id"],
++                "torre_id": torre["id"],
+                 "numero": f"T-{suffix}",
+                 "nombre_visible": f"Piso Test {suffix}",
+             },
+@@ -321,6 +333,40 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+             },
+         )
+     )
++    consultorio_sin_cluster = assert_created(
++        client.post(
++            "/api/consultorios",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "codigo": f"SC-{suffix}",
++                "nombre_visible": f"Sin Cluster {suffix}",
++            },
++        )
++    )
++    assert consultorio_sin_cluster["cluster_ids"] == []
++
++    consulta_sin_cluster = client.get(
++        "/api/consultas-clusters-consultorios/por-consultorio",
++        headers=auth_headers,
++        params={"torre_id": torre["id"], "q": "Sin Cluster", "sin_cluster": True},
++    )
++    assert consulta_sin_cluster.status_code == 200, consulta_sin_cluster.text
++    assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
++    assert consulta_sin_cluster.json()[0]["clusters"] == []
++
++    consulta_por_piso = client.get(
++        "/api/consultas-clusters-consultorios/por-piso",
++        headers=auth_headers,
++        params={"torre_id": torre["id"], "piso_id": piso["id"]},
++    )
++    assert consulta_por_piso.status_code == 200, consulta_por_piso.text
++    piso_consulta = consulta_por_piso.json()[0]
++    assert piso_consulta["piso"] == piso["nombre_visible"]
++    assert piso_consulta["clusters"][0]["activo"] is True
++    assert piso_consulta["clusters"][0]["consultorios"][0]["consultorio"] == consultorio["nombre_visible"]
++    assert piso_consulta["consultorios_sin_cluster"][0]["consultorio"] == consultorio_sin_cluster["nombre_visible"]
+ 
+     medico_user = assert_created(
+         client.post(
+@@ -524,11 +570,23 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+             },
+         )
+     )
++    torre = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={"complejo_id": complejo["id"], "nombre": f"Torre Flujo {suffix}", "numero_pisos": 20},
++        )
++    )
+     piso = assert_created(
+         client.post(
+             "/api/pisos",
+             headers=auth_headers,
+-            json={"complejo_id": complejo["id"], "numero": f"F-{suffix}", "nombre_visible": f"Piso Flujo {suffix}"},
++            json={
++                "complejo_id": complejo["id"],
++                "torre_id": torre["id"],
++                "numero": f"F-{suffix}",
++                "nombre_visible": f"Piso Flujo {suffix}",
++            },
+         )
+     )
+     cluster = assert_created(
+@@ -642,6 +700,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     assert ticket_response.status_code == 200, ticket_response.text
+     ticket = ticket_response.json()
+     assert ticket["turno"] == cita["folio_turno"]
++    assert ticket["torre"] == torre["nombre"]
++    assert ticket["piso"] == piso["nombre_visible"]
+     assert ticket["qr_payload"]
+ 
+     roles_response = client.get("/api/roles", headers=auth_headers)
+@@ -703,6 +763,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     mobile_ticket_response = client.get(f"/api/mobile/citas/{cita['id']}/ticket", headers=recepcionista_headers)
+     assert mobile_ticket_response.status_code == 200, mobile_ticket_response.text
+     assert mobile_ticket_response.json()["turno"] == cita["folio_turno"]
++    assert mobile_ticket_response.json()["torre"] == torre["nombre"]
+ 
+     checkin_response = client.post(
+         "/api/mobile/qr/checkin",
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 2cd8ed1..4052933 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -98,10 +98,12 @@ watch(
+         <span class="nav-section">Instituciones</span>
+         <RouterLink to="/instituciones">Instituciones</RouterLink>
+         <RouterLink to="/complejos">Complejos</RouterLink>
++        <RouterLink to="/torres">Torres</RouterLink>
+         <RouterLink to="/pisos">Pisos</RouterLink>
+         <RouterLink to="/salas-espera">Salas de espera</RouterLink>
+         <RouterLink to="/clusters-turnos">Clústers</RouterLink>
+         <RouterLink to="/consultorios">Consultorios</RouterLink>
++        <RouterLink to="/consulta-clusters-consultorios">Consulta de clústers</RouterLink>
+         <span class="nav-section">Personas y roles</span>
+         <RouterLink to="/usuarios">Usuarios</RouterLink>
+         <RouterLink to="/busqueda-usuarios">Búsqueda de usuarios</RouterLink>
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index d880c66..68bfbf7 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -114,9 +114,21 @@ export type UsuarioRol = {
+   updated_at: string;
+ };
+ 
++export type Torre = {
++  id: string;
++  complejo_id: string;
++  nombre: string;
++  descripcion?: string | null;
++  numero_pisos: number;
++  activo: boolean;
++  created_at: string;
++  updated_at: string;
++};
++
+ export type Piso = {
+   id: string;
+   complejo_id: string;
++  torre_id: string;
+   numero: string;
+   nombre_visible: string;
+   descripcion?: string | null;
+@@ -388,10 +400,44 @@ export type TicketResponse = {
+   turno: string;
+   qr_payload: string;
+   consultorio: string;
++  torre: string;
+   piso: string;
+   hora: string;
+ };
+ 
++export type ClusterConsulta = {
++  id: string;
++  nombre: string;
++  descripcion?: string | null;
++  activo: boolean;
++};
++
++export type ConsultorioConsulta = {
++  id: string;
++  codigo: string;
++  nombre_visible?: string | null;
++  consultorio: string;
++  activo: boolean;
++};
++
++export type ConsultorioClusterConsulta = ConsultorioConsulta & {
++  piso_id: string;
++  piso: string;
++  cluster_ids: string[];
++  clusters: ClusterConsulta[];
++};
++
++export type ClusterConConsultorios = ClusterConsulta & {
++  consultorios: ConsultorioConsulta[];
++};
++
++export type PisoClusterConsulta = {
++  piso_id: string;
++  piso: string;
++  clusters: ClusterConConsultorios[];
++  consultorios_sin_cluster: ConsultorioConsulta[];
++};
++
+ export type CheckinResponse = {
+   resultado: string;
+   mensaje: string;
+@@ -583,6 +629,7 @@ export function deactivateComplejo(id: string) {
+ export const listUsuarios = () => listResource<Usuario>('usuarios');
+ export const listRoles = () => listResource<Role>('roles');
+ export const listUsuarioRoles = () => listResource<UsuarioRol>('usuario-roles');
++export const listTorres = () => listResource<Torre>('torres');
+ export const listPisos = () => listResource<Piso>('pisos');
+ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
+@@ -600,6 +647,21 @@ export const listAsignacionesOperador = () =>
+ export const listAuditoria = () => listResource<Auditoria>('auditoria');
+ export const listPacientes = () => listResource<Paciente>('pacientes');
+ 
++export function consultaClustersPorConsultorio(params: {
++  torre_id: string;
++  q?: string;
++  sin_cluster?: boolean;
++}) {
++  return apiFetch<ConsultorioClusterConsulta[]>(`/consultas-clusters-consultorios/por-consultorio${queryString(params)}`);
++}
++
++export function consultaClustersPorPiso(params: {
++  torre_id: string;
++  piso_id?: string;
++}) {
++  return apiFetch<PisoClusterConsulta[]>(`/consultas-clusters-consultorios/por-piso${queryString(params)}`);
++}
++
+ export type CitaFilters = {
+   fecha?: string;
+   complejo_id?: string;
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index c29615b..746ac56 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -5,6 +5,7 @@ export type LookupKey =
+   | 'complejos'
+   | 'usuarios'
+   | 'roles'
++  | 'torres'
+   | 'pisos'
+   | 'clusters-turnos'
+   | 'consultorios'
+@@ -128,6 +129,29 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
++  torres: {
++    key: 'torres',
++    title: 'Torres',
++    description: 'Torres asociadas a cada complejo y su capacidad de pisos.',
++    resource: 'torres',
++    entityName: 'torre',
++    activeField: 'activo',
++    institutionScoped: true,
++    showCancelOnCreate: true,
++    fields: [
++      { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
++      { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
++      { name: 'descripcion', label: 'Descripción', type: 'textarea' },
++      { name: 'numero_pisos', label: 'Pisos definidos', type: 'number', required: true, defaultValue: 1 },
++      { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
++    ],
++    columns: [
++      { name: 'nombre', label: 'Nombre' },
++      { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
++      { name: 'numero_pisos', label: 'Pisos definidos' },
++      { name: 'activo', label: 'Estado', boolean: true },
++    ],
++  },
+   pisos: {
+     key: 'pisos',
+     title: 'Pisos',
+@@ -139,14 +163,16 @@ export const catalogs: Record<string, CatalogConfig> = {
+     showCancelOnCreate: true,
+     fields: [
+       { name: 'complejo_id', label: 'Complejo', type: 'select', lookup: 'complejos', required: true },
+-      { name: 'numero', label: 'Número', required: true, maxLength: 40 },
++      { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true },
++      { name: 'numero', label: 'Código de piso', required: true, maxLength: 40 },
+       { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 180 },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+       { name: 'complejo_id', label: 'Complejo', lookup: 'complejos' },
+-      { name: 'numero', label: 'Número' },
++      { name: 'torre_id', label: 'Torre', lookup: 'torres' },
++      { name: 'numero', label: 'Código' },
+       { name: 'nombre_visible', label: 'Nombre visible' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+@@ -213,7 +239,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
+       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
+       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
+-      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },
++      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos' },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index e591faf..3047001 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -18,6 +18,7 @@ import ContactosInstitucionalesView from '../views/ContactosInstitucionalesView.
+ import ReportesView from '../views/ReportesView.vue';
+ import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
+ import KioskosView from '../views/KioskosView.vue';
++import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
+ 
+ const router = createRouter({
+   history: createWebHistory(),
+@@ -36,10 +37,12 @@ const router = createRouter({
+     { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
+     { path: '/roles', component: CatalogView, meta: { catalog: 'roles' } },
+     { path: '/usuario-roles', component: CatalogView, meta: { catalog: 'usuario-roles' } },
++    { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
+     { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
++    { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
+     { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
+     { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
+     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 053e9e5..23bcd46 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -14,13 +14,14 @@ import {
+   listPisos,
+   listResource,
+   listRoles,
++  listTorres,
+   listUsuarios,
+   updateResource,
+ } from '../api/client';
+ import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
+ 
+ type Row = Record<string, unknown> & { id: string };
+-type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; piso_id?: string };
++type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
+ type SelectOption = { value: string; label: string };
+ 
+ const route = useRoute();
+@@ -42,9 +43,21 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
+       label: item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre,
+     })),
+   complejos: async () => (await listComplejos()).map((item) => ({ id: item.id, label: item.nombre, institucion_id: item.institucion_id })),
++  torres: async () => (await listTorres()).map((item) => ({ id: item.id, label: item.nombre, complejo_id: item.complejo_id })),
+   usuarios: async () => (await listUsuarios()).map((item) => ({ id: item.id, label: `${item.nombre} (${item.email})` })),
+   roles: async () => (await listRoles()).map((item) => ({ id: item.id, label: item.codigo })),
+-  pisos: async () => (await listPisos()).map((item) => ({ id: item.id, label: item.nombre_visible, complejo_id: item.complejo_id })),
++  pisos: async () => {
++    const [pisos, torres] = await Promise.all([listPisos(), listTorres()]);
++    return pisos.map((item) => {
++      const torre = torres.find((row) => row.id === item.torre_id);
++      return {
++        id: item.id,
++        label: torre ? `${torre.nombre} · ${item.nombre_visible}` : item.nombre_visible,
++        complejo_id: item.complejo_id,
++        torre_id: item.torre_id,
++      };
++    });
++  },
+   'clusters-turnos': async () =>
+     (await listClustersTurnos()).map((item) => ({ id: item.id, label: item.nombre, complejo_id: item.complejo_id, piso_id: item.piso_id })),
+   consultorios: async () =>
+@@ -69,8 +82,16 @@ const scopedComplejos = computed(() => {
+ const scopedPisos = computed(() => {
+   if (!config.value.institutionScoped) return lookups.pisos ?? [];
+   const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
++  const torreId = typeof form.torre_id === 'string' ? form.torre_id : '';
+   if (!complejoId) return [];
+-  return (lookups.pisos ?? []).filter((item) => item.complejo_id === complejoId);
++  return (lookups.pisos ?? []).filter((item) => item.complejo_id === complejoId && (!torreId || item.torre_id === torreId));
++});
++
++const scopedTorres = computed(() => {
++  if (!config.value.institutionScoped) return lookups.torres ?? [];
++  const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
++  if (!complejoId) return [];
++  return (lookups.torres ?? []).filter((item) => item.complejo_id === complejoId);
+ });
+ 
+ const scopedClusters = computed(() => {
+@@ -108,10 +129,21 @@ function isScopedPisoField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.name === 'piso_id');
+ }
+ 
++function isScopedTorreField(field: CatalogField) {
++  return Boolean(config.value.institutionScoped && field.name === 'torre_id');
++}
++
+ function isScopedClusterField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
+ }
+ 
++function resetScopedTorre() {
++  if ('torre_id' in form) {
++    form.torre_id = '';
++  }
++  resetScopedPiso();
++}
++
+ function resetScopedPiso() {
+   if ('piso_id' in form) {
+     form.piso_id = '';
+@@ -135,7 +167,7 @@ function syncScopedInstitution() {
+   if (!scopedComplejos.value.some((item) => item.id === form.complejo_id)) {
+     form.complejo_id = '';
+     complexSearch.value = '';
+-    resetScopedPiso();
++    resetScopedTorre();
+   }
+ }
+ 
+@@ -143,6 +175,9 @@ function syncScopedComplex() {
+   if (!config.value.institutionScoped) return;
+   const match = findOptionByLabel(scopedComplejos.value, complexSearch.value);
+   form.complejo_id = match?.id ?? '';
++  if ('torre_id' in form && !scopedTorres.value.some((item) => item.id === form.torre_id)) {
++    resetScopedTorre();
++  }
+   if (!scopedPisos.value.some((item) => item.id === form.piso_id)) {
+     resetScopedPiso();
+   }
+@@ -256,7 +291,10 @@ function fieldValue(name: string) {
+ 
+ function updateField(name: string, event: Event) {
+   form[name] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
+-  if (config.value.institutionScoped && (name === 'piso_id' || name === 'complejo_id')) {
++  if (config.value.institutionScoped && name === 'torre_id' && !scopedPisos.value.some((item) => item.id === form.piso_id)) {
++    resetScopedPiso();
++  }
++  if (config.value.institutionScoped && (name === 'piso_id' || name === 'complejo_id' || name === 'torre_id')) {
+     pruneScopedClusters();
+   }
+ }
+@@ -470,6 +508,20 @@ onMounted(loadData);
+               <option v-for="item in scopedComplejos" :key="item.id" :value="item.label" />
+             </datalist>
+           </template>
++          <select
++            v-else-if="isScopedTorreField(field)"
++            :id="fieldId(field)"
++            :name="fieldName(field)"
++            :value="fieldValue(field.name)"
++            :required="field.required"
++            :disabled="!form.complejo_id"
++            @change="updateField(field.name, $event)"
++          >
++            <option v-if="!field.required" value="">Sin asignar</option>
++            <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
++              {{ item.label }}
++            </option>
++          </select>
+           <select
+             v-else-if="isScopedPisoField(field)"
+             :id="fieldId(field)"
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index ef9dc36..1fbb1ca 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -468,6 +468,7 @@ Turno {{ ticket.turno }}
+ [QR]
+ 
+ Consultorio {{ ticket.consultorio }}
++Torre {{ ticket.torre }}
+ {{ ticket.piso }}
+ Cita {{ ticket.hora }} hrs</pre>
+       <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>
+diff --git a/access-manager/frontend/src/views/ComplejosView.vue b/access-manager/frontend/src/views/ComplejosView.vue
+index bf6cb0b..eda681e 100644
+--- a/access-manager/frontend/src/views/ComplejosView.vue
++++ b/access-manager/frontend/src/views/ComplejosView.vue
+@@ -15,30 +15,32 @@ import {
+ const complejos = ref<Complejo[]>([]);
+ const instituciones = ref<Institucion[]>([]);
+ const selected = ref<Complejo | null>(null);
+-const institucionId = ref('');
+ const nombre = ref('');
+ const descripcion = ref('');
+ const direccion = ref('');
+ const telefono = ref('');
+ const zonaHoraria = ref('America/Mexico_City');
+ const activo = ref(true);
+-const filtroInstitucion = ref('');
+ const institucionFiltradaId = ref('');
+ const error = ref('');
+ const message = ref('');
+ const loading = ref(false);
+ const zonasHorarias = ref<string[]>([]);
+ 
++const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null);
++const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? '');
++
+ const complejosFiltrados = computed(() => {
+-  if (!institucionFiltradaId.value) return complejos.value;
+-  return complejos.value.filter((item) => item.institucion_id === institucionFiltradaId.value);
++  return complejos.value
++    .filter((item) => item.institucion_id === institucionFiltradaId.value)
++    .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
+ });
+ 
+ async function loadData() {
+   error.value = '';
+   try {
+     const [institucionesData, complejosData] = await Promise.all([
+-      listInstituciones(filtroInstitucion.value.trim() || undefined),
++      listInstituciones(),
+       listComplejos(),
+     ]);
+     instituciones.value = institucionesData;
+@@ -46,8 +48,8 @@ async function loadData() {
+     if (zonasHorarias.value.length === 0) {
+       zonasHorarias.value = await listZonasHorarias();
+     }
+-    if (!institucionId.value || !institucionesData.some((item) => item.id === institucionId.value)) {
+-      institucionId.value = institucionesData[0]?.id ?? '';
++    if (!institucionFiltradaId.value || !institucionesData.some((item) => item.id === institucionFiltradaId.value)) {
++      institucionFiltradaId.value = institucionesData[0]?.id ?? '';
+     }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar complejos.';
+@@ -56,7 +58,9 @@ async function loadData() {
+ 
+ function setForm(item?: Complejo | null) {
+   selected.value = item ?? null;
+-  institucionId.value = item?.institucion_id ?? instituciones.value[0]?.id ?? '';
++  if (item?.institucion_id) {
++    institucionFiltradaId.value = item.institucion_id;
++  }
+   nombre.value = item?.nombre ?? '';
+   descripcion.value = item?.descripcion ?? '';
+   direccion.value = item?.direccion ?? '';
+@@ -71,7 +75,7 @@ async function submit() {
+   loading.value = true;
+   try {
+     const data = {
+-      institucion_id: institucionId.value,
++      institucion_id: institucionFiltradaId.value,
+       nombre: nombre.value,
+       descripcion: descripcion.value || undefined,
+       direccion: direccion.value || undefined,
+@@ -116,10 +120,10 @@ async function setActive(item: Complejo, active: boolean) {
+   }
+ }
+ 
+-async function clearInstitutionFilter() {
+-  filtroInstitucion.value = '';
+-  institucionFiltradaId.value = '';
+-  await loadData();
++function syncFormWithInstitution() {
++  if (selected.value && selected.value.institucion_id !== institucionFiltradaId.value) {
++    setForm(null);
++  }
+ }
+ 
+ onMounted(loadData);
+@@ -135,17 +139,15 @@ onMounted(loadData);
+     </header>
+ 
+     <section class="panel">
+-      <form class="inline-actions" @submit.prevent="loadData">
+-        <input v-model="filtroInstitucion" class="narrow-input" placeholder="Buscar institución" />
+-        <button type="submit">Filtrar</button>
+-        <button class="secondary" type="button" @click="clearInstitutionFilter">Limpiar</button>
+-        <select v-model="institucionFiltradaId">
+-          <option value="">Todas las instituciones</option>
++      <div class="form-row">
++        <label for="filtro-institucion">Institución</label>
++        <select id="filtro-institucion" v-model="institucionFiltradaId" @change="syncFormWithInstitution">
++          <option value="" disabled>Seleccione institución</option>
+           <option v-for="item in instituciones" :key="item.id" :value="item.id">
+-            {{ item.nombre }}{{ item.razon_social ? ` · ${item.razon_social}` : '' }}
++            {{ item.nombre }}
+           </option>
+         </select>
+-      </form>
++      </div>
+     </section>
+ 
+     <div class="grid">
+@@ -153,12 +155,7 @@ onMounted(loadData);
+         <h2>{{ selected ? 'Editar complejo' : 'Crear complejo' }}</h2>
+         <div class="form-row">
+           <label for="institucion">Institución</label>
+-          <select id="institucion" v-model="institucionId" required>
+-            <option value="" disabled>Seleccione institución</option>
+-            <option v-for="item in instituciones" :key="item.id" :value="item.id">
+-              {{ item.nombre }}{{ item.razon_social ? ` · ${item.razon_social}` : '' }}
+-            </option>
+-          </select>
++          <input id="institucion" :value="selectedInstitutionName" readonly required />
+         </div>
+         <div class="form-row">
+           <label for="nombre">Nombre</label>
+@@ -190,7 +187,7 @@ onMounted(loadData);
+         <p v-if="message" class="message">{{ message }}</p>
+         <p v-if="error" class="error">{{ error }}</p>
+         <div class="actions-row">
+-          <button type="submit" :disabled="loading || instituciones.length === 0">
++          <button type="submit" :disabled="loading || !institucionFiltradaId">
+             {{ loading ? 'Guardando...' : '✓ Guardar' }}
+           </button>
+           <button class="danger solid" type="button" @click="setForm(null)">× Cancelar</button>
+diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+index a09574e..da00275 100644
+--- a/access-manager/mobile/lib/main.dart
++++ b/access-manager/mobile/lib/main.dart
+@@ -918,7 +918,7 @@ class TicketPreview extends StatelessWidget {
+             const SizedBox(height: 8),
+             Text('${ticket.encabezadoFecha} · ${ticket.leyenda}'),
+             Text('Turno ${ticket.turno}'),
+-            Text('${ticket.consultorio} · ${ticket.piso}'),
++            Text([ticket.consultorio, ticket.torre, ticket.piso].where((value) => value.isNotEmpty).join(' · ')),
+             Text('Hora ${ticket.hora}'),
+           ],
+         ),
+diff --git a/access-manager/mobile/lib/models.dart b/access-manager/mobile/lib/models.dart
+index b4aab3e..141419f 100644
+--- a/access-manager/mobile/lib/models.dart
++++ b/access-manager/mobile/lib/models.dart
+@@ -139,6 +139,7 @@ class TicketResponse {
+     required this.turno,
+     required this.qrPayload,
+     required this.consultorio,
++    required this.torre,
+     required this.piso,
+     required this.hora,
+   });
+@@ -148,6 +149,7 @@ class TicketResponse {
+   final String turno;
+   final String qrPayload;
+   final String consultorio;
++  final String torre;
+   final String piso;
+   final String hora;
+ 
+@@ -158,6 +160,7 @@ class TicketResponse {
+       turno: json['turno'] as String? ?? '',
+       qrPayload: json['qr_payload'] as String? ?? '',
+       consultorio: json['consultorio'] as String? ?? '',
++      torre: json['torre'] as String? ?? '',
+       piso: json['piso'] as String? ?? '',
+       hora: json['hora'] as String? ?? '',
+     );
+diff --git a/access-manager/mobile/lib/ticket_pdf.dart b/access-manager/mobile/lib/ticket_pdf.dart
+index bca47ce..ad39355 100644
+--- a/access-manager/mobile/lib/ticket_pdf.dart
++++ b/access-manager/mobile/lib/ticket_pdf.dart
+@@ -27,6 +27,7 @@ Future<Uint8List> buildTicketPdf(TicketResponse ticket) async {
+               pw.Text(ticket.turno, style: pw.TextStyle(fontSize: 34, fontWeight: pw.FontWeight.bold)),
+               pw.SizedBox(height: 6),
+               pw.Text(ticket.consultorio, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 13)),
++              if (ticket.torre.isNotEmpty) pw.Text(ticket.torre, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 11)),
+               pw.Text(ticket.piso, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 11)),
+               pw.Text('Hora ${ticket.hora}', style: const pw.TextStyle(fontSize: 11)),
+               pw.SizedBox(height: 10),
+diff --git a/subir_droplet.ps1 b/subir_droplet.ps1
+index d84729c..7e9fd18 100644
+--- a/subir_droplet.ps1
++++ b/subir_droplet.ps1
+@@ -206,7 +206,6 @@ try {
+             "docker compose build kiosk",
+             "docker compose build mobile-pwa",
+             "docker compose up -d postgres redis",
+-            'docker compose run --rm backend python -c "from app.core.config import get_settings; from urllib.parse import urlsplit; p=urlsplit(get_settings().database_url); print(\"DATABASE_URL host:\", p.hostname)"',
+             "docker compose run --rm backend uv run alembic upgrade head",
+             "docker compose up -d --force-recreate backend worker frontend kiosk mobile-pwa",
+             "docker compose up -d --force-recreate caddy || { docker compose logs --tail=120 backend; docker compose ps; exit 1; }",

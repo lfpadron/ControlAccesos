@@ -27,6 +27,7 @@ Future<Uint8List> buildTicketPdf(TicketResponse ticket) async {
               pw.Text(ticket.turno, style: pw.TextStyle(fontSize: 34, fontWeight: pw.FontWeight.bold)),
               pw.SizedBox(height: 6),
               pw.Text(ticket.consultorio, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 13)),
+              if (ticket.torre.isNotEmpty) pw.Text(ticket.torre, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 11)),
               pw.Text(ticket.piso, textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 11)),
               pw.Text('Hora ${ticket.hora}', style: const pw.TextStyle(fontSize: 11)),
               pw.SizedBox(height: 10),

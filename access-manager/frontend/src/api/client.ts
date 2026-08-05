@@ -114,9 +114,21 @@ export type UsuarioRol = {
   updated_at: string;
 };
 
+export type Torre = {
+  id: string;
+  complejo_id: string;
+  nombre: string;
+  descripcion?: string | null;
+  numero_pisos: number;
+  activo: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Piso = {
   id: string;
   complejo_id: string;
+  torre_id: string;
   numero: string;
   nombre_visible: string;
   descripcion?: string | null;
@@ -388,8 +400,42 @@ export type TicketResponse = {
   turno: string;
   qr_payload: string;
   consultorio: string;
+  torre: string;
   piso: string;
   hora: string;
+};
+
+export type ClusterConsulta = {
+  id: string;
+  nombre: string;
+  descripcion?: string | null;
+  activo: boolean;
+};
+
+export type ConsultorioConsulta = {
+  id: string;
+  codigo: string;
+  nombre_visible?: string | null;
+  consultorio: string;
+  activo: boolean;
+};
+
+export type ConsultorioClusterConsulta = ConsultorioConsulta & {
+  piso_id: string;
+  piso: string;
+  cluster_ids: string[];
+  clusters: ClusterConsulta[];
+};
+
+export type ClusterConConsultorios = ClusterConsulta & {
+  consultorios: ConsultorioConsulta[];
+};
+
+export type PisoClusterConsulta = {
+  piso_id: string;
+  piso: string;
+  clusters: ClusterConConsultorios[];
+  consultorios_sin_cluster: ConsultorioConsulta[];
 };
 
 export type CheckinResponse = {
@@ -583,6 +629,7 @@ export function deactivateComplejo(id: string) {
 export const listUsuarios = () => listResource<Usuario>('usuarios');
 export const listRoles = () => listResource<Role>('roles');
 export const listUsuarioRoles = () => listResource<UsuarioRol>('usuario-roles');
+export const listTorres = () => listResource<Torre>('torres');
 export const listPisos = () => listResource<Piso>('pisos');
 export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
 export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
@@ -599,6 +646,21 @@ export const listAsignacionesOperador = () =>
   listResource<AsignacionOperador>('asignaciones-operador');
 export const listAuditoria = () => listResource<Auditoria>('auditoria');
 export const listPacientes = () => listResource<Paciente>('pacientes');
+
+export function consultaClustersPorConsultorio(params: {
+  torre_id: string;
+  q?: string;
+  sin_cluster?: boolean;
+}) {
+  return apiFetch<ConsultorioClusterConsulta[]>(`/consultas-clusters-consultorios/por-consultorio${queryString(params)}`);
+}
+
+export function consultaClustersPorPiso(params: {
+  torre_id: string;
+  piso_id?: string;
+}) {
+  return apiFetch<PisoClusterConsulta[]>(`/consultas-clusters-consultorios/por-piso${queryString(params)}`);
+}
 
 export type CitaFilters = {
   fecha?: string;

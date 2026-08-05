@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -27,6 +27,7 @@ from app.models.operational import (
     Piso,
     Role,
     SalaEspera,
+    Torre,
     UsuarioRol,
 )
 from app.models.usuario import Usuario
@@ -38,9 +39,13 @@ from app.schemas.operational import (
     AsignacionOperadorRead,
     AsignacionOperadorUpdate,
     AuditoriaRead,
+    ClusterConConsultoriosRead,
+    ClusterConsultaRead,
     ClusterTurnosCreate,
     ClusterTurnosRead,
     ClusterTurnosUpdate,
+    ConsultorioClusterConsultaRead,
+    ConsultorioConsultaRead,
     ConsultorioCreate,
     ConsultorioRead,
     ConsultorioUpdate,
@@ -59,6 +64,10 @@ from app.schemas.operational import (
     SalaEsperaCreate,
     SalaEsperaRead,
     SalaEsperaUpdate,
+    PisoClusterConsultaRead,
+    TorreCreate,
+    TorreRead,
+    TorreUpdate,
     UsuarioRolCreate,
     UsuarioRolRead,
     UsuarioRolUpdate,
@@ -164,9 +173,48 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El complejo no pertenece a la institución indicada.")
 
 
-def validate_piso(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
+def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
+    query = select(func.count(Piso.id)).where(Piso.torre_id == torre_id)
+    if exclude_piso_id is not None:
+        query = query.where(Piso.id != exclude_piso_id)
+    return int(db.execute(query).scalar_one())
+
+
+def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     if data.get("complejo_id") is not None:
         exists_or_404(db, Complejo, data["complejo_id"], "Complejo")
+    if item is None:
+        return
+    current_floor_count = floor_count_for_torre(db, item.id)
+    if data.get("complejo_id") is not None and data["complejo_id"] != item.complejo_id and current_floor_count:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No se puede mover una torre que ya tiene pisos.",
+        )
+    if data.get("numero_pisos") is not None and current_floor_count > data["numero_pisos"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La torre ya tiene más pisos registrados que el nuevo límite.",
+        )
+
+
+def validate_piso(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+    complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+    torre_id = data.get("torre_id", getattr(item, "torre_id", None))
+    if complejo_id is not None:
+        exists_or_404(db, Complejo, complejo_id, "Complejo")
+    if torre_id is None:
+        return
+    torre = exists_or_404(db, Torre, torre_id, "Torre")
+    if complejo_id is not None and torre.complejo_id != complejo_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al complejo indicado.")
+    if item is None or item.torre_id != torre.id:
+        existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
+        if existing_count >= torre.numero_pisos:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="El número de pisos no puede exceder los definidos en la torre.",
+            )
 
 
 def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
@@ -199,7 +247,7 @@ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]
 
 def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
     if not cluster_ids:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
+        return
     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
     found = {cluster.id for cluster in clusters}
     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
@@ -287,8 +335,6 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None 
     cluster_ids = data.get("cluster_ids")
     if codigo is None or complejo_id is None:
         return
-    if item is None and cluster_ids is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
     if cluster_ids is None and item is not None:
         cluster_ids = cluster_ids_for_consultorio(db, item.id)
     if piso_id is not None:
@@ -530,6 +576,9 @@ usuarios_router = create_crud_router(
 usuario_roles_router = create_crud_router(
     CrudConfig(UsuarioRol, UsuarioRolCreate, UsuarioRolUpdate, UsuarioRolRead, "usuario_roles", "ROL_ASIGNADO", "ROL_ASIGNADO_EDITADO", "created_at", validator=validate_usuario_rol)
 )
+torres_router = create_crud_router(
+    CrudConfig(Torre, TorreCreate, TorreUpdate, TorreRead, "torres", "TORRE_CREADA", "TORRE_EDITADA", "nombre", validator=validate_torre)
+)
 pisos_router = create_crud_router(
     CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
 )
@@ -598,6 +647,149 @@ asignaciones_operador_router = create_crud_router(
         validator=validate_asignacion_operador,
     )
 )
+
+consultas_clusters_consultorios_router = APIRouter()
+
+
+def piso_label(piso: Piso) -> str:
+    return piso.nombre_visible or f"Piso {piso.numero}"
+
+
+def consultorio_label(item: Consultorio) -> str:
+    return item.nombre_visible or item.codigo
+
+
+def cluster_read(cluster: ClusterTurnos) -> ClusterConsultaRead:
+    return ClusterConsultaRead(
+        id=cluster.id,
+        nombre=cluster.nombre,
+        descripcion=cluster.descripcion,
+        activo=cluster.activo,
+    )
+
+
+def consultorio_read(item: Consultorio) -> ConsultorioConsultaRead:
+    return ConsultorioConsultaRead(
+        id=item.id,
+        codigo=item.codigo,
+        nombre_visible=item.nombre_visible,
+        consultorio=consultorio_label(item),
+        activo=item.activo,
+    )
+
+
+def clusters_for_consultorio(db: Session, consultorio_id: UUID) -> list[ClusterTurnos]:
+    return list(
+        db.execute(
+            select(ClusterTurnos)
+            .join(ConsultorioCluster, ConsultorioCluster.cluster_id == ClusterTurnos.id)
+            .where(ConsultorioCluster.consultorio_id == consultorio_id)
+            .order_by(ClusterTurnos.nombre)
+        ).scalars()
+    )
+
+
+@consultas_clusters_consultorios_router.get("/por-consultorio", response_model=list[ConsultorioClusterConsultaRead])
+def consulta_clusters_por_consultorio(
+    torre_id: UUID,
+    q: str | None = Query(default=None),
+    sin_cluster: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    _current_user: Usuario = AdminUser,
+) -> list[ConsultorioClusterConsultaRead]:
+    exists_or_404(db, Torre, torre_id, "Torre")
+    query = (
+        select(Consultorio, Piso)
+        .join(Piso, Piso.id == Consultorio.piso_id)
+        .where(Piso.torre_id == torre_id)
+    )
+    if q:
+        term = f"%{q.strip().lower()}%"
+        query = query.where(
+            or_(
+                func.lower(Consultorio.codigo).like(term),
+                func.lower(func.coalesce(Consultorio.nombre_visible, "")).like(term),
+            )
+        )
+    has_cluster = select(ConsultorioCluster.consultorio_id).where(ConsultorioCluster.consultorio_id == Consultorio.id).exists()
+    query = query.where(~has_cluster if sin_cluster else has_cluster)
+    response: list[ConsultorioClusterConsultaRead] = []
+    for consultorio, piso in db.execute(query.order_by(Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
+        clusters = clusters_for_consultorio(db, consultorio.id)
+        response.append(
+            ConsultorioClusterConsultaRead(
+                **consultorio_read(consultorio).model_dump(),
+                piso_id=piso.id,
+                piso=piso_label(piso),
+                cluster_ids=[cluster.id for cluster in clusters],
+                clusters=[cluster_read(cluster) for cluster in clusters],
+            )
+        )
+    return response
+
+
+@consultas_clusters_consultorios_router.get("/por-piso", response_model=list[PisoClusterConsultaRead])
+def consulta_clusters_por_piso(
+    torre_id: UUID,
+    piso_id: UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _current_user: Usuario = AdminUser,
+) -> list[PisoClusterConsultaRead]:
+    exists_or_404(db, Torre, torre_id, "Torre")
+    pisos_query = select(Piso).where(Piso.torre_id == torre_id)
+    if piso_id is not None:
+        pisos_query = pisos_query.where(Piso.id == piso_id)
+    pisos = list(db.execute(pisos_query.order_by(Piso.numero, Piso.nombre_visible)).scalars())
+    if piso_id is not None and not pisos:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Piso no encontrado en la torre indicada.")
+
+    response: list[PisoClusterConsultaRead] = []
+    for piso in pisos:
+        clusters = list(
+            db.execute(
+                select(ClusterTurnos)
+                .where(ClusterTurnos.piso_id == piso.id)
+                .order_by(ClusterTurnos.nombre)
+            ).scalars()
+        )
+        cluster_rows: list[ClusterConConsultoriosRead] = []
+        for cluster in clusters:
+            consultorios = list(
+                db.execute(
+                    select(Consultorio)
+                    .join(ConsultorioCluster, ConsultorioCluster.consultorio_id == Consultorio.id)
+                    .where(ConsultorioCluster.cluster_id == cluster.id)
+                    .order_by(Consultorio.nombre_visible, Consultorio.codigo)
+                ).scalars()
+            )
+            cluster_rows.append(
+                ClusterConConsultoriosRead(
+                    **cluster_read(cluster).model_dump(),
+                    consultorios=[consultorio_read(consultorio) for consultorio in consultorios],
+                )
+            )
+        unassigned = list(
+            db.execute(
+                select(Consultorio)
+                .where(
+                    Consultorio.piso_id == piso.id,
+                    ~select(ConsultorioCluster.consultorio_id)
+                    .where(ConsultorioCluster.consultorio_id == Consultorio.id)
+                    .exists(),
+                )
+                .order_by(Consultorio.nombre_visible, Consultorio.codigo)
+            ).scalars()
+        )
+        response.append(
+            PisoClusterConsultaRead(
+                piso_id=piso.id,
+                piso=piso_label(piso),
+                clusters=cluster_rows,
+                consultorios_sin_cluster=[consultorio_read(consultorio) for consultorio in unassigned],
+            )
+        )
+    return response
+
 
 auditoria_router = APIRouter()
 

@@ -98,10 +98,12 @@ watch(
         <span class="nav-section">Instituciones</span>
         <RouterLink to="/instituciones">Instituciones</RouterLink>
         <RouterLink to="/complejos">Complejos</RouterLink>
+        <RouterLink to="/torres">Torres</RouterLink>
         <RouterLink to="/pisos">Pisos</RouterLink>
         <RouterLink to="/salas-espera">Salas de espera</RouterLink>
         <RouterLink to="/clusters-turnos">Clústers</RouterLink>
         <RouterLink to="/consultorios">Consultorios</RouterLink>
+        <RouterLink to="/consulta-clusters-consultorios">Consulta de clústers</RouterLink>
         <span class="nav-section">Personas y roles</span>
         <RouterLink to="/usuarios">Usuarios</RouterLink>
         <RouterLink to="/busqueda-usuarios">Búsqueda de usuarios</RouterLink>
