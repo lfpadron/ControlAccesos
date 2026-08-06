@@ -133,6 +133,14 @@ nav a:hover {
   color: #ffffff;
 }
 
+nav a.disabled,
+nav a.disabled:hover {
+  background: transparent;
+  color: #65758a;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .nav-section {
   color: #7f94ad;
   font-size: 0.72rem;

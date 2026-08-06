@@ -12,6 +12,7 @@ class RoleCreate(BaseModel):
     codigo: str = Field(min_length=1, max_length=80)
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = None
+    permisos: dict[str, str] = Field(default_factory=dict)
     activo: bool = True
 
 
@@ -19,6 +20,7 @@ class RoleUpdate(BaseModel):
     codigo: str | None = Field(default=None, min_length=1, max_length=80)
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = None
+    permisos: dict[str, str] | None = None
     activo: bool | None = None
 
 
@@ -35,6 +37,10 @@ class UsuarioRolCreate(BaseModel):
     rol_id: UUID
     institucion_id: UUID | None = None
     complejo_id: UUID | None = None
+    torre_id: UUID | None = None
+    piso_id: UUID | None = None
+    consultorio_id: UUID | None = None
+    medico_id: UUID | None = None
     activo: bool = True
 
 
@@ -43,6 +49,10 @@ class UsuarioRolUpdate(BaseModel):
     rol_id: UUID | None = None
     institucion_id: UUID | None = None
     complejo_id: UUID | None = None
+    torre_id: UUID | None = None
+    piso_id: UUID | None = None
+    consultorio_id: UUID | None = None
+    medico_id: UUID | None = None
     activo: bool | None = None
 
 

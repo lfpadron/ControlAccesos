@@ -5,6 +5,9 @@ import DashboardView from '../views/DashboardView.vue';
 import InstitucionesView from '../views/InstitucionesView.vue';
 import ComplejosView from '../views/ComplejosView.vue';
 import CatalogView from '../views/CatalogView.vue';
+import RolesView from '../views/RolesView.vue';
+import UsuariosView from '../views/UsuariosView.vue';
+import UsuarioRolesView from '../views/UsuarioRolesView.vue';
 import PerfilView from '../views/PerfilView.vue';
 import AsignacionesView from '../views/AsignacionesView.vue';
 import AuditoriaView from '../views/AuditoriaView.vue';
@@ -34,9 +37,9 @@ const router = createRouter({
     { path: '/perfil', component: PerfilView },
     { path: '/instituciones', component: InstitucionesView },
     { path: '/complejos', component: ComplejosView },
-    { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
-    { path: '/roles', component: CatalogView, meta: { catalog: 'roles' } },
-    { path: '/usuario-roles', component: CatalogView, meta: { catalog: 'usuario-roles' } },
+    { path: '/usuarios', component: UsuariosView },
+    { path: '/roles', component: RolesView },
+    { path: '/usuario-roles', component: UsuarioRolesView },
     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
     { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },

@@ -76,6 +76,8 @@ class UsuarioRead(BaseModel):
     force_password_change: bool
     estado: str
     roles: list[str] = Field(default_factory=list)
+    role_codes: list[str] = Field(default_factory=list)
+    permisos: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

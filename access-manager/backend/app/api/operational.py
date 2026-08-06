@@ -76,6 +76,7 @@ from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
+ACCESS_LEVELS = {"sin", "consultar", "editar"}
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,16 @@ def validate_unique_role_code(db: Session, data: dict[str, Any], item: object | 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de rol ya existe.")
 
 
+def prepare_role_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "permisos" in data and data["permisos"] is not None:
+        data["permisos"] = {
+            str(screen): str(access)
+            for screen, access in data["permisos"].items()
+            if str(access) in ACCESS_LEVELS
+        }
+    return data
+
+
 def validate_unique_email(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     email = data.get("email")
     if email is None:
@@ -156,11 +167,15 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El email ya existe.")
 
 
-def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
-    usuario_id = data.get("usuario_id")
-    rol_id = data.get("rol_id")
-    institucion_id = data.get("institucion_id")
-    complejo_id = data.get("complejo_id")
+def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+    usuario_id = data.get("usuario_id", getattr(item, "usuario_id", None))
+    rol_id = data.get("rol_id", getattr(item, "rol_id", None))
+    institucion_id = data.get("institucion_id", getattr(item, "institucion_id", None))
+    complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+    torre_id = data.get("torre_id", getattr(item, "torre_id", None))
+    piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+    consultorio_id = data.get("consultorio_id", getattr(item, "consultorio_id", None))
+    medico_id = data.get("medico_id", getattr(item, "medico_id", None))
     if usuario_id is not None:
         exists_or_404(db, Usuario, usuario_id, "Usuario")
     if rol_id is not None:
@@ -171,6 +186,24 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
         complejo = exists_or_404(db, Complejo, complejo_id, "Campus")
         if institucion_id is not None and complejo.institucion_id != institucion_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El campus no pertenece a la institución indicada.")
+    if torre_id is not None:
+        torre = exists_or_404(db, Torre, torre_id, "Torre")
+        if complejo_id is not None and torre.complejo_id != complejo_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
+    if piso_id is not None:
+        piso = exists_or_404(db, Piso, piso_id, "Piso")
+        if complejo_id is not None and piso.complejo_id != complejo_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
+        if torre_id is not None and piso.torre_id != torre_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece a la torre indicada.")
+    if consultorio_id is not None:
+        consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
+        if complejo_id is not None and consultorio.complejo_id != complejo_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
+        if piso_id is not None and consultorio.piso_id != piso_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+    if medico_id is not None:
+        exists_or_404(db, Medico, medico_id, "Médico")
 
 
 def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
@@ -557,7 +590,19 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
 
 
 roles_router = create_crud_router(
-    CrudConfig(Role, RoleCreate, RoleUpdate, RoleRead, "roles", "ROL_CREADO", "ROL_EDITADO", "codigo", validator=validate_unique_role_code)
+    CrudConfig(
+        Role,
+        RoleCreate,
+        RoleUpdate,
+        RoleRead,
+        "roles",
+        "ROL_CREADO",
+        "ROL_EDITADO",
+        "codigo",
+        validator=validate_unique_role_code,
+        prepare_create=prepare_role_payload,
+        prepare_update=prepare_role_payload,
+    )
 )
 usuarios_router = create_crud_router(
     CrudConfig(

@@ -14,12 +14,92 @@ from app.services.audit_service import record_audit_event
 
 router = APIRouter()
 
+ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
+
+MENU_SCREEN_KEYS = [
+    "dashboard",
+    "perfil",
+    "instituciones",
+    "campus",
+    "torres",
+    "pisos",
+    "salas-espera",
+    "clusters-turnos",
+    "consultorios",
+    "consulta-clusters-consultorios",
+    "usuarios",
+    "busqueda-usuarios",
+    "roles",
+    "usuario-roles",
+    "medicos",
+    "operadores",
+    "pacientes",
+    "citas",
+    "citas-hoy",
+    "contactos-institucionales",
+    "asignaciones",
+    "pantallas-turnos",
+    "kioskos",
+    "turnos-llamados",
+    "reportes",
+    "auditoria",
+]
+
+
+def default_permissions_for_role(codigo: str) -> dict[str, str]:
+    if codigo == "ADMIN_SISTEMA":
+        return {screen: "editar" for screen in MENU_SCREEN_KEYS}
+    return {}
+
 
 def normalize_profile_email(value: object) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip().lower()
     return normalized or None
+
+
+def active_role_rows(db: Session, user: Usuario) -> list[Role]:
+    return list(
+        db.execute(
+            select(Role)
+            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
+            .where(
+                UsuarioRol.usuario_id == user.id,
+                UsuarioRol.activo.is_(True),
+                Role.activo.is_(True),
+            )
+            .order_by(Role.nombre, Role.codigo)
+        ).scalars()
+    )
+
+
+def role_labels_and_codes(roles: list[Role]) -> tuple[list[str], list[str]]:
+    labels: list[str] = []
+    codes: list[str] = []
+    seen_labels: set[str] = set()
+    seen_codes: set[str] = set()
+    for role in roles:
+        label = role.nombre or role.codigo
+        if label not in seen_labels:
+            labels.append(label)
+            seen_labels.add(label)
+        if role.codigo not in seen_codes:
+            codes.append(role.codigo)
+            seen_codes.add(role.codigo)
+    return labels, codes
+
+
+def merge_permissions(roles: list[Role]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for role in roles:
+        permissions = role.permisos or default_permissions_for_role(role.codigo)
+        for screen, access in permissions.items():
+            normalized = access if access in ACCESS_ORDER else "sin"
+            current = merged.get(screen, "sin")
+            if ACCESS_ORDER[normalized] > ACCESS_ORDER[current]:
+                merged[screen] = normalized
+    return merged
 
 
 def active_role_labels(db: Session, user: Usuario) -> list[str]:
@@ -44,7 +124,15 @@ def active_role_labels(db: Session, user: Usuario) -> list[str]:
 
 
 def user_read(db: Session, user: Usuario) -> UsuarioRead:
-    return UsuarioRead.model_validate(user).model_copy(update={"roles": active_role_labels(db, user)})
+    roles = active_role_rows(db, user)
+    labels, codes = role_labels_and_codes(roles)
+    return UsuarioRead.model_validate(user).model_copy(
+        update={
+            "roles": labels,
+            "role_codes": codes,
+            "permisos": merge_permissions(roles),
+        }
+    )
 
 
 @router.post("/login", response_model=TokenResponse)

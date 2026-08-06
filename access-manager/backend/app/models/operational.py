@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, time
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,7 @@ class Role(TimestampMixin, Base):
     codigo: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
+    permisos: Mapped[dict | None] = mapped_column(JSON, default=dict, server_default="{}")
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 
@@ -29,6 +30,10 @@ class UsuarioRol(TimestampMixin, Base):
     rol_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False, index=True)
     institucion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("instituciones.id"), index=True)
     complejo_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), index=True)
+    torre_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), index=True)
+    piso_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("pisos.id"), index=True)
+    consultorio_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("consultorios.id"), index=True)
+    medico_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("medicos.id"), index=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

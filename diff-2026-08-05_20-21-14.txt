@@ -1,0 +1,486 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 3067d27..cca39df 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -14,6 +14,43 @@ from app.services.audit_service import record_audit_event
+ 
+ router = APIRouter()
+ 
++ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
++
++MENU_SCREEN_KEYS = [
++    "dashboard",
++    "perfil",
++    "instituciones",
++    "campus",
++    "torres",
++    "pisos",
++    "salas-espera",
++    "clusters-turnos",
++    "consultorios",
++    "consulta-clusters-consultorios",
++    "usuarios",
++    "busqueda-usuarios",
++    "roles",
++    "usuario-roles",
++    "medicos",
++    "operadores",
++    "pacientes",
++    "citas",
++    "citas-hoy",
++    "contactos-institucionales",
++    "asignaciones",
++    "pantallas-turnos",
++    "kioskos",
++    "turnos-llamados",
++    "reportes",
++    "auditoria",
++]
++
++
++def default_permissions_for_role(codigo: str) -> dict[str, str]:
++    if codigo == "ADMIN_SISTEMA":
++        return {screen: "editar" for screen in MENU_SCREEN_KEYS}
++    return {}
++
+ 
+ def normalize_profile_email(value: object) -> str | None:
+     if value is None:
+@@ -22,6 +59,49 @@ def normalize_profile_email(value: object) -> str | None:
+     return normalized or None
+ 
+ 
++def active_role_rows(db: Session, user: Usuario) -> list[Role]:
++    return list(
++        db.execute(
++            select(Role)
++            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++            .where(
++                UsuarioRol.usuario_id == user.id,
++                UsuarioRol.activo.is_(True),
++                Role.activo.is_(True),
++            )
++            .order_by(Role.nombre, Role.codigo)
++        ).scalars()
++    )
++
++
++def role_labels_and_codes(roles: list[Role]) -> tuple[list[str], list[str]]:
++    labels: list[str] = []
++    codes: list[str] = []
++    seen_labels: set[str] = set()
++    seen_codes: set[str] = set()
++    for role in roles:
++        label = role.nombre or role.codigo
++        if label not in seen_labels:
++            labels.append(label)
++            seen_labels.add(label)
++        if role.codigo not in seen_codes:
++            codes.append(role.codigo)
++            seen_codes.add(role.codigo)
++    return labels, codes
++
++
++def merge_permissions(roles: list[Role]) -> dict[str, str]:
++    merged: dict[str, str] = {}
++    for role in roles:
++        permissions = role.permisos or default_permissions_for_role(role.codigo)
++        for screen, access in permissions.items():
++            normalized = access if access in ACCESS_ORDER else "sin"
++            current = merged.get(screen, "sin")
++            if ACCESS_ORDER[normalized] > ACCESS_ORDER[current]:
++                merged[screen] = normalized
++    return merged
++
++
+ def active_role_labels(db: Session, user: Usuario) -> list[str]:
+     rows = db.execute(
+         select(Role.nombre, Role.codigo)
+@@ -44,7 +124,15 @@ def active_role_labels(db: Session, user: Usuario) -> list[str]:
+ 
+ 
+ def user_read(db: Session, user: Usuario) -> UsuarioRead:
+-    return UsuarioRead.model_validate(user).model_copy(update={"roles": active_role_labels(db, user)})
++    roles = active_role_rows(db, user)
++    labels, codes = role_labels_and_codes(roles)
++    return UsuarioRead.model_validate(user).model_copy(
++        update={
++            "roles": labels,
++            "role_codes": codes,
++            "permisos": merge_permissions(roles),
++        }
++    )
+ 
+ 
+ @router.post("/login", response_model=TokenResponse)
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index f57ddc8..2005129 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -76,6 +76,7 @@ from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
++ACCESS_LEVELS = {"sin", "consultar", "editar"}
+ 
+ 
+ @dataclass(frozen=True)
+@@ -144,6 +145,16 @@ def validate_unique_role_code(db: Session, data: dict[str, Any], item: object |
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El código de rol ya existe.")
+ 
+ 
++def prepare_role_payload(data: dict[str, Any]) -> dict[str, Any]:
++    if "permisos" in data and data["permisos"] is not None:
++        data["permisos"] = {
++            str(screen): str(access)
++            for screen, access in data["permisos"].items()
++            if str(access) in ACCESS_LEVELS
++        }
++    return data
++
++
+ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     email = data.get("email")
+     if email is None:
+@@ -156,11 +167,15 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El email ya existe.")
+ 
+ 
+-def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None = None) -> None:
+-    usuario_id = data.get("usuario_id")
+-    rol_id = data.get("rol_id")
+-    institucion_id = data.get("institucion_id")
+-    complejo_id = data.get("complejo_id")
++def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None = None) -> None:
++    usuario_id = data.get("usuario_id", getattr(item, "usuario_id", None))
++    rol_id = data.get("rol_id", getattr(item, "rol_id", None))
++    institucion_id = data.get("institucion_id", getattr(item, "institucion_id", None))
++    complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
++    torre_id = data.get("torre_id", getattr(item, "torre_id", None))
++    piso_id = data.get("piso_id", getattr(item, "piso_id", None))
++    consultorio_id = data.get("consultorio_id", getattr(item, "consultorio_id", None))
++    medico_id = data.get("medico_id", getattr(item, "medico_id", None))
+     if usuario_id is not None:
+         exists_or_404(db, Usuario, usuario_id, "Usuario")
+     if rol_id is not None:
+@@ -171,6 +186,24 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], _item: object | None
+         complejo = exists_or_404(db, Complejo, complejo_id, "Campus")
+         if institucion_id is not None and complejo.institucion_id != institucion_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El campus no pertenece a la institución indicada.")
++    if torre_id is not None:
++        torre = exists_or_404(db, Torre, torre_id, "Torre")
++        if complejo_id is not None and torre.complejo_id != complejo_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
++    if piso_id is not None:
++        piso = exists_or_404(db, Piso, piso_id, "Piso")
++        if complejo_id is not None and piso.complejo_id != complejo_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece al campus indicado.")
++        if torre_id is not None and piso.torre_id != torre_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El piso no pertenece a la torre indicada.")
++    if consultorio_id is not None:
++        consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
++        if complejo_id is not None and consultorio.complejo_id != complejo_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
++        if piso_id is not None and consultorio.piso_id != piso_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
++    if medico_id is not None:
++        exists_or_404(db, Medico, medico_id, "Médico")
+ 
+ 
+ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
+@@ -557,7 +590,19 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+ 
+ 
+ roles_router = create_crud_router(
+-    CrudConfig(Role, RoleCreate, RoleUpdate, RoleRead, "roles", "ROL_CREADO", "ROL_EDITADO", "codigo", validator=validate_unique_role_code)
++    CrudConfig(
++        Role,
++        RoleCreate,
++        RoleUpdate,
++        RoleRead,
++        "roles",
++        "ROL_CREADO",
++        "ROL_EDITADO",
++        "codigo",
++        validator=validate_unique_role_code,
++        prepare_create=prepare_role_payload,
++        prepare_update=prepare_role_payload,
++    )
+ )
+ usuarios_router = create_crud_router(
+     CrudConfig(
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index 1b81d6e..c892988 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from datetime import date, time
+ import uuid
+ 
+-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, String, Text, Time, UniqueConstraint
++from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint
+ from sqlalchemy.dialects.postgresql import UUID
+ from sqlalchemy.orm import Mapped, mapped_column
+ 
+@@ -18,6 +18,7 @@ class Role(TimestampMixin, Base):
+     codigo: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+     descripcion: Mapped[str | None] = mapped_column(Text)
++    permisos: Mapped[dict | None] = mapped_column(JSON, default=dict, server_default="{}")
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+@@ -29,6 +30,10 @@ class UsuarioRol(TimestampMixin, Base):
+     rol_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False, index=True)
+     institucion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("instituciones.id"), index=True)
+     complejo_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), index=True)
++    torre_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), index=True)
++    piso_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("pisos.id"), index=True)
++    consultorio_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("consultorios.id"), index=True)
++    medico_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("medicos.id"), index=True)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index bd2ac16..c4e14d4 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -12,6 +12,7 @@ class RoleCreate(BaseModel):
+     codigo: str = Field(min_length=1, max_length=80)
+     nombre: str = Field(min_length=1, max_length=180)
+     descripcion: str | None = None
++    permisos: dict[str, str] = Field(default_factory=dict)
+     activo: bool = True
+ 
+ 
+@@ -19,6 +20,7 @@ class RoleUpdate(BaseModel):
+     codigo: str | None = Field(default=None, min_length=1, max_length=80)
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+     descripcion: str | None = None
++    permisos: dict[str, str] | None = None
+     activo: bool | None = None
+ 
+ 
+@@ -35,6 +37,10 @@ class UsuarioRolCreate(BaseModel):
+     rol_id: UUID
+     institucion_id: UUID | None = None
+     complejo_id: UUID | None = None
++    torre_id: UUID | None = None
++    piso_id: UUID | None = None
++    consultorio_id: UUID | None = None
++    medico_id: UUID | None = None
+     activo: bool = True
+ 
+ 
+@@ -43,6 +49,10 @@ class UsuarioRolUpdate(BaseModel):
+     rol_id: UUID | None = None
+     institucion_id: UUID | None = None
+     complejo_id: UUID | None = None
++    torre_id: UUID | None = None
++    piso_id: UUID | None = None
++    consultorio_id: UUID | None = None
++    medico_id: UUID | None = None
+     activo: bool | None = None
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index c8d97ea..7d85285 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -76,6 +76,8 @@ class UsuarioRead(BaseModel):
+     force_password_change: bool
+     estado: str
+     roles: list[str] = Field(default_factory=list)
++    role_codes: list[str] = Field(default_factory=list)
++    permisos: dict[str, str] = Field(default_factory=dict)
+     created_at: datetime
+     updated_at: datetime
+ 
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index ca04daf..2f39ff9 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -2,6 +2,7 @@
+ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+ import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client';
++import { canAccessPath } from './accessControl';
+ import astrogatoLogo from './astrogato-logo-v02.png';
+ import capitalHeaderLogo from './capital-logo-encabezado.png';
+ import capitalMenuLogo from './capital-logo-menu.png';
+@@ -62,6 +63,18 @@ function logout() {
+   router.push('/login');
+ }
+ 
++function canUse(path: string) {
++  return canAccessPath(currentUser.value, path);
++}
++
++function handleNav(event: MouseEvent, path: string, reset?: () => void) {
++  if (!canUse(path)) {
++    event.preventDefault();
++    return;
++  }
++  reset?.();
++}
++
+ watch(
+   () => route.fullPath,
+   () => {
+@@ -95,35 +108,35 @@ watch(
+       </div>
+       <nav>
+         <span class="nav-section">General</span>
+-        <RouterLink to="/dashboard">Dashboard</RouterLink>
+-        <RouterLink to="/perfil">Perfil</RouterLink>
++        <RouterLink to="/dashboard" :class="{ disabled: !canUse('/dashboard') }" :aria-disabled="!canUse('/dashboard')" @click="handleNav($event, '/dashboard')">Dashboard</RouterLink>
++        <RouterLink to="/perfil" :class="{ disabled: !canUse('/perfil') }" :aria-disabled="!canUse('/perfil')" @click="handleNav($event, '/perfil')">Perfil</RouterLink>
+         <span class="nav-section">Instituciones</span>
+-        <RouterLink to="/instituciones" @click="clearLocation">Instituciones</RouterLink>
+-        <RouterLink to="/complejos" @click="clearCampus">Campus</RouterLink>
+-        <RouterLink to="/torres" @click="clearTower">Torres</RouterLink>
+-        <RouterLink to="/pisos" @click="clearFloor">Pisos</RouterLink>
+-        <RouterLink to="/salas-espera">Salas de espera</RouterLink>
+-        <RouterLink to="/clusters-turnos">Clústers</RouterLink>
+-        <RouterLink to="/consultorios">Consultorios</RouterLink>
+-        <RouterLink to="/consulta-clusters-consultorios">Consulta de clústers</RouterLink>
++        <RouterLink to="/instituciones" :class="{ disabled: !canUse('/instituciones') }" :aria-disabled="!canUse('/instituciones')" @click="handleNav($event, '/instituciones', clearLocation)">Instituciones</RouterLink>
++        <RouterLink to="/complejos" :class="{ disabled: !canUse('/complejos') }" :aria-disabled="!canUse('/complejos')" @click="handleNav($event, '/complejos', clearCampus)">Campus</RouterLink>
++        <RouterLink to="/torres" :class="{ disabled: !canUse('/torres') }" :aria-disabled="!canUse('/torres')" @click="handleNav($event, '/torres', clearTower)">Torres</RouterLink>
++        <RouterLink to="/pisos" :class="{ disabled: !canUse('/pisos') }" :aria-disabled="!canUse('/pisos')" @click="handleNav($event, '/pisos', clearFloor)">Pisos</RouterLink>
++        <RouterLink to="/salas-espera" :class="{ disabled: !canUse('/salas-espera') }" :aria-disabled="!canUse('/salas-espera')" @click="handleNav($event, '/salas-espera')">Salas de espera</RouterLink>
++        <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
++        <RouterLink to="/consultorios" :class="{ disabled: !canUse('/consultorios') }" :aria-disabled="!canUse('/consultorios')" @click="handleNav($event, '/consultorios')">Consultorios</RouterLink>
++        <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+         <span class="nav-section">Personas y roles</span>
+-        <RouterLink to="/usuarios">Usuarios</RouterLink>
+-        <RouterLink to="/busqueda-usuarios">Búsqueda de usuarios</RouterLink>
+-        <RouterLink to="/roles">Roles</RouterLink>
+-        <RouterLink to="/usuario-roles">Roles de usuario</RouterLink>
+-        <RouterLink to="/medicos">Médicos</RouterLink>
+-        <RouterLink to="/operadores">Operadores</RouterLink>
++        <RouterLink to="/usuarios" :class="{ disabled: !canUse('/usuarios') }" :aria-disabled="!canUse('/usuarios')" @click="handleNav($event, '/usuarios')">Usuarios</RouterLink>
++        <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
++        <RouterLink to="/roles" :class="{ disabled: !canUse('/roles') }" :aria-disabled="!canUse('/roles')" @click="handleNav($event, '/roles')">Roles</RouterLink>
++        <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
++        <RouterLink to="/medicos" :class="{ disabled: !canUse('/medicos') }" :aria-disabled="!canUse('/medicos')" @click="handleNav($event, '/medicos')">Médicos</RouterLink>
++        <RouterLink to="/operadores" :class="{ disabled: !canUse('/operadores') }" :aria-disabled="!canUse('/operadores')" @click="handleNav($event, '/operadores')">Operadores</RouterLink>
+         <span class="nav-section">Operación</span>
+-        <RouterLink to="/pacientes">Pacientes</RouterLink>
+-        <RouterLink to="/citas">Citas</RouterLink>
+-        <RouterLink to="/citas/hoy">Citas de hoy</RouterLink>
+-        <RouterLink to="/contactos-institucionales">Contactos institucionales</RouterLink>
+-        <RouterLink to="/asignaciones">Asignaciones</RouterLink>
+-        <RouterLink to="/pantallas-turnos">Pantallas de turnos</RouterLink>
+-        <RouterLink to="/kioskos">Kioskos</RouterLink>
+-        <RouterLink to="/turnos-llamados">Turnos llamados</RouterLink>
+-        <RouterLink to="/reportes">Reportes</RouterLink>
+-        <RouterLink to="/auditoria">Auditoría</RouterLink>
++        <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
++        <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
++        <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
++        <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
++        <RouterLink to="/asignaciones" :class="{ disabled: !canUse('/asignaciones') }" :aria-disabled="!canUse('/asignaciones')" @click="handleNav($event, '/asignaciones')">Asignaciones</RouterLink>
++        <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
++        <RouterLink to="/kioskos" :class="{ disabled: !canUse('/kioskos') }" :aria-disabled="!canUse('/kioskos')" @click="handleNav($event, '/kioskos')">Kioskos</RouterLink>
++        <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
++        <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
++        <RouterLink to="/auditoria" :class="{ disabled: !canUse('/auditoria') }" :aria-disabled="!canUse('/auditoria')" @click="handleNav($event, '/auditoria')">Auditoría</RouterLink>
+       </nav>
+       <button v-if="getToken()" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+     </aside>
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 51a05ef..4fc4358 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -91,15 +91,20 @@ export type Usuario = {
+   force_password_change: boolean;
+   estado: string;
+   roles?: string[];
++  role_codes?: string[];
++  permisos?: Record<string, AccessLevel>;
+   created_at: string;
+   updated_at: string;
+ };
+ 
++export type AccessLevel = 'sin' | 'consultar' | 'editar';
++
+ export type Role = {
+   id: string;
+   codigo: string;
+   nombre: string;
+   descripcion?: string | null;
++  permisos: Record<string, AccessLevel>;
+   activo: boolean;
+   created_at: string;
+   updated_at: string;
+@@ -111,6 +116,10 @@ export type UsuarioRol = {
+   rol_id: string;
+   institucion_id?: string | null;
+   complejo_id?: string | null;
++  torre_id?: string | null;
++  piso_id?: string | null;
++  consultorio_id?: string | null;
++  medico_id?: string | null;
+   activo: boolean;
+   created_at: string;
+   updated_at: string;
+@@ -638,6 +647,12 @@ export function deactivateComplejo(id: string) {
+ export const listUsuarios = () => listResource<Usuario>('usuarios');
+ export const listRoles = () => listResource<Role>('roles');
+ export const listUsuarioRoles = () => listResource<UsuarioRol>('usuario-roles');
++export const createUsuario = (payload: Record<string, unknown>) => createResource<Usuario>('usuarios', payload);
++export const updateUsuario = (id: string, payload: Record<string, unknown>) => updateResource<Usuario>('usuarios', id, payload);
++export const createUsuarioRol = (payload: Record<string, unknown>) => createResource<UsuarioRol>('usuario-roles', payload);
++export const updateUsuarioRol = (id: string, payload: Record<string, unknown>) => updateResource<UsuarioRol>('usuario-roles', id, payload);
++export const createRole = (payload: Record<string, unknown>) => createResource<Role>('roles', payload);
++export const updateRole = (id: string, payload: Record<string, unknown>) => updateResource<Role>('roles', id, payload);
+ export const listTorres = () => listResource<Torre>('torres');
+ export const listPisos = () => listResource<Piso>('pisos');
+ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 3047001..ea71d11 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -5,6 +5,9 @@ import DashboardView from '../views/DashboardView.vue';
+ import InstitucionesView from '../views/InstitucionesView.vue';
+ import ComplejosView from '../views/ComplejosView.vue';
+ import CatalogView from '../views/CatalogView.vue';
++import RolesView from '../views/RolesView.vue';
++import UsuariosView from '../views/UsuariosView.vue';
++import UsuarioRolesView from '../views/UsuarioRolesView.vue';
+ import PerfilView from '../views/PerfilView.vue';
+ import AsignacionesView from '../views/AsignacionesView.vue';
+ import AuditoriaView from '../views/AuditoriaView.vue';
+@@ -34,9 +37,9 @@ const router = createRouter({
+     { path: '/perfil', component: PerfilView },
+     { path: '/instituciones', component: InstitucionesView },
+     { path: '/complejos', component: ComplejosView },
+-    { path: '/usuarios', component: CatalogView, meta: { catalog: 'usuarios' } },
+-    { path: '/roles', component: CatalogView, meta: { catalog: 'roles' } },
+-    { path: '/usuario-roles', component: CatalogView, meta: { catalog: 'usuario-roles' } },
++    { path: '/usuarios', component: UsuariosView },
++    { path: '/roles', component: RolesView },
++    { path: '/usuario-roles', component: UsuarioRolesView },
+     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
+     { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 4d56ae0..ba04d0a 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -133,6 +133,14 @@ nav a:hover {
+   color: #ffffff;
+ }
+ 
++nav a.disabled,
++nav a.disabled:hover {
++  background: transparent;
++  color: #65758a;
++  cursor: not-allowed;
++  opacity: 0.55;
++}
++
+ .nav-section {
+   color: #7f94ad;
+   font-size: 0.72rem;

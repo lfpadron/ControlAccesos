@@ -91,15 +91,20 @@ export type Usuario = {
   force_password_change: boolean;
   estado: string;
   roles?: string[];
+  role_codes?: string[];
+  permisos?: Record<string, AccessLevel>;
   created_at: string;
   updated_at: string;
 };
+
+export type AccessLevel = 'sin' | 'consultar' | 'editar';
 
 export type Role = {
   id: string;
   codigo: string;
   nombre: string;
   descripcion?: string | null;
+  permisos: Record<string, AccessLevel>;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -111,6 +116,10 @@ export type UsuarioRol = {
   rol_id: string;
   institucion_id?: string | null;
   complejo_id?: string | null;
+  torre_id?: string | null;
+  piso_id?: string | null;
+  consultorio_id?: string | null;
+  medico_id?: string | null;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -638,6 +647,12 @@ export function deactivateComplejo(id: string) {
 export const listUsuarios = () => listResource<Usuario>('usuarios');
 export const listRoles = () => listResource<Role>('roles');
 export const listUsuarioRoles = () => listResource<UsuarioRol>('usuario-roles');
+export const createUsuario = (payload: Record<string, unknown>) => createResource<Usuario>('usuarios', payload);
+export const updateUsuario = (id: string, payload: Record<string, unknown>) => updateResource<Usuario>('usuarios', id, payload);
+export const createUsuarioRol = (payload: Record<string, unknown>) => createResource<UsuarioRol>('usuario-roles', payload);
+export const updateUsuarioRol = (id: string, payload: Record<string, unknown>) => updateResource<UsuarioRol>('usuario-roles', id, payload);
+export const createRole = (payload: Record<string, unknown>) => createResource<Role>('roles', payload);
+export const updateRole = (id: string, payload: Record<string, unknown>) => updateResource<Role>('roles', id, payload);
 export const listTorres = () => listResource<Torre>('torres');
 export const listPisos = () => listResource<Piso>('pisos');
 export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
