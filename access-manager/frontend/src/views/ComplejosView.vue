@@ -23,7 +23,6 @@ const direccion = ref('');
 const telefono = ref('');
 const zonaHoraria = ref('America/Mexico_City');
 const activo = ref(true);
-const institucionFiltradaId = ref('');
 const error = ref('');
 const message = ref('');
 const loading = ref(false);
@@ -31,12 +30,16 @@ const zonasHorarias = ref<string[]>([]);
 
 const { clearCampus, locationContext, setCampus, setInstitution } = useLocationContext();
 
-const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null);
-const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? '');
+const activeInstitutionId = computed(() => {
+  const contextId = locationContext.institucion?.id ?? '';
+  return instituciones.value.some((item) => item.id === contextId) ? contextId : '';
+});
+const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === activeInstitutionId.value) ?? null);
+const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? locationContext.institucion?.label ?? '');
 
 const complejosFiltrados = computed(() => {
   return complejos.value
-    .filter((item) => item.institucion_id === institucionFiltradaId.value)
+    .filter((item) => item.institucion_id === activeInstitutionId.value)
     .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
 });
 
@@ -52,13 +55,8 @@ async function loadData() {
     if (zonasHorarias.value.length === 0) {
       zonasHorarias.value = await listZonasHorarias();
     }
-    if (!institucionFiltradaId.value || !institucionesData.some((item) => item.id === institucionFiltradaId.value)) {
-      const contextInstitution = institucionesData.find((item) => item.id === locationContext.institucion?.id);
-      institucionFiltradaId.value = contextInstitution?.id ?? institucionesData[0]?.id ?? '';
-      if (institucionFiltradaId.value) {
-        const institucion = institucionesData.find((item) => item.id === institucionFiltradaId.value);
-        if (institucion && !contextInstitution) setInstitution({ id: institucion.id, label: institucion.nombre });
-      }
+    if (locationContext.institucion && !institucionesData.some((item) => item.id === locationContext.institucion?.id)) {
+      setInstitution(null);
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar campus.';
@@ -67,9 +65,6 @@ async function loadData() {
 
 function setForm(item?: Complejo | null, syncLocation = true) {
   selected.value = item ?? null;
-  if (item?.institucion_id) {
-    institucionFiltradaId.value = item.institucion_id;
-  }
   nombre.value = item?.nombre ?? '';
   descripcion.value = item?.descripcion ?? '';
   direccion.value = item?.direccion ?? '';
@@ -94,7 +89,7 @@ async function submit() {
   loading.value = true;
   try {
     const data = {
-      institucion_id: institucionFiltradaId.value,
+      institucion_id: activeInstitutionId.value,
       nombre: nombre.value,
       descripcion: descripcion.value || undefined,
       direccion: direccion.value || undefined,
@@ -145,18 +140,6 @@ async function setActive(item: Complejo, active: boolean) {
   }
 }
 
-function syncFormWithInstitution() {
-  const institucion = instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null;
-  if (institucion) {
-    setInstitution({ id: institucion.id, label: institucion.nombre });
-  } else {
-    setInstitution(null);
-  }
-  if (selected.value && selected.value.institucion_id !== institucionFiltradaId.value) {
-    setForm(null, false);
-  }
-}
-
 onMounted(loadData);
 </script>
 
@@ -169,18 +152,6 @@ onMounted(loadData);
       </div>
     </header>
     <LocationContextField />
-
-    <section class="panel">
-      <div class="form-row">
-        <label for="filtro-institucion">Institución</label>
-        <select id="filtro-institucion" v-model="institucionFiltradaId" @change="syncFormWithInstitution">
-          <option value="">Seleccione institución</option>
-          <option v-for="item in instituciones" :key="item.id" :value="item.id">
-            {{ item.nombre }}
-          </option>
-        </select>
-      </div>
-    </section>
 
     <div class="grid">
       <form class="panel form compact-form" @submit.prevent="submit">
@@ -219,7 +190,7 @@ onMounted(loadData);
         <p v-if="message" class="message">{{ message }}</p>
         <p v-if="error" class="error">{{ error }}</p>
         <div class="actions-row">
-          <button type="submit" :disabled="loading || !institucionFiltradaId">
+          <button type="submit" :disabled="loading || !activeInstitutionId">
             {{ loading ? 'Guardando...' : '✓ Guardar' }}
           </button>
           <button class="danger solid" type="button" @click="setForm(null)">× Cancelar</button>

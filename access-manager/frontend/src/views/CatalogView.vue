@@ -38,7 +38,9 @@ const complexSearch = ref('');
 
 const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)]);
 const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+const lockedTowerKeys = new Set(['pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
 const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
+const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
 const {
   clearCampus,
   clearFloor,
@@ -127,7 +129,14 @@ const displayedRows = computed(() => rows.value.filter(rowMatchesLocation));
 const submitDisabled = computed(() => {
   if (loading.value) return true;
   if (!config.value.institutionScoped) return false;
-  return !selectedInstitutionId.value || !form.complejo_id;
+  if (!selectedInstitutionId.value || !form.complejo_id) return true;
+  return config.value.fields.some((field) => {
+    if (!field.required) return false;
+    if (field.name === 'torre_id' || field.name === 'piso_id') {
+      return !form[field.name];
+    }
+    return false;
+  });
 });
 
 function normalizeLabel(value: string) {
@@ -182,6 +191,8 @@ function currentTowerOption() {
 function currentFloorOption() {
   return floorForId(form.piso_id);
 }
+
+const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
 
 function setLocationFromForm() {
   if (!isLocationScoped.value) return;
@@ -275,12 +286,20 @@ function isScopedComplexField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.name === 'complejo_id');
 }
 
+function isLockedComplexField(field: CatalogField) {
+  return Boolean(isLocationScoped.value && isScopedComplexField(field));
+}
+
 function isScopedPisoField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.name === 'piso_id');
 }
 
 function isScopedTorreField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.name === 'torre_id');
+}
+
+function isLockedTorreField(field: CatalogField) {
+  return Boolean(isTowerLocked.value && isScopedTorreField(field));
 }
 
 function isScopedClusterField(field: CatalogField) {
@@ -676,6 +695,14 @@ onMounted(loadData);
         <div v-if="config.institutionScoped" class="form-row">
           <label for="catalog-institution">Institución</label>
           <input
+            v-if="isLocationScoped"
+            id="catalog-institution"
+            :value="institutionSearch"
+            readonly
+            required
+          />
+          <input
+            v-else
             id="catalog-institution"
             v-model="institutionSearch"
             list="catalog-institution-options"
@@ -691,6 +718,15 @@ onMounted(loadData);
           <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
           <template v-if="isScopedComplexField(field)">
             <input
+              v-if="isLockedComplexField(field)"
+              :id="fieldId(field)"
+              :name="fieldName(field)"
+              :value="complexSearch"
+              :required="field.required"
+              readonly
+            />
+            <input
+              v-else
               :id="fieldId(field)"
               v-model="complexSearch"
               list="catalog-complex-options"
@@ -704,20 +740,30 @@ onMounted(loadData);
               <option v-for="item in scopedComplejos" :key="item.id" :value="item.label" />
             </datalist>
           </template>
-          <select
-            v-else-if="isScopedTorreField(field)"
-            :id="fieldId(field)"
-            :name="fieldName(field)"
-            :value="fieldValue(field.name)"
-            :required="field.required"
-            :disabled="!form.complejo_id"
-            @change="updateField(field.name, $event)"
-          >
-            <option value="">{{ field.required ? 'Seleccione torre' : 'Sin asignar' }}</option>
-            <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
-              {{ item.label }}
-            </option>
-          </select>
+          <template v-else-if="isScopedTorreField(field)">
+            <input
+              v-if="isLockedTorreField(field)"
+              :id="fieldId(field)"
+              :name="fieldName(field)"
+              :value="currentTowerLabel"
+              :required="field.required"
+              readonly
+            />
+            <select
+              v-else
+              :id="fieldId(field)"
+              :name="fieldName(field)"
+              :value="fieldValue(field.name)"
+              :required="field.required"
+              :disabled="!form.complejo_id"
+              @change="updateField(field.name, $event)"
+            >
+              <option value="">{{ field.required ? 'Seleccione torre' : 'Sin asignar' }}</option>
+              <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
+                {{ item.label }}
+              </option>
+            </select>
+          </template>
           <select
             v-else-if="isScopedPisoField(field)"
             :id="fieldId(field)"

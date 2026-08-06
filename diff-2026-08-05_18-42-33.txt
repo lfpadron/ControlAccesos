@@ -1,0 +1,251 @@
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 65c6b03..db3d812 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -38,7 +38,9 @@ const complexSearch = ref('');
+ 
+ const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)]);
+ const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
++const lockedTowerKeys = new Set(['pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+ const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
++const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
+ const {
+   clearCampus,
+   clearFloor,
+@@ -127,7 +129,14 @@ const displayedRows = computed(() => rows.value.filter(rowMatchesLocation));
+ const submitDisabled = computed(() => {
+   if (loading.value) return true;
+   if (!config.value.institutionScoped) return false;
+-  return !selectedInstitutionId.value || !form.complejo_id;
++  if (!selectedInstitutionId.value || !form.complejo_id) return true;
++  return config.value.fields.some((field) => {
++    if (!field.required) return false;
++    if (field.name === 'torre_id' || field.name === 'piso_id') {
++      return !form[field.name];
++    }
++    return false;
++  });
+ });
+ 
+ function normalizeLabel(value: string) {
+@@ -183,6 +192,8 @@ function currentFloorOption() {
+   return floorForId(form.piso_id);
+ }
+ 
++const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
++
+ function setLocationFromForm() {
+   if (!isLocationScoped.value) return;
+   const institucion = currentInstitutionOption();
+@@ -275,6 +286,10 @@ function isScopedComplexField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.name === 'complejo_id');
+ }
+ 
++function isLockedComplexField(field: CatalogField) {
++  return Boolean(isLocationScoped.value && isScopedComplexField(field));
++}
++
+ function isScopedPisoField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.name === 'piso_id');
+ }
+@@ -283,6 +298,10 @@ function isScopedTorreField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.name === 'torre_id');
+ }
+ 
++function isLockedTorreField(field: CatalogField) {
++  return Boolean(isTowerLocked.value && isScopedTorreField(field));
++}
++
+ function isScopedClusterField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
+ }
+@@ -676,6 +695,14 @@ onMounted(loadData);
+         <div v-if="config.institutionScoped" class="form-row">
+           <label for="catalog-institution">Institución</label>
+           <input
++            v-if="isLocationScoped"
++            id="catalog-institution"
++            :value="institutionSearch"
++            readonly
++            required
++          />
++          <input
++            v-else
+             id="catalog-institution"
+             v-model="institutionSearch"
+             list="catalog-institution-options"
+@@ -691,6 +718,15 @@ onMounted(loadData);
+           <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
+           <template v-if="isScopedComplexField(field)">
+             <input
++              v-if="isLockedComplexField(field)"
++              :id="fieldId(field)"
++              :name="fieldName(field)"
++              :value="complexSearch"
++              :required="field.required"
++              readonly
++            />
++            <input
++              v-else
+               :id="fieldId(field)"
+               v-model="complexSearch"
+               list="catalog-complex-options"
+@@ -704,20 +740,30 @@ onMounted(loadData);
+               <option v-for="item in scopedComplejos" :key="item.id" :value="item.label" />
+             </datalist>
+           </template>
+-          <select
+-            v-else-if="isScopedTorreField(field)"
+-            :id="fieldId(field)"
+-            :name="fieldName(field)"
+-            :value="fieldValue(field.name)"
+-            :required="field.required"
+-            :disabled="!form.complejo_id"
+-            @change="updateField(field.name, $event)"
+-          >
+-            <option value="">{{ field.required ? 'Seleccione torre' : 'Sin asignar' }}</option>
+-            <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
+-              {{ item.label }}
+-            </option>
+-          </select>
++          <template v-else-if="isScopedTorreField(field)">
++            <input
++              v-if="isLockedTorreField(field)"
++              :id="fieldId(field)"
++              :name="fieldName(field)"
++              :value="currentTowerLabel"
++              :required="field.required"
++              readonly
++            />
++            <select
++              v-else
++              :id="fieldId(field)"
++              :name="fieldName(field)"
++              :value="fieldValue(field.name)"
++              :required="field.required"
++              :disabled="!form.complejo_id"
++              @change="updateField(field.name, $event)"
++            >
++              <option value="">{{ field.required ? 'Seleccione torre' : 'Sin asignar' }}</option>
++              <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
++                {{ item.label }}
++              </option>
++            </select>
++          </template>
+           <select
+             v-else-if="isScopedPisoField(field)"
+             :id="fieldId(field)"
+diff --git a/access-manager/frontend/src/views/ComplejosView.vue b/access-manager/frontend/src/views/ComplejosView.vue
+index 9e99cee..1777e11 100644
+--- a/access-manager/frontend/src/views/ComplejosView.vue
++++ b/access-manager/frontend/src/views/ComplejosView.vue
+@@ -23,7 +23,6 @@ const direccion = ref('');
+ const telefono = ref('');
+ const zonaHoraria = ref('America/Mexico_City');
+ const activo = ref(true);
+-const institucionFiltradaId = ref('');
+ const error = ref('');
+ const message = ref('');
+ const loading = ref(false);
+@@ -31,12 +30,16 @@ const zonasHorarias = ref<string[]>([]);
+ 
+ const { clearCampus, locationContext, setCampus, setInstitution } = useLocationContext();
+ 
+-const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null);
+-const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? '');
++const activeInstitutionId = computed(() => {
++  const contextId = locationContext.institucion?.id ?? '';
++  return instituciones.value.some((item) => item.id === contextId) ? contextId : '';
++});
++const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === activeInstitutionId.value) ?? null);
++const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? locationContext.institucion?.label ?? '');
+ 
+ const complejosFiltrados = computed(() => {
+   return complejos.value
+-    .filter((item) => item.institucion_id === institucionFiltradaId.value)
++    .filter((item) => item.institucion_id === activeInstitutionId.value)
+     .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
+ });
+ 
+@@ -52,13 +55,8 @@ async function loadData() {
+     if (zonasHorarias.value.length === 0) {
+       zonasHorarias.value = await listZonasHorarias();
+     }
+-    if (!institucionFiltradaId.value || !institucionesData.some((item) => item.id === institucionFiltradaId.value)) {
+-      const contextInstitution = institucionesData.find((item) => item.id === locationContext.institucion?.id);
+-      institucionFiltradaId.value = contextInstitution?.id ?? institucionesData[0]?.id ?? '';
+-      if (institucionFiltradaId.value) {
+-        const institucion = institucionesData.find((item) => item.id === institucionFiltradaId.value);
+-        if (institucion && !contextInstitution) setInstitution({ id: institucion.id, label: institucion.nombre });
+-      }
++    if (locationContext.institucion && !institucionesData.some((item) => item.id === locationContext.institucion?.id)) {
++      setInstitution(null);
+     }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar campus.';
+@@ -67,9 +65,6 @@ async function loadData() {
+ 
+ function setForm(item?: Complejo | null, syncLocation = true) {
+   selected.value = item ?? null;
+-  if (item?.institucion_id) {
+-    institucionFiltradaId.value = item.institucion_id;
+-  }
+   nombre.value = item?.nombre ?? '';
+   descripcion.value = item?.descripcion ?? '';
+   direccion.value = item?.direccion ?? '';
+@@ -94,7 +89,7 @@ async function submit() {
+   loading.value = true;
+   try {
+     const data = {
+-      institucion_id: institucionFiltradaId.value,
++      institucion_id: activeInstitutionId.value,
+       nombre: nombre.value,
+       descripcion: descripcion.value || undefined,
+       direccion: direccion.value || undefined,
+@@ -145,18 +140,6 @@ async function setActive(item: Complejo, active: boolean) {
+   }
+ }
+ 
+-function syncFormWithInstitution() {
+-  const institucion = instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null;
+-  if (institucion) {
+-    setInstitution({ id: institucion.id, label: institucion.nombre });
+-  } else {
+-    setInstitution(null);
+-  }
+-  if (selected.value && selected.value.institucion_id !== institucionFiltradaId.value) {
+-    setForm(null, false);
+-  }
+-}
+-
+ onMounted(loadData);
+ </script>
+ 
+@@ -170,18 +153,6 @@ onMounted(loadData);
+     </header>
+     <LocationContextField />
+ 
+-    <section class="panel">
+-      <div class="form-row">
+-        <label for="filtro-institucion">Institución</label>
+-        <select id="filtro-institucion" v-model="institucionFiltradaId" @change="syncFormWithInstitution">
+-          <option value="">Seleccione institución</option>
+-          <option v-for="item in instituciones" :key="item.id" :value="item.id">
+-            {{ item.nombre }}
+-          </option>
+-        </select>
+-      </div>
+-    </section>
+-
+     <div class="grid">
+       <form class="panel form compact-form" @submit.prevent="submit">
+         <h2>{{ selected ? 'Editar campus' : 'Crear campus' }}</h2>
+@@ -219,7 +190,7 @@ onMounted(loadData);
+         <p v-if="message" class="message">{{ message }}</p>
+         <p v-if="error" class="error">{{ error }}</p>
+         <div class="actions-row">
+-          <button type="submit" :disabled="loading || !institucionFiltradaId">
++          <button type="submit" :disabled="loading || !activeInstitutionId">
+             {{ loading ? 'Guardando...' : '✓ Guardar' }}
+           </button>
+           <button class="danger solid" type="button" @click="setForm(null)">× Cancelar</button>
