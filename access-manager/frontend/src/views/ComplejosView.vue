@@ -11,6 +11,8 @@ import {
   type Complejo,
   type Institucion,
 } from '../api/client';
+import LocationContextField from '../components/LocationContextField.vue';
+import { useLocationContext } from '../composables/useLocationContext';
 
 const complejos = ref<Complejo[]>([]);
 const instituciones = ref<Institucion[]>([]);
@@ -26,6 +28,8 @@ const error = ref('');
 const message = ref('');
 const loading = ref(false);
 const zonasHorarias = ref<string[]>([]);
+
+const { clearCampus, locationContext, setCampus, setInstitution } = useLocationContext();
 
 const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null);
 const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? '');
@@ -49,14 +53,19 @@ async function loadData() {
       zonasHorarias.value = await listZonasHorarias();
     }
     if (!institucionFiltradaId.value || !institucionesData.some((item) => item.id === institucionFiltradaId.value)) {
-      institucionFiltradaId.value = institucionesData[0]?.id ?? '';
+      const contextInstitution = institucionesData.find((item) => item.id === locationContext.institucion?.id);
+      institucionFiltradaId.value = contextInstitution?.id ?? institucionesData[0]?.id ?? '';
+      if (institucionFiltradaId.value) {
+        const institucion = institucionesData.find((item) => item.id === institucionFiltradaId.value);
+        if (institucion && !contextInstitution) setInstitution({ id: institucion.id, label: institucion.nombre });
+      }
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar campus.';
   }
 }
 
-function setForm(item?: Complejo | null) {
+function setForm(item?: Complejo | null, syncLocation = true) {
   selected.value = item ?? null;
   if (item?.institucion_id) {
     institucionFiltradaId.value = item.institucion_id;
@@ -67,6 +76,16 @@ function setForm(item?: Complejo | null) {
   telefono.value = item?.telefono ?? '';
   zonaHoraria.value = item?.zona_horaria ?? 'America/Mexico_City';
   activo.value = item?.activo ?? true;
+  if (!syncLocation) return;
+  if (item) {
+    const institucion = instituciones.value.find((row) => row.id === item.institucion_id) ?? null;
+    setCampus(
+      { id: item.id, label: item.nombre },
+      institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+    );
+  } else {
+    clearCampus();
+  }
 }
 
 async function submit() {
@@ -83,15 +102,21 @@ async function submit() {
       zona_horaria: zonaHoraria.value,
       activo: activo.value,
     };
+    let saved: Complejo;
     if (selected.value) {
-      await updateComplejo(selected.value.id, data);
+      saved = await updateComplejo(selected.value.id, data);
       message.value = 'Campus actualizado.';
     } else {
-      await createComplejo(data);
+      saved = await createComplejo(data);
       message.value = 'Campus creado.';
     }
+    const institucion = instituciones.value.find((row) => row.id === saved.institucion_id) ?? null;
+    setCampus(
+      { id: saved.id, label: saved.nombre },
+      institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+    );
     await loadData();
-    setForm(null);
+    setForm(null, false);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible guardar el campus.';
   } finally {
@@ -121,8 +146,14 @@ async function setActive(item: Complejo, active: boolean) {
 }
 
 function syncFormWithInstitution() {
+  const institucion = instituciones.value.find((item) => item.id === institucionFiltradaId.value) ?? null;
+  if (institucion) {
+    setInstitution({ id: institucion.id, label: institucion.nombre });
+  } else {
+    setInstitution(null);
+  }
   if (selected.value && selected.value.institucion_id !== institucionFiltradaId.value) {
-    setForm(null);
+    setForm(null, false);
   }
 }
 
@@ -137,12 +168,13 @@ onMounted(loadData);
         <p>Torres, edificios o sedes asociadas a una institución.</p>
       </div>
     </header>
+    <LocationContextField />
 
     <section class="panel">
       <div class="form-row">
         <label for="filtro-institucion">Institución</label>
         <select id="filtro-institucion" v-model="institucionFiltradaId" @change="syncFormWithInstitution">
-          <option value="" disabled>Seleccione institución</option>
+          <option value="">Seleccione institución</option>
           <option v-for="item in instituciones" :key="item.id" :value="item.id">
             {{ item.nombre }}
           </option>

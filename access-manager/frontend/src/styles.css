@@ -315,6 +315,12 @@ nav a:hover {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
+.location-context-field input {
+  background: #f7f9fc;
+  color: #405064;
+  font-weight: 650;
+}
+
 .compact-form,
 .institution-form {
   max-width: 420px;

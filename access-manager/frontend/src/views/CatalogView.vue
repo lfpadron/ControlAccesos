@@ -18,6 +18,8 @@ import {
   listUsuarios,
   updateResource,
 } from '../api/client';
+import LocationContextField from '../components/LocationContextField.vue';
+import { useLocationContext, type LocationSelection } from '../composables/useLocationContext';
 import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
 
 type Row = Record<string, unknown> & { id: string };
@@ -35,6 +37,19 @@ const institutionSearch = ref('');
 const complexSearch = ref('');
 
 const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)]);
+const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
+const {
+  clearCampus,
+  clearFloor,
+  clearLocation,
+  clearTower,
+  locationContext,
+  setCampus,
+  setFloor,
+  setInstitution,
+  setTower,
+} = useLocationContext();
 
 const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
   instituciones: async () =>
@@ -107,6 +122,8 @@ const scopedClusters = computed(() => {
   return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId && item.piso_id === pisoId);
 });
 
+const displayedRows = computed(() => rows.value.filter(rowMatchesLocation));
+
 const submitDisabled = computed(() => {
   if (loading.value) return true;
   if (!config.value.institutionScoped) return false;
@@ -124,6 +141,134 @@ function findOptionByLabel(options: LookupOption[], value: string) {
     const shortLabel = normalizeLabel(item.label.split(' · ')[0]);
     return label === normalized || shortLabel === normalized;
   });
+}
+
+function toSelection(option: LookupOption | null | undefined): LocationSelection | null {
+  return option ? { id: option.id, label: option.label } : null;
+}
+
+function optionById(key: LookupKey, id: unknown) {
+  return typeof id === 'string' ? (lookups[key] ?? []).find((item) => item.id === id) ?? null : null;
+}
+
+function institutionForCampus(campus: LookupOption | null | undefined) {
+  return optionById('instituciones', campus?.institucion_id);
+}
+
+function campusForId(id: unknown) {
+  return optionById('complejos', id);
+}
+
+function towerForId(id: unknown) {
+  return optionById('torres', id);
+}
+
+function floorForId(id: unknown) {
+  return optionById('pisos', id);
+}
+
+function currentInstitutionOption() {
+  return optionById('instituciones', selectedInstitutionId.value);
+}
+
+function currentCampusOption() {
+  return campusForId(form.complejo_id);
+}
+
+function currentTowerOption() {
+  return towerForId(form.torre_id);
+}
+
+function currentFloorOption() {
+  return floorForId(form.piso_id);
+}
+
+function setLocationFromForm() {
+  if (!isLocationScoped.value) return;
+  const institucion = currentInstitutionOption();
+  const campus = currentCampusOption();
+  const torre = currentTowerOption();
+  const piso = currentFloorOption();
+  if (!institucion) {
+    clearLocation();
+  } else if (!campus) {
+    setInstitution(toSelection(institucion));
+  } else if (!torre) {
+    setCampus(toSelection(campus), toSelection(institucion));
+  } else if (!piso) {
+    setTower(toSelection(torre), toSelection(campus), toSelection(institucion));
+  } else {
+    setFloor(toSelection(piso), toSelection(torre), toSelection(campus), toSelection(institucion));
+  }
+}
+
+function setLocationFromRow(row: Row) {
+  if (!isLocationScoped.value) return;
+  const campus = campusForId(row.complejo_id);
+  const institucion = institutionForCampus(campus);
+  const rowTorre =
+    config.value.key === 'torres'
+      ? ({ id: row.id, label: String(row.nombre ?? row.id), complejo_id: row.complejo_id as string } satisfies LookupOption)
+      : towerForId(row.torre_id ?? floorForId(row.piso_id)?.torre_id);
+  const rowPiso =
+    config.value.key === 'pisos'
+      ? ({ id: row.id, label: String(row.nombre_visible ?? row.numero ?? row.id), complejo_id: row.complejo_id as string, torre_id: row.torre_id as string } satisfies LookupOption)
+      : floorForId(row.piso_id);
+  if (!campus || !institucion) return;
+  if (rowPiso && rowTorre) {
+    setFloor(toSelection(rowPiso), toSelection(rowTorre), toSelection(campus), toSelection(institucion));
+  } else if (rowTorre) {
+    setTower(toSelection(rowTorre), toSelection(campus), toSelection(institucion));
+  } else {
+    setCampus(toSelection(campus), toSelection(institucion));
+  }
+}
+
+function applyLocationContextToForm() {
+  if (!config.value.institutionScoped || !isLocationScoped.value) return;
+  const institucion = optionById('instituciones', locationContext.institucion?.id);
+  const campus = campusForId(locationContext.campus?.id);
+  const campusMatchesInstitution = campus && (!institucion || campus.institucion_id === institucion.id);
+  institutionSearch.value = institucion?.label ?? '';
+  form.complejo_id = campusMatchesInstitution ? campus.id : '';
+  complexSearch.value = campusMatchesInstitution ? campus.label : '';
+
+  if ('torre_id' in form) {
+    const torre = towerForId(locationContext.torre?.id);
+    form.torre_id = torre && torre.complejo_id === form.complejo_id ? torre.id : '';
+  }
+  if ('piso_id' in form) {
+    const piso = floorForId(locationContext.piso?.id);
+    const pisoMatchesContext =
+      piso &&
+      piso.complejo_id === form.complejo_id &&
+      (!('torre_id' in form) || !form.torre_id || piso.torre_id === form.torre_id);
+    form.piso_id = pisoMatchesContext ? piso.id : '';
+    if (pisoMatchesContext && 'torre_id' in form && !form.torre_id) {
+      form.torre_id = piso.torre_id ?? '';
+    }
+  }
+}
+
+function rowMatchesLocation(row: Row) {
+  if (!isLocationScoped.value) return true;
+  const campusId = typeof row.complejo_id === 'string' ? row.complejo_id : '';
+  const campus = campusForId(campusId);
+  if (locationContext.institucion?.id && campus?.institucion_id !== locationContext.institucion.id) return false;
+  if (locationContext.campus?.id && campusId !== locationContext.campus.id) return false;
+
+  if (locationContext.torre?.id) {
+    if (config.value.key === 'torres') return row.id === locationContext.torre.id;
+    const torreId = typeof row.torre_id === 'string' ? row.torre_id : floorForId(row.piso_id)?.torre_id;
+    if (torreId !== locationContext.torre.id) return false;
+  }
+
+  if (locationContext.piso?.id && config.value.key !== 'torres') {
+    const pisoId = config.value.key === 'pisos' ? row.id : row.piso_id;
+    if (pisoId !== locationContext.piso.id) return false;
+  }
+
+  return true;
 }
 
 function isScopedComplexField(field: CatalogField) {
@@ -167,7 +312,13 @@ function syncScopedInstitution() {
     form.complejo_id = '';
     complexSearch.value = '';
     resetScopedTorre();
+    if (isLocationScoped.value) {
+      clearLocation();
+    }
     return;
+  }
+  if (isLocationScoped.value) {
+    setInstitution(toSelection(currentInstitutionOption()));
   }
   if (!scopedComplejos.value.some((item) => item.id === form.complejo_id)) {
     form.complejo_id = '';
@@ -180,6 +331,13 @@ function syncScopedComplex() {
   if (!config.value.institutionScoped) return;
   const match = findOptionByLabel(scopedComplejos.value, complexSearch.value);
   form.complejo_id = match?.id ?? '';
+  if (isLocationScoped.value) {
+    if (match) {
+      setCampus(toSelection(match), toSelection(currentInstitutionOption()));
+    } else {
+      clearCampus();
+    }
+  }
   if ('torre_id' in form && !scopedTorres.value.some((item) => item.id === form.torre_id)) {
     resetScopedTorre();
   }
@@ -221,7 +379,18 @@ function resetForm() {
   if (config.value.institutionScoped) {
     institutionSearch.value = '';
     complexSearch.value = '';
+    applyLocationContextToForm();
   }
+}
+
+function cancelForm() {
+  if (isLocationScoped.value && config.value.key === 'torres') {
+    clearTower();
+  }
+  if (isLocationScoped.value && config.value.key === 'pisos') {
+    clearFloor();
+  }
+  resetForm();
 }
 
 async function loadLookups() {
@@ -307,6 +476,15 @@ function updateField(name: string, event: Event) {
   if (config.value.institutionScoped && (name === 'piso_id' || name === 'complejo_id' || name === 'torre_id')) {
     pruneScopedClusters();
   }
+  if (config.value.institutionScoped && isLocationScoped.value) {
+    if (name === 'torre_id' && !form.torre_id) {
+      clearTower();
+    } else if (name === 'piso_id' && !form.piso_id) {
+      clearFloor();
+    } else {
+      setLocationFromForm();
+    }
+  }
 }
 
 function updateChecked(name: string, event: Event) {
@@ -383,12 +561,14 @@ async function submit() {
     return;
   }
   try {
+    let saved: Row;
     if (editingId.value) {
-      await updateResource<Row>(config.value.resource, editingId.value, payload);
+      saved = await updateResource<Row>(config.value.resource, editingId.value, payload);
     } else {
-      await createResource<Row>(config.value.resource, payload);
+      saved = await createResource<Row>(config.value.resource, payload);
     }
     await loadRows();
+    setLocationFromRow(saved);
     resetForm();
   } catch (err) {
     error.value = err instanceof Error ? err.message : `No fue posible guardar el ${config.value.entityName}.`;
@@ -410,6 +590,7 @@ function editRow(row: Row) {
   }
   setScopedLabelsFromComplex(form.complejo_id);
   setScopedTorreFromPiso(form.piso_id);
+  setLocationFromRow(row);
 }
 
 async function setActive(row: Row, active: boolean) {
@@ -487,6 +668,7 @@ onMounted(loadData);
         <p>{{ config.description }}</p>
       </div>
     </header>
+    <LocationContextField v-if="isLocationScoped" />
 
     <div class="grid catalog-grid">
       <form class="panel form" autocomplete="off" @submit.prevent="submit">
@@ -528,10 +710,10 @@ onMounted(loadData);
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
-            :disabled="!form.complejo_id || ('torre_id' in form && !form.torre_id)"
+            :disabled="!form.complejo_id"
             @change="updateField(field.name, $event)"
           >
-            <option v-if="!field.required" value="">Sin asignar</option>
+            <option value="">{{ field.required ? 'Seleccione torre' : 'Sin asignar' }}</option>
             <option v-for="item in scopedTorres" :key="item.id" :value="item.id">
               {{ item.label }}
             </option>
@@ -542,10 +724,10 @@ onMounted(loadData);
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :required="field.required"
-            :disabled="!form.complejo_id"
+            :disabled="!form.complejo_id || ('torre_id' in form && !form.torre_id)"
             @change="updateField(field.name, $event)"
           >
-            <option v-if="!field.required" value="">Sin asignar</option>
+            <option value="">{{ field.required ? 'Seleccione piso' : 'Sin asignar' }}</option>
             <option v-for="item in scopedPisos" :key="item.id" :value="item.id">
               {{ item.label }}
             </option>
@@ -628,7 +810,7 @@ onMounted(loadData);
         <p v-if="error" class="error">{{ error }}</p>
         <div class="actions-row">
           <button type="submit" :disabled="submitDisabled">{{ loading ? 'Guardando...' : '✓ Guardar' }}</button>
-          <button v-if="editingId || config.showCancelOnCreate" class="danger solid" type="button" @click="resetForm">× Cancelar</button>
+          <button v-if="editingId || config.showCancelOnCreate" class="danger solid" type="button" @click="cancelForm">× Cancelar</button>
         </div>
       </form>
 
@@ -643,7 +825,7 @@ onMounted(loadData);
             </thead>
             <tbody>
               <tr
-                v-for="row in rows"
+                v-for="row in displayedRows"
                 :key="row.id"
                 class="selectable-row"
                 :class="{ selected: editingId === row.id }"
@@ -678,7 +860,7 @@ onMounted(loadData);
             </tbody>
           </table>
         </div>
-        <p v-if="!loading && rows.length === 0" class="message">No hay registros para mostrar.</p>
+        <p v-if="!loading && displayedRows.length === 0" class="message">No hay registros para mostrar.</p>
       </section>
     </div>
   </section>

@@ -8,6 +8,8 @@ import {
   updateInstitucion,
   type Institucion,
 } from '../api/client';
+import LocationContextField from '../components/LocationContextField.vue';
+import { useLocationContext } from '../composables/useLocationContext';
 
 const instituciones = ref<Institucion[]>([]);
 const selected = ref<Institucion | null>(null);
@@ -22,11 +24,19 @@ const form = reactive({
   notas: '',
 });
 
-function setForm(item?: Institucion | null) {
+const { clearLocation, setInstitution } = useLocationContext();
+
+function setForm(item?: Institucion | null, syncLocation = true) {
   selected.value = item ?? null;
   form.nombre = item?.nombre ?? '';
   form.razon_social = item?.razon_social ?? '';
   form.notas = item?.notas ?? '';
+  if (!syncLocation) return;
+  if (item) {
+    setInstitution({ id: item.id, label: item.nombre });
+  } else {
+    clearLocation();
+  }
 }
 
 async function loadData(q = filtro.value) {
@@ -52,13 +62,14 @@ async function submit() {
       notas: form.notas || null,
     };
     if (selected.value) {
-      await updateInstitucion(selected.value.id, payload);
+      const saved = await updateInstitucion(selected.value.id, payload);
+      setInstitution({ id: saved.id, label: saved.nombre });
       message.value = 'Institución actualizada.';
     } else {
       await createInstitucion(payload);
       message.value = 'Institución creada.';
     }
-    setForm(null);
+    setForm(null, false);
     await loadData();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible guardar la institución.';
@@ -96,6 +107,7 @@ onMounted(() => loadData());
         <p>Base para operar múltiples organizaciones desde una misma plataforma.</p>
       </div>
     </header>
+    <LocationContextField />
 
     <section class="panel">
       <form class="inline-actions" @submit.prevent="loadData()">

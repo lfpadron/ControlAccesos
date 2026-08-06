@@ -20,6 +20,8 @@ import {
   type PublicDisplayTurno,
   type Torre,
 } from '../api/client';
+import LocationContextField from '../components/LocationContextField.vue';
+import { useLocationContext } from '../composables/useLocationContext';
 import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
 
 type NumericInput = number | '';
@@ -63,6 +65,18 @@ const clusterSearch = ref('');
 const error = ref('');
 const message = ref('');
 const loading = ref(false);
+
+const {
+  clearCampus,
+  clearFloor,
+  clearLocation,
+  clearTower,
+  locationContext,
+  setCampus,
+  setFloor,
+  setInstitution,
+  setTower,
+} = useLocationContext();
 
 const form = reactive<PantallaForm>({
   institucion_id: '',
@@ -125,6 +139,7 @@ const filteredClusters = computed(() => {
 });
 
 const selectedClusters = computed(() => clusters.value.filter((item) => form.cluster_ids.includes(item.id)));
+const displayedPantallas = computed(() => pantallas.value.filter(matchesActiveLocation));
 
 const previewStyle = computed(() => ({
   backgroundColor: form.color_fondo || 'black',
@@ -162,6 +177,67 @@ function clusterLabel(item: ClusterTurnos) {
   return item.nombre;
 }
 
+function selectedInstitution() {
+  return instituciones.value.find((item) => item.id === form.institucion_id) ?? null;
+}
+
+function selectedCampus() {
+  return complejos.value.find((item) => item.id === form.complejo_id) ?? null;
+}
+
+function selectedTower() {
+  return torres.value.find((item) => item.id === form.torre_id) ?? null;
+}
+
+function selectedFloor() {
+  return pisos.value.find((item) => item.id === form.piso_id) ?? null;
+}
+
+function persistLocationFromForm() {
+  const institucion = selectedInstitution();
+  const campus = selectedCampus();
+  const torre = selectedTower();
+  const piso = selectedFloor();
+  if (!institucion) {
+    clearLocation();
+  } else if (!campus) {
+    setInstitution({ id: institucion.id, label: institucion.nombre });
+  } else if (!torre) {
+    setCampus({ id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
+  } else if (!piso) {
+    setTower({ id: torre.id, label: torre.nombre }, { id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
+  } else {
+    setFloor(
+      { id: piso.id, label: piso.nombre_visible },
+      { id: torre.id, label: torre.nombre },
+      { id: campus.id, label: campus.nombre },
+      { id: institucion.id, label: institucion.nombre },
+    );
+  }
+}
+
+function matchesActiveLocation(item: PantallaTurnos) {
+  const campus = complejos.value.find((row) => row.id === item.complejo_id);
+  const piso = pisos.value.find((row) => row.id === item.piso_id);
+  if (locationContext.institucion?.id && campus?.institucion_id !== locationContext.institucion.id) return false;
+  if (locationContext.campus?.id && item.complejo_id !== locationContext.campus.id) return false;
+  if (locationContext.torre?.id && piso?.torre_id !== locationContext.torre.id) return false;
+  if (locationContext.piso?.id && item.piso_id !== locationContext.piso.id) return false;
+  return true;
+}
+
+function applyLocationDefaults() {
+  const contextInstitution = instituciones.value.find((item) => item.id === locationContext.institucion?.id);
+  form.institucion_id = contextInstitution?.id ?? instituciones.value[0]?.id ?? '';
+  const contextCampus = filteredComplejos.value.find((item) => item.id === locationContext.campus?.id);
+  form.complejo_id = contextCampus?.id ?? filteredComplejos.value[0]?.id ?? '';
+  const contextTower = filteredTorres.value.find((item) => item.id === locationContext.torre?.id);
+  form.torre_id = contextTower?.id ?? filteredTorres.value[0]?.id ?? '';
+  const contextFloor = filteredPisos.value.find((item) => item.id === locationContext.piso?.id);
+  form.piso_id = contextFloor?.id ?? filteredPisos.value[0]?.id ?? '';
+  persistLocationFromForm();
+}
+
 function setAutocompleteLabels() {
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
@@ -177,19 +253,32 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) 
 function syncInstitution() {
   const match = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel);
   form.institucion_id = match?.id ?? '';
+  if (match) {
+    setInstitution({ id: match.id, label: match.nombre });
+  } else {
+    clearLocation();
+  }
   syncComplex();
 }
 
 function syncComplex() {
   const match = matchByLabel(filteredComplejos.value, complejoSearch.value, complejoLabel);
   form.complejo_id = match?.id ?? '';
+  if (match) {
+    const institucion = selectedInstitution();
+    setCampus({ id: match.id, label: match.nombre }, institucion ? { id: institucion.id, label: institucion.nombre } : undefined);
+  } else {
+    clearCampus();
+  }
   if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
     form.torre_id = '';
     torreSearch.value = '';
+    clearTower();
   }
   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
     form.piso_id = '';
     pisoSearch.value = '';
+    clearFloor();
   }
   form.cluster_ids = form.cluster_ids.filter((id) => filteredClusters.value.some((item) => item.id === id));
 }
@@ -197,9 +286,21 @@ function syncComplex() {
 function syncTorre() {
   const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
   form.torre_id = match?.id ?? '';
+  if (match) {
+    const campus = selectedCampus();
+    const institucion = selectedInstitution();
+    setTower(
+      { id: match.id, label: match.nombre },
+      campus ? { id: campus.id, label: campus.nombre } : undefined,
+      institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+    );
+  } else {
+    clearTower();
+  }
   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
     form.piso_id = '';
     pisoSearch.value = '';
+    clearFloor();
   }
   form.cluster_ids = form.cluster_ids.filter((id) => filteredClusters.value.some((item) => item.id === id));
 }
@@ -207,6 +308,19 @@ function syncTorre() {
 function syncPiso() {
   const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
   form.piso_id = match?.id ?? '';
+  if (match) {
+    const torre = selectedTower();
+    const campus = selectedCampus();
+    const institucion = selectedInstitution();
+    setFloor(
+      { id: match.id, label: match.nombre_visible },
+      torre ? { id: torre.id, label: torre.nombre } : undefined,
+      campus ? { id: campus.id, label: campus.nombre } : undefined,
+      institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+    );
+  } else {
+    clearFloor();
+  }
   form.cluster_ids = form.cluster_ids.filter((id) => filteredClusters.value.some((item) => item.id === id));
 }
 
@@ -259,10 +373,7 @@ async function loadData() {
 function resetForm() {
   selected.value = null;
   turnos.value = [];
-  form.institucion_id = instituciones.value[0]?.id ?? '';
-  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
-  form.torre_id = filteredTorres.value[0]?.id ?? '';
-  form.piso_id = filteredPisos.value[0]?.id ?? '';
+  applyLocationDefaults();
   form.cluster_ids = [];
   clusterSearch.value = '';
   setAutocompleteLabels();
@@ -293,6 +404,7 @@ function setForm(item: PantallaTurnos) {
   form.piso_id = item.piso_id ?? '';
   form.cluster_ids = [...(item.cluster_ids ?? [])];
   setAutocompleteLabels();
+  persistLocationFromForm();
   clusterSearch.value = '';
   form.codigo_dispositivo = item.codigo_dispositivo;
   form.token = '';
@@ -444,6 +556,7 @@ onMounted(loadData);
       </div>
       <button class="secondary" type="button" @click="loadData">Actualizar</button>
     </header>
+    <LocationContextField />
 
     <div class="grid catalog-grid">
       <form class="panel form" @submit.prevent="submit">
@@ -684,7 +797,7 @@ onMounted(loadData);
             </thead>
             <tbody>
               <tr
-                v-for="pantalla in pantallas"
+                v-for="pantalla in displayedPantallas"
                 :key="pantalla.id"
                 class="selectable-row"
                 :class="{ selected: selected?.id === pantalla.id }"
@@ -715,7 +828,7 @@ onMounted(loadData);
             </tbody>
           </table>
         </div>
-        <p v-if="!loading && pantallas.length === 0" class="message">No hay pantallas para mostrar.</p>
+        <p v-if="!loading && displayedPantallas.length === 0" class="message">No hay pantallas para mostrar.</p>
       </section>
     </div>
 

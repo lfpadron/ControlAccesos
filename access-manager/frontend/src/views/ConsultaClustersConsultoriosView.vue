@@ -14,6 +14,8 @@ import {
   type PisoClusterConsulta,
   type Torre,
 } from '../api/client';
+import LocationContextField from '../components/LocationContextField.vue';
+import { useLocationContext } from '../composables/useLocationContext';
 
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
@@ -23,6 +25,8 @@ const porConsultorio = ref<ConsultorioClusterConsulta[]>([]);
 const porPiso = ref<PisoClusterConsulta[]>([]);
 const loading = ref(false);
 const error = ref('');
+
+const { clearFloor, clearLocation, locationContext, setCampus, setFloor, setInstitution, setTower } = useLocationContext();
 
 const filters = reactive({
   institucion_id: '',
@@ -43,6 +47,11 @@ const scopedPisos = computed(() =>
   filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : [],
 );
 
+const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === filters.institucion_id) ?? null);
+const selectedCampus = computed(() => complejos.value.find((item) => item.id === filters.complejo_id) ?? null);
+const selectedTower = computed(() => torres.value.find((item) => item.id === filters.torre_id) ?? null);
+const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
+
 function clusterNames(item: ConsultorioClusterConsulta) {
   return item.clusters.length
     ? item.clusters.map((cluster) => `${cluster.nombre} (${cluster.activo ? 'Activo' : 'Inactivo'})`).join(', ')
@@ -50,6 +59,15 @@ function clusterNames(item: ConsultorioClusterConsulta) {
 }
 
 function syncInstitution() {
+  const institucion = selectedInstitution.value;
+  if (!institucion) {
+    clearLocation();
+    filters.complejo_id = '';
+    filters.torre_id = '';
+    filters.piso_id = '';
+    return;
+  }
+  setInstitution({ id: institucion.id, label: institucion.nombre });
   if (!scopedComplejos.value.some((item) => item.id === filters.complejo_id)) {
     filters.complejo_id = scopedComplejos.value[0]?.id ?? '';
   }
@@ -57,6 +75,17 @@ function syncInstitution() {
 }
 
 function syncComplex() {
+  const campus = selectedCampus.value;
+  if (!campus) {
+    filters.torre_id = '';
+    filters.piso_id = '';
+    setInstitution(selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : null);
+    return;
+  }
+  setCampus(
+    { id: campus.id, label: campus.nombre },
+    selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
+  );
   if (!scopedTorres.value.some((item) => item.id === filters.torre_id)) {
     filters.torre_id = scopedTorres.value[0]?.id ?? '';
   }
@@ -64,9 +93,54 @@ function syncComplex() {
 }
 
 function syncTorre() {
+  const torre = selectedTower.value;
+  if (!torre) {
+    filters.piso_id = '';
+    setCampus(
+      selectedCampus.value ? { id: selectedCampus.value.id, label: selectedCampus.value.nombre } : null,
+      selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
+    );
+    return;
+  }
+  setTower(
+    { id: torre.id, label: torre.nombre },
+    selectedCampus.value ? { id: selectedCampus.value.id, label: selectedCampus.value.nombre } : undefined,
+    selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
+  );
   if (!scopedPisos.value.some((item) => item.id === filters.piso_id)) {
     filters.piso_id = '';
   }
+}
+
+function syncPiso() {
+  if (!filters.piso_id) {
+    clearFloor();
+    return;
+  }
+  const piso = selectedFloor.value;
+  if (!piso) {
+    clearFloor();
+    return;
+  }
+  setFloor(
+    { id: piso.id, label: piso.nombre_visible },
+    selectedTower.value ? { id: selectedTower.value.id, label: selectedTower.value.nombre } : undefined,
+    selectedCampus.value ? { id: selectedCampus.value.id, label: selectedCampus.value.nombre } : undefined,
+    selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
+  );
+}
+
+function applyLocationDefaults() {
+  const contextInstitution = instituciones.value.find((item) => item.id === locationContext.institucion?.id);
+  filters.institucion_id = contextInstitution?.id ?? instituciones.value[0]?.id ?? '';
+  const contextCampus = scopedComplejos.value.find((item) => item.id === locationContext.campus?.id);
+  filters.complejo_id = contextCampus?.id ?? scopedComplejos.value[0]?.id ?? '';
+  const contextTower = scopedTorres.value.find((item) => item.id === locationContext.torre?.id);
+  filters.torre_id = contextTower?.id ?? scopedTorres.value[0]?.id ?? '';
+  const contextFloor = scopedPisos.value.find((item) => item.id === locationContext.piso?.id);
+  filters.piso_id = contextFloor?.id ?? '';
+  syncInstitution();
+  syncPiso();
 }
 
 async function loadData() {
@@ -83,8 +157,7 @@ async function loadData() {
     complejos.value = complejosData;
     torres.value = torresData;
     pisos.value = pisosData;
-    filters.institucion_id ||= instituciones.value[0]?.id ?? '';
-    syncInstitution();
+    applyLocationDefaults();
     await consultar();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar la consulta.';
@@ -134,30 +207,34 @@ onMounted(loadData);
       </div>
       <button class="secondary" type="button" @click="loadData">Actualizar</button>
     </header>
+    <LocationContextField />
 
     <section class="panel">
       <div class="form-grid">
         <div class="form-row">
           <label for="consulta-institucion">Institución</label>
           <select id="consulta-institucion" v-model="filters.institucion_id" @change="syncInstitution(); consultar()">
+            <option value="">Seleccione institución</option>
             <option v-for="item in instituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>
         <div class="form-row">
           <label for="consulta-complejo">Campus</label>
           <select id="consulta-complejo" v-model="filters.complejo_id" :disabled="!filters.institucion_id" @change="syncComplex(); consultar()">
+            <option value="">Seleccione campus</option>
             <option v-for="item in scopedComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>
         <div class="form-row">
           <label for="consulta-torre">Torre</label>
           <select id="consulta-torre" v-model="filters.torre_id" :disabled="!filters.complejo_id" @change="syncTorre(); consultar()">
+            <option value="">Seleccione torre</option>
             <option v-for="item in scopedTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>
         <div class="form-row">
           <label for="consulta-piso">Piso</label>
-          <select id="consulta-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="consultar">
+          <select id="consulta-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="syncPiso(); consultar()">
             <option value="">Todos los pisos</option>
             <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ item.nombre_visible }}</option>
           </select>
