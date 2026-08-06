@@ -1,0 +1,33 @@
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 5ab4bb4..ca04daf 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -5,11 +5,13 @@ import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client
+ import astrogatoLogo from './astrogato-logo-v02.png';
+ import capitalHeaderLogo from './capital-logo-encabezado.png';
+ import capitalMenuLogo from './capital-logo-menu.png';
++import { useLocationContext } from './composables/useLocationContext';
+ 
+ const router = useRouter();
+ const route = useRoute();
+ const fullscreen = computed(() => Boolean(route.meta.fullscreen));
+ const currentUser = ref<Usuario | null>(null);
++const { clearCampus, clearFloor, clearLocation, clearTower } = useLocationContext();
+ const showUserBadge = computed(() => Boolean(getToken() && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
+ const footerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+ const footerClockFormatter = new Intl.DateTimeFormat('es-MX', {
+@@ -96,10 +98,10 @@ watch(
+         <RouterLink to="/dashboard">Dashboard</RouterLink>
+         <RouterLink to="/perfil">Perfil</RouterLink>
+         <span class="nav-section">Instituciones</span>
+-        <RouterLink to="/instituciones">Instituciones</RouterLink>
+-        <RouterLink to="/complejos">Campus</RouterLink>
+-        <RouterLink to="/torres">Torres</RouterLink>
+-        <RouterLink to="/pisos">Pisos</RouterLink>
++        <RouterLink to="/instituciones" @click="clearLocation">Instituciones</RouterLink>
++        <RouterLink to="/complejos" @click="clearCampus">Campus</RouterLink>
++        <RouterLink to="/torres" @click="clearTower">Torres</RouterLink>
++        <RouterLink to="/pisos" @click="clearFloor">Pisos</RouterLink>
+         <RouterLink to="/salas-espera">Salas de espera</RouterLink>
+         <RouterLink to="/clusters-turnos">Clústers</RouterLink>
+         <RouterLink to="/consultorios">Consultorios</RouterLink>
