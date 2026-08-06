@@ -1,0 +1,35 @@
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index ea71d11..59dc753 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -26,7 +26,7 @@ import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultor
+ const router = createRouter({
+   history: createWebHistory(),
+   routes: [
+-    { path: '/', redirect: '/dashboard' },
++    { path: '/', redirect: '/instituciones' },
+     { path: '/login', component: LoginView, meta: { public: true } },
+     {
+       path: '/display/:codigo_dispositivo',
+@@ -77,7 +77,7 @@ router.beforeEach(async (to) => {
+       return '/perfil';
+     }
+     if (to.path === '/login') {
+-      return user.force_password_change ? '/perfil' : '/dashboard';
++      return user.force_password_change ? '/perfil' : '/instituciones';
+     }
+   } catch {
+     clearToken();
+diff --git a/access-manager/frontend/src/views/LoginView.vue b/access-manager/frontend/src/views/LoginView.vue
+index 147223a..4f9b8cd 100644
+--- a/access-manager/frontend/src/views/LoginView.vue
++++ b/access-manager/frontend/src/views/LoginView.vue
+@@ -16,7 +16,7 @@ async function submit() {
+     const response = await login(email.value.trim(), password.value);
+     setToken(response.access_token);
+     const user = await getCurrentUser();
+-    router.push(user.force_password_change ? '/perfil' : '/dashboard');
++    router.push(user.force_password_change ? '/perfil' : '/instituciones');
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';
+   } finally {

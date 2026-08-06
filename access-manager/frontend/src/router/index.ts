@@ -26,7 +26,7 @@ import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultor
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/dashboard' },
+    { path: '/', redirect: '/instituciones' },
     { path: '/login', component: LoginView, meta: { public: true } },
     {
       path: '/display/:codigo_dispositivo',
@@ -77,7 +77,7 @@ router.beforeEach(async (to) => {
       return '/perfil';
     }
     if (to.path === '/login') {
-      return user.force_password_change ? '/perfil' : '/dashboard';
+      return user.force_password_change ? '/perfil' : '/instituciones';
     }
   } catch {
     clearToken();
