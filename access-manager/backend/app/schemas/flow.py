@@ -48,7 +48,7 @@ class PacienteBase(BaseModel):
 
 
 class PacienteCreate(PacienteBase):
-    pass
+    medico_id: UUID
 
 
 class PacienteUpdate(BaseModel):
@@ -72,6 +72,7 @@ class PacienteUpdate(BaseModel):
 class PacienteRead(PacienteBase):
     id: UUID
     folio_paciente: str
+    medico_ids: list[UUID] = Field(default_factory=list)
     desactivado_en: datetime | None = None
     marcado_borrado_en: datetime | None = None
     created_at: datetime

@@ -17,7 +17,7 @@ from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComp
 from app.models.usuario import Usuario  # noqa: F401
 from app.models.auditoria import Auditoria  # noqa: F401
 from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay  # noqa: F401
-from app.models.flow import Cita, EventoLlegada, Paciente, QrToken  # noqa: F401
+from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken  # noqa: F401
 from app.models.operational import (  # noqa: F401
     AsignacionMedicoConsultorio,
     AsignacionOperador,

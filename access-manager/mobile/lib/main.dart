@@ -138,7 +138,7 @@ class _AccessMobileAppState extends State<AccessMobileApp> {
     final deviceId = _deviceId;
 
     return MaterialApp(
-      title: 'Llegada de pacientes',
+      title: 'Capital Medical Center',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF145C8F)),
@@ -241,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Image.asset(
-                    'assets/clinicas-alfa-logo.png',
+                    'assets/capital-logo-menu.png',
                     height: 92,
                     fit: BoxFit.cover,
                   ),

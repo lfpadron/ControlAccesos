@@ -311,6 +311,14 @@ nav a.disabled:hover {
   gap: 0.8rem;
 }
 
+.fieldset-reset {
+  border: 0;
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+  padding: 0;
+}
+
 .form h2,
 .panel h2 {
   font-size: 1.05rem;

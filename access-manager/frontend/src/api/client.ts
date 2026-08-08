@@ -331,6 +331,7 @@ export type TurnoDisplayReciente = {
 export type Paciente = {
   id: string;
   folio_paciente: string;
+  medico_ids?: string[];
   nombre?: string | null;
   nombre_preferido?: string | null;
   apellido_paterno?: string | null;
@@ -669,7 +670,7 @@ export const listAsignacionesMedicoConsultorio = () =>
 export const listAsignacionesOperador = () =>
   listResource<AsignacionOperador>('asignaciones-operador');
 export const listAuditoria = () => listResource<Auditoria>('auditoria');
-export const listPacientes = () => listResource<Paciente>('pacientes');
+export const listPacientes = (params: { medico_id: string }) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
 
 export function consultaClustersPorConsultorio(params: {
   torre_id: string;
@@ -711,34 +712,34 @@ function queryString(params: Record<string, string | number | boolean | null | u
 export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
 export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
 
-export function searchPacientes(q: string) {
-  return apiFetch<Paciente[]>(`/pacientes/buscar?q=${encodeURIComponent(q)}`);
+export function searchPacientes(q: string, medicoId: string) {
+  return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
 }
 
-export function createPaciente(payload: Partial<Paciente>) {
+export function createPaciente(payload: Partial<Paciente> & { medico_id: string }) {
   return apiFetch<Paciente>('/pacientes', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
-export function updatePaciente(id: string, payload: Partial<Paciente>) {
-  return apiFetch<Paciente>(`/pacientes/${id}`, {
+export function updatePaciente(id: string, medicoId: string, payload: Partial<Paciente>) {
+  return apiFetch<Paciente>(`/pacientes/${id}${queryString({ medico_id: medicoId })}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });
 }
 
-export function activatePaciente(id: string) {
-  return apiFetch<Paciente>(`/pacientes/${id}/activar`, { method: 'PATCH' });
+export function activatePaciente(id: string, medicoId: string) {
+  return apiFetch<Paciente>(`/pacientes/${id}/activar${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
 }
 
-export function deactivatePaciente(id: string) {
-  return apiFetch<Paciente>(`/pacientes/${id}/desactivar`, { method: 'PATCH' });
+export function deactivatePaciente(id: string, medicoId: string) {
+  return apiFetch<Paciente>(`/pacientes/${id}/desactivar${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
 }
 
-export function markPacienteForDeletion(id: string) {
-  return apiFetch<Paciente>(`/pacientes/${id}/marcar-borrado`, { method: 'PATCH' });
+export function markPacienteForDeletion(id: string, medicoId: string) {
+  return apiFetch<Paciente>(`/pacientes/${id}/marcar-borrado${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
 }
 
 export function createContactoInstitucional(payload: Record<string, unknown>) {

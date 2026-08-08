@@ -33,6 +33,23 @@ class Paciente(TimestampMixin, Base):
     marcado_borrado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class MedicoPaciente(TimestampMixin, Base):
+    __tablename__ = "medico_pacientes"
+
+    medico_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("medicos.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    paciente_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pacientes.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+
+
 class Cita(TimestampMixin, Base):
     __tablename__ = "citas"
     __table_args__ = (

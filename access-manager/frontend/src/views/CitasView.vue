@@ -153,8 +153,8 @@ function resetForm() {
   form.duracion_estimada = 30;
   form.origen = 'WEB';
   form.notas_operativas = '';
-  form.paciente_id = pacientes.value[0]?.id ?? '';
   form.medico_id = medicos.value[0]?.id ?? '';
+  form.paciente_id = pacientes.value[0]?.id ?? '';
   form.institucion_id = instituciones.value[0]?.id ?? '';
   form.complejo_id = filteredComplejos.value[0]?.id ?? '';
   form.piso_id = filteredPisos.value[0]?.id ?? '';
@@ -163,12 +163,16 @@ function resetForm() {
   setAutocompleteLabels();
 }
 
+async function loadPatientsForMedico() {
+  pacientes.value = form.medico_id ? await listPacientes({ medico_id: form.medico_id }) : [];
+  form.paciente_id = pacientes.value[0]?.id ?? '';
+}
+
 async function load() {
   error.value = '';
   try {
-    const [citasData, pacientesData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
+    const [citasData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
       listCitas(),
-      listPacientes(),
       listMedicos(),
       listConsultorios(),
       listInstituciones(),
@@ -176,15 +180,25 @@ async function load() {
       listPisos(),
     ]);
     citas.value = citasData;
-    pacientes.value = pacientesData;
     medicos.value = medicosData;
     consultorios.value = consultoriosData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
     pisos.value = pisosData;
+    form.medico_id = medicos.value[0]?.id ?? '';
+    await loadPatientsForMedico();
     resetForm();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
+  }
+}
+
+async function onMedicoChange() {
+  error.value = '';
+  try {
+    await loadPatientsForMedico();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
   }
 }
 
@@ -258,18 +272,20 @@ onMounted(load);
           </div>
         </div>
         <div class="form-row">
-          <label for="paciente">Paciente</label>
-          <select id="paciente" v-model="form.paciente_id" required>
-            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
-              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
+          <label for="medico">Médico</label>
+          <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
+            <option value="">Seleccione médico</option>
+            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
+              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
             </option>
           </select>
         </div>
         <div class="form-row">
-          <label for="medico">Médico</label>
-          <select id="medico" v-model="form.medico_id" required>
-            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
+          <label for="paciente">Paciente</label>
+          <select id="paciente" v-model="form.paciente_id" required :disabled="!form.medico_id || pacientes.length === 0">
+            <option value="">Seleccione paciente</option>
+            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
+              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
             </option>
           </select>
         </div>

@@ -12,7 +12,7 @@ from app.core.logging import configure_logging
 from app.core.security import hash_password
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
-from app.models.flow import Cita, Paciente, QrToken
+from app.models.flow import Cita, MedicoPaciente, Paciente, QrToken
 from app.models.institucion import Institucion
 from app.models.kiosk import Kiosko, PuntoAcceso
 from app.models.operational import (
@@ -362,6 +362,12 @@ def main() -> None:
                 paciente.celular = "5550100000"
             if paciente.fecha_nacimiento is None:
                 paciente.fecha_nacimiento = date(1970, 1, 1)
+
+        paciente_medico = db.get(MedicoPaciente, {"medico_id": medico.id, "paciente_id": paciente.id})
+        if paciente_medico is None:
+            db.add(MedicoPaciente(medico_id=medico.id, paciente_id=paciente.id))
+        else:
+            paciente_medico.activo = True
 
         local_timezone = ZoneInfo(complejo.zona_horaria)
         checkin_target = datetime.now(local_timezone) + timedelta(minutes=60)

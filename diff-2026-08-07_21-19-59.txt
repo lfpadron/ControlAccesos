@@ -1,0 +1,980 @@
+diff --git a/access-manager/backend/alembic/env.py b/access-manager/backend/alembic/env.py
+index a9b3c91..90d680e 100644
+--- a/access-manager/backend/alembic/env.py
++++ b/access-manager/backend/alembic/env.py
+@@ -17,7 +17,7 @@ from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComp
+ from app.models.usuario import Usuario  # noqa: F401
+ from app.models.auditoria import Auditoria  # noqa: F401
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay  # noqa: F401
+-from app.models.flow import Cita, EventoLlegada, Paciente, QrToken  # noqa: F401
++from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken  # noqa: F401
+ from app.models.operational import (  # noqa: F401
+     AsignacionMedicoConsultorio,
+     AsignacionOperador,
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index e955136..2e408a5 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -12,7 +12,7 @@ from app.core.database import get_db
+ from app.core.security import require_role
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+-from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
++from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+ from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
+ from app.models.usuario import Usuario
+ from app.schemas.flow import (
+@@ -137,6 +137,71 @@ def medico_label(medico: Medico | None) -> str | None:
+     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
+ 
+ 
++def medico_ids_for_paciente(db: Session, paciente_id: UUID) -> list[UUID]:
++    return list(
++        db.execute(
++            select(MedicoPaciente.medico_id)
++            .where(
++                MedicoPaciente.paciente_id == paciente_id,
++                MedicoPaciente.activo.is_(True),
++            )
++            .order_by(MedicoPaciente.created_at)
++        ).scalars()
++    )
++
++
++def paciente_read(db: Session, paciente: Paciente) -> PacienteRead:
++    return PacienteRead.model_validate(paciente).model_copy(
++        update={"medico_ids": medico_ids_for_paciente(db, paciente.id)}
++    )
++
++
++def paciente_belongs_to_medico(db: Session, paciente_id: UUID, medico_id: UUID) -> bool:
++    return (
++        db.execute(
++            select(MedicoPaciente)
++            .where(
++                MedicoPaciente.paciente_id == paciente_id,
++                MedicoPaciente.medico_id == medico_id,
++                MedicoPaciente.activo.is_(True),
++            )
++            .limit(1)
++        ).scalar_one_or_none()
++        is not None
++    )
++
++
++def paciente_for_medico_or_404(db: Session, paciente_id: UUID, medico_id: UUID) -> Paciente:
++    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
++    exists_or_404(db, Medico, medico_id, "Médico")
++    if not paciente_belongs_to_medico(db, paciente_id, medico_id):
++        raise HTTPException(
++            status_code=status.HTTP_404_NOT_FOUND,
++            detail="Paciente no encontrado para el médico indicado.",
++        )
++    return item
++
++
++def assign_paciente_to_medico(db: Session, paciente_id: UUID, medico_id: UUID) -> None:
++    exists_or_404(db, Medico, medico_id, "Médico")
++    row = db.get(MedicoPaciente, {"medico_id": medico_id, "paciente_id": paciente_id})
++    if row is None:
++        db.add(MedicoPaciente(medico_id=medico_id, paciente_id=paciente_id))
++    else:
++        row.activo = True
++
++
++def pacientes_for_medico_query(medico_id: UUID):
++    return (
++        select(Paciente)
++        .join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id)
++        .where(
++            MedicoPaciente.medico_id == medico_id,
++            MedicoPaciente.activo.is_(True),
++        )
++    )
++
++
+ def cita_zona_horaria(db: Session, cita: Cita) -> str:
+     complejo = db.get(Complejo, cita.complejo_id)
+     return complejo.zona_horaria if complejo is not None else "UTC"
+@@ -211,6 +276,11 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
+         exists_or_404(db, Paciente, paciente_id, "Paciente")
+     if medico_id is not None:
+         exists_or_404(db, Medico, medico_id, "Médico")
++    if paciente_id is not None and medico_id is not None and not paciente_belongs_to_medico(db, paciente_id, medico_id):
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="El paciente no está asignado al médico indicado.",
++        )
+     if complejo_id is not None:
+         exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+@@ -390,13 +460,15 @@ def create_arrival_event(
+ @pacientes_router.get("/buscar", response_model=list[PacienteRead])
+ def buscar_pacientes(
+     q: str = Query(min_length=1),
++    medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+     _current_user: Usuario = OperationalUser,
+-) -> list[Paciente]:
++) -> list[PacienteRead]:
++    exists_or_404(db, Medico, medico_id, "Médico")
+     term = normalize_search(q)
+-    return list(
++    rows = list(
+         db.execute(
+-            select(Paciente)
++            pacientes_for_medico_query(medico_id)
+             .where(
+                 or_(
+                     func.lower(func.coalesce(Paciente.nombre, "")).like(term),
+@@ -411,20 +483,34 @@ def buscar_pacientes(
+             .limit(50)
+         ).scalars()
+     )
++    return [paciente_read(db, row) for row in rows]
+ 
+ 
+ @pacientes_router.get("", response_model=list[PacienteRead])
+-def list_pacientes(db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> list[Paciente]:
+-    return list(
++def list_pacientes(
++    medico_id: UUID = Query(...),
++    db: Session = Depends(get_db),
++    _current_user: Usuario = OperationalUser,
++) -> list[PacienteRead]:
++    exists_or_404(db, Medico, medico_id, "Médico")
++    rows = list(
+         db.execute(
+-            select(Paciente).order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre)).limit(200)
++            pacientes_for_medico_query(medico_id)
++            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
++            .limit(200)
+         ).scalars()
+     )
++    return [paciente_read(db, row) for row in rows]
+ 
+ 
+ @pacientes_router.get("/{paciente_id}", response_model=PacienteRead)
+-def get_paciente(paciente_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> Paciente:
+-    return exists_or_404(db, Paciente, paciente_id, "Paciente")
++def get_paciente(
++    paciente_id: UUID,
++    medico_id: UUID = Query(...),
++    db: Session = Depends(get_db),
++    _current_user: Usuario = OperationalUser,
++) -> PacienteRead:
++    return paciente_read(db, paciente_for_medico_or_404(db, paciente_id, medico_id))
+ 
+ 
+ @pacientes_router.post("", response_model=PacienteRead, status_code=status.HTTP_201_CREATED)
+@@ -433,10 +519,14 @@ def create_paciente(
+     request: Request,
+     db: Session = Depends(get_db),
+     current_user: Usuario = OperationalUser,
+-) -> Paciente:
+-    item = Paciente(**payload.model_dump(), folio_paciente=generate_patient_folio(db))
++) -> PacienteRead:
++    data = payload.model_dump()
++    medico_id = data.pop("medico_id")
++    item = Paciente(**data, folio_paciente=generate_patient_folio(db))
+     db.add(item)
+     db.flush()
++    assign_paciente_to_medico(db, item.id, medico_id)
++    db.flush()
+     record_audit_event(
+         db,
+         evento="PACIENTE_CREADO",
+@@ -445,11 +535,11 @@ def create_paciente(
+         usuario_id=current_user.id,
+         canal="WEB",
+         ip_origen=client_ip(request),
+-        valor_despues=audit_safe_dict(item),
++        valor_despues={**audit_safe_dict(item), "medico_ids": [str(medico_id)]},
+     )
+     db.commit()
+     db.refresh(item)
+-    return item
++    return paciente_read(db, item)
+ 
+ 
+ @pacientes_router.put("/{paciente_id}", response_model=PacienteRead)
+@@ -457,10 +547,11 @@ def update_paciente(
+     paciente_id: UUID,
+     payload: PacienteUpdate,
+     request: Request,
++    medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+     current_user: Usuario = OperationalUser,
+-) -> Paciente:
+-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
++) -> PacienteRead:
++    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+     before = audit_safe_dict(item)
+     for key, value in payload.model_dump(exclude_unset=True).items():
+         setattr(item, key, value)
+@@ -480,21 +571,40 @@ def update_paciente(
+     )
+     db.commit()
+     db.refresh(item)
+-    return item
++    return paciente_read(db, item)
+ 
+ 
+ @pacientes_router.patch("/{paciente_id}/activar", response_model=PacienteRead)
+-def activar_paciente(paciente_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser) -> Paciente:
+-    return set_paciente_active(paciente_id, True, request, db, current_user)
++def activar_paciente(
++    paciente_id: UUID,
++    request: Request,
++    medico_id: UUID = Query(...),
++    db: Session = Depends(get_db),
++    current_user: Usuario = OperationalUser,
++) -> PacienteRead:
++    return set_paciente_active(paciente_id, medico_id, True, request, db, current_user)
+ 
+ 
+ @pacientes_router.patch("/{paciente_id}/desactivar", response_model=PacienteRead)
+-def desactivar_paciente(paciente_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser) -> Paciente:
+-    return set_paciente_active(paciente_id, False, request, db, current_user)
++def desactivar_paciente(
++    paciente_id: UUID,
++    request: Request,
++    medico_id: UUID = Query(...),
++    db: Session = Depends(get_db),
++    current_user: Usuario = OperationalUser,
++) -> PacienteRead:
++    return set_paciente_active(paciente_id, medico_id, False, request, db, current_user)
+ 
+ 
+-def set_paciente_active(paciente_id: UUID, active: bool, request: Request, db: Session, current_user: Usuario) -> Paciente:
+-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
++def set_paciente_active(
++    paciente_id: UUID,
++    medico_id: UUID,
++    active: bool,
++    request: Request,
++    db: Session,
++    current_user: Usuario,
++) -> PacienteRead:
++    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+     before = audit_safe_dict(item)
+     item.activo = active
+     item.desactivado_en = None if active else now_utc()
+@@ -512,17 +622,18 @@ def set_paciente_active(paciente_id: UUID, active: bool, request: Request, db: S
+     )
+     db.commit()
+     db.refresh(item)
+-    return item
++    return paciente_read(db, item)
+ 
+ 
+ @pacientes_router.patch("/{paciente_id}/marcar-borrado", response_model=PacienteRead)
+ def marcar_paciente_borrado(
+     paciente_id: UUID,
+     request: Request,
++    medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+     current_user: Usuario = OperationalUser,
+-) -> Paciente:
+-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
++) -> PacienteRead:
++    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+     before = audit_safe_dict(item)
+     item.marcado_borrado_en = now_utc()
+     db.flush()
+@@ -539,7 +650,7 @@ def marcar_paciente_borrado(
+     )
+     db.commit()
+     db.refresh(item)
+-    return item
++    return paciente_read(db, item)
+ 
+ 
+ @citas_router.get("/hoy", response_model=list[CitaListItem])
+diff --git a/access-manager/backend/app/models/__init__.py b/access-manager/backend/app/models/__init__.py
+index 9cb0b62..7510d9b 100644
+--- a/access-manager/backend/app/models/__init__.py
++++ b/access-manager/backend/app/models/__init__.py
+@@ -2,7 +2,7 @@ from app.models.auditoria import Auditoria
+ from app.models.complejo import Complejo
+ from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
+-from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
++from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+ from app.models.kiosk import Kiosko, PuntoAcceso
+ from app.models.institucion import Institucion
+ from app.models.operational import (
+@@ -36,6 +36,7 @@ __all__ = [
+     "Institucion",
+     "Kiosko",
+     "Medico",
++    "MedicoPaciente",
+     "Operador",
+     "PantallaTurnos",
+     "PantallaTurnosCluster",
+diff --git a/access-manager/backend/app/models/flow.py b/access-manager/backend/app/models/flow.py
+index 6ab4262..9311606 100644
+--- a/access-manager/backend/app/models/flow.py
++++ b/access-manager/backend/app/models/flow.py
+@@ -33,6 +33,23 @@ class Paciente(TimestampMixin, Base):
+     marcado_borrado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+ 
+ 
++class MedicoPaciente(TimestampMixin, Base):
++    __tablename__ = "medico_pacientes"
++
++    medico_id: Mapped[uuid.UUID] = mapped_column(
++        UUID(as_uuid=True),
++        ForeignKey("medicos.id", ondelete="CASCADE"),
++        primary_key=True,
++    )
++    paciente_id: Mapped[uuid.UUID] = mapped_column(
++        UUID(as_uuid=True),
++        ForeignKey("pacientes.id", ondelete="CASCADE"),
++        primary_key=True,
++        index=True,
++    )
++    activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
++
++
+ class Cita(TimestampMixin, Base):
+     __tablename__ = "citas"
+     __table_args__ = (
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 04b602a..c26236e 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -48,7 +48,7 @@ class PacienteBase(BaseModel):
+ 
+ 
+ class PacienteCreate(PacienteBase):
+-    pass
++    medico_id: UUID
+ 
+ 
+ class PacienteUpdate(BaseModel):
+@@ -72,6 +72,7 @@ class PacienteUpdate(BaseModel):
+ class PacienteRead(PacienteBase):
+     id: UUID
+     folio_paciente: str
++    medico_ids: list[UUID] = Field(default_factory=list)
+     desactivado_en: datetime | None = None
+     marcado_borrado_en: datetime | None = None
+     created_at: datetime
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 7a91488..4122244 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -12,7 +12,7 @@ from app.core.logging import configure_logging
+ from app.core.security import hash_password
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+-from app.models.flow import Cita, Paciente, QrToken
++from app.models.flow import Cita, MedicoPaciente, Paciente, QrToken
+ from app.models.institucion import Institucion
+ from app.models.kiosk import Kiosko, PuntoAcceso
+ from app.models.operational import (
+@@ -363,6 +363,12 @@ def main() -> None:
+             if paciente.fecha_nacimiento is None:
+                 paciente.fecha_nacimiento = date(1970, 1, 1)
+ 
++        paciente_medico = db.get(MedicoPaciente, {"medico_id": medico.id, "paciente_id": paciente.id})
++        if paciente_medico is None:
++            db.add(MedicoPaciente(medico_id=medico.id, paciente_id=paciente.id))
++        else:
++            paciente_medico.activo = True
++
+         local_timezone = ZoneInfo(complejo.zona_horaria)
+         checkin_target = datetime.now(local_timezone) + timedelta(minutes=60)
+         today = checkin_target.date()
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 4fc4358..a8b48b4 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -331,6 +331,7 @@ export type TurnoDisplayReciente = {
+ export type Paciente = {
+   id: string;
+   folio_paciente: string;
++  medico_ids?: string[];
+   nombre?: string | null;
+   nombre_preferido?: string | null;
+   apellido_paterno?: string | null;
+@@ -669,7 +670,7 @@ export const listAsignacionesMedicoConsultorio = () =>
+ export const listAsignacionesOperador = () =>
+   listResource<AsignacionOperador>('asignaciones-operador');
+ export const listAuditoria = () => listResource<Auditoria>('auditoria');
+-export const listPacientes = () => listResource<Paciente>('pacientes');
++export const listPacientes = (params: { medico_id: string }) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
+ 
+ export function consultaClustersPorConsultorio(params: {
+   torre_id: string;
+@@ -711,34 +712,34 @@ function queryString(params: Record<string, string | number | boolean | null | u
+ export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
+ export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
+ 
+-export function searchPacientes(q: string) {
+-  return apiFetch<Paciente[]>(`/pacientes/buscar?q=${encodeURIComponent(q)}`);
++export function searchPacientes(q: string, medicoId: string) {
++  return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
+ }
+ 
+-export function createPaciente(payload: Partial<Paciente>) {
++export function createPaciente(payload: Partial<Paciente> & { medico_id: string }) {
+   return apiFetch<Paciente>('/pacientes', {
+     method: 'POST',
+     body: JSON.stringify(payload),
+   });
+ }
+ 
+-export function updatePaciente(id: string, payload: Partial<Paciente>) {
+-  return apiFetch<Paciente>(`/pacientes/${id}`, {
++export function updatePaciente(id: string, medicoId: string, payload: Partial<Paciente>) {
++  return apiFetch<Paciente>(`/pacientes/${id}${queryString({ medico_id: medicoId })}`, {
+     method: 'PUT',
+     body: JSON.stringify(payload),
+   });
+ }
+ 
+-export function activatePaciente(id: string) {
+-  return apiFetch<Paciente>(`/pacientes/${id}/activar`, { method: 'PATCH' });
++export function activatePaciente(id: string, medicoId: string) {
++  return apiFetch<Paciente>(`/pacientes/${id}/activar${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
+ }
+ 
+-export function deactivatePaciente(id: string) {
+-  return apiFetch<Paciente>(`/pacientes/${id}/desactivar`, { method: 'PATCH' });
++export function deactivatePaciente(id: string, medicoId: string) {
++  return apiFetch<Paciente>(`/pacientes/${id}/desactivar${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
+ }
+ 
+-export function markPacienteForDeletion(id: string) {
+-  return apiFetch<Paciente>(`/pacientes/${id}/marcar-borrado`, { method: 'PATCH' });
++export function markPacienteForDeletion(id: string, medicoId: string) {
++  return apiFetch<Paciente>(`/pacientes/${id}/marcar-borrado${queryString({ medico_id: medicoId })}`, { method: 'PATCH' });
+ }
+ 
+ export function createContactoInstitucional(payload: Record<string, unknown>) {
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index ba04d0a..7106a2b 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -311,6 +311,14 @@ nav a.disabled:hover {
+   gap: 0.8rem;
+ }
+ 
++.fieldset-reset {
++  border: 0;
++  display: grid;
++  gap: 0.8rem;
++  margin: 0;
++  padding: 0;
++}
++
+ .form h2,
+ .panel h2 {
+   font-size: 1.05rem;
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index e804a8f..ed3beb1 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -153,8 +153,8 @@ function resetForm() {
+   form.duracion_estimada = 30;
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+-  form.paciente_id = pacientes.value[0]?.id ?? '';
+   form.medico_id = medicos.value[0]?.id ?? '';
++  form.paciente_id = pacientes.value[0]?.id ?? '';
+   form.institucion_id = instituciones.value[0]?.id ?? '';
+   form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+   form.piso_id = filteredPisos.value[0]?.id ?? '';
+@@ -163,12 +163,16 @@ function resetForm() {
+   setAutocompleteLabels();
+ }
+ 
++async function loadPatientsForMedico() {
++  pacientes.value = form.medico_id ? await listPacientes({ medico_id: form.medico_id }) : [];
++  form.paciente_id = pacientes.value[0]?.id ?? '';
++}
++
+ async function load() {
+   error.value = '';
+   try {
+-    const [citasData, pacientesData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
++    const [citasData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
+       listCitas(),
+-      listPacientes(),
+       listMedicos(),
+       listConsultorios(),
+       listInstituciones(),
+@@ -176,18 +180,28 @@ async function load() {
+       listPisos(),
+     ]);
+     citas.value = citasData;
+-    pacientes.value = pacientesData;
+     medicos.value = medicosData;
+     consultorios.value = consultoriosData;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
+     pisos.value = pisosData;
++    form.medico_id = medicos.value[0]?.id ?? '';
++    await loadPatientsForMedico();
+     resetForm();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
+   }
+ }
+ 
++async function onMedicoChange() {
++  error.value = '';
++  try {
++    await loadPatientsForMedico();
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
++  }
++}
++
+ async function submit(confirmarDuplicado = false) {
+   error.value = '';
+   message.value = '';
+@@ -258,18 +272,20 @@ onMounted(load);
+           </div>
+         </div>
+         <div class="form-row">
+-          <label for="paciente">Paciente</label>
+-          <select id="paciente" v-model="form.paciente_id" required>
+-            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
+-              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
++          <label for="medico">Médico</label>
++          <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
++            <option value="">Seleccione médico</option>
++            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
++              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
+             </option>
+           </select>
+         </div>
+         <div class="form-row">
+-          <label for="medico">Médico</label>
+-          <select id="medico" v-model="form.medico_id" required>
+-            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
+-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
++          <label for="paciente">Paciente</label>
++          <select id="paciente" v-model="form.paciente_id" required :disabled="!form.medico_id || pacientes.length === 0">
++            <option value="">Seleccione paciente</option>
++            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
++              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
+             </option>
+           </select>
+         </div>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index 64fa8e8..93be1c7 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -4,19 +4,24 @@ import {
+   activatePaciente,
+   createPaciente,
+   deactivatePaciente,
++  listMedicos,
+   listPacientes,
+   markPacienteForDeletion,
+   searchPacientes,
+   updatePaciente,
++  type Medico,
+   type Paciente,
+ } from '../api/client';
+ 
+ const pacientes = ref<Paciente[]>([]);
++const medicos = ref<Medico[]>([]);
+ const selected = ref<Paciente | null>(null);
+ const loading = ref(false);
+ const error = ref('');
+ const message = ref('');
+ const query = ref('');
++const medicoId = ref('');
++const medicoSearch = ref('');
+ const confirmPreferredOnly = ref(false);
+ const birthYearInput = ref<HTMLInputElement | null>(null);
+ const birthMonthInput = ref<HTMLInputElement | null>(null);
+@@ -44,12 +49,24 @@ const isPreferredOnly = computed(
+     !form.apellido_paterno.trim() &&
+     !form.apellido_materno.trim(),
+ );
++const canEditPatient = computed(() => Boolean(medicoId.value));
+ 
+ function patientDisplayName(paciente: Paciente) {
+   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   return paciente.nombre_preferido || legalName || 'Sin nombre';
+ }
+ 
++function medicoLabel(medico: Medico) {
++  return medico.nombre_visible || `${medico.nombre} ${medico.apellidos}`;
++}
++
++function syncMedico() {
++  const normalized = medicoSearch.value.trim().toLowerCase();
++  const match = medicos.value.find((medico) => medicoLabel(medico).toLowerCase() === normalized);
++  medicoId.value = match?.id ?? '';
++  void onMedicoChange();
++}
++
+ function setBirthDateParts(value?: string | null) {
+   const [year = '', month = '', day = ''] = value?.split('-') ?? [];
+   birthDate.year = year;
+@@ -107,10 +124,15 @@ function setForm(paciente?: Paciente | null) {
+ }
+ 
+ async function load() {
++  if (!medicoId.value) {
++    pacientes.value = [];
++    setForm(null);
++    return;
++  }
+   loading.value = true;
+   error.value = '';
+   try {
+-    pacientes.value = await listPacientes();
++    pacientes.value = await listPacientes({ medico_id: medicoId.value });
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes.';
+   } finally {
+@@ -119,6 +141,11 @@ async function load() {
+ }
+ 
+ async function search() {
++  if (!medicoId.value) {
++    pacientes.value = [];
++    error.value = 'Selecciona un médico para buscar pacientes.';
++    return;
++  }
+   if (!query.value.trim()) {
+     await load();
+     return;
+@@ -126,7 +153,7 @@ async function search() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    pacientes.value = await searchPacientes(query.value.trim());
++    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value);
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
+   } finally {
+@@ -137,6 +164,10 @@ async function search() {
+ async function submit(preferredOnlyConfirmed = false) {
+   error.value = '';
+   message.value = '';
++  if (!medicoId.value) {
++    error.value = 'Selecciona un médico antes de crear o editar pacientes.';
++    return;
++  }
+   if (hasIncompleteBirthDate()) {
+     error.value = 'Completa la fecha de nacimiento con año, mes y día válidos.';
+     return;
+@@ -158,9 +189,10 @@ async function submit(preferredOnlyConfirmed = false) {
+       apellido_materno: trimOrNull(form.apellido_materno),
+       celular: trimOrNull(form.celular),
+       fecha_nacimiento: form.fecha_nacimiento || null,
++      medico_id: medicoId.value,
+     };
+     if (selected.value) {
+-      await updatePaciente(selected.value.id, payload);
++      await updatePaciente(selected.value.id, medicoId.value, payload);
+       message.value = 'Paciente actualizado.';
+     } else {
+       await createPaciente(payload);
+@@ -174,11 +206,13 @@ async function submit(preferredOnlyConfirmed = false) {
+ }
+ 
+ async function setActive(active: boolean) {
+-  if (!selected.value) return;
++  if (!selected.value || !medicoId.value) return;
+   error.value = '';
+   message.value = '';
+   try {
+-    selected.value = active ? await activatePaciente(selected.value.id) : await deactivatePaciente(selected.value.id);
++    selected.value = active
++      ? await activatePaciente(selected.value.id, medicoId.value)
++      : await deactivatePaciente(selected.value.id, medicoId.value);
+     message.value = active ? 'Paciente activado.' : 'Paciente desactivado.';
+     await load();
+   } catch (err) {
+@@ -187,11 +221,11 @@ async function setActive(active: boolean) {
+ }
+ 
+ async function markForDeletion() {
+-  if (!selected.value) return;
++  if (!selected.value || !medicoId.value) return;
+   error.value = '';
+   message.value = '';
+   try {
+-    selected.value = await markPacienteForDeletion(selected.value.id);
++    selected.value = await markPacienteForDeletion(selected.value.id, medicoId.value);
+     message.value = 'Paciente marcado para borrar.';
+     await load();
+   } catch (err) {
+@@ -199,7 +233,26 @@ async function markForDeletion() {
+   }
+ }
+ 
+-onMounted(load);
++async function loadMedicos() {
++  loading.value = true;
++  error.value = '';
++  try {
++    medicos.value = await listMedicos();
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible cargar médicos.';
++  } finally {
++    loading.value = false;
++  }
++}
++
++async function onMedicoChange() {
++  query.value = '';
++  message.value = '';
++  setForm(null);
++  await load();
++}
++
++onMounted(loadMedicos);
+ </script>
+ 
+ <template>
+@@ -211,76 +264,96 @@ onMounted(load);
+       </div>
+     </div>
+ 
++    <section class="panel">
++      <div class="form-row">
++        <label for="medico-pacientes">Médico</label>
++        <input
++          id="medico-pacientes"
++          v-model="medicoSearch"
++          list="medico-pacientes-options"
++          placeholder="Buscar médico"
++          @input="syncMedico"
++          @change="syncMedico"
++        />
++        <datalist id="medico-pacientes-options">
++          <option v-for="medico in medicos" :key="medico.id" :value="medicoLabel(medico)" />
++        </datalist>
++      </div>
++    </section>
++
+     <div class="grid catalog-grid">
+       <form class="panel form compact-form" @submit.prevent="submit()">
+         <h2>{{ selected ? 'Editar paciente' : 'Crear paciente' }}</h2>
+-        <div class="form-row">
+-          <label for="nombre">Nombre</label>
+-          <input id="nombre" v-model="form.nombre" :required="!form.nombre_preferido.trim()" maxlength="180" />
+-        </div>
+-        <div class="form-row">
+-          <label for="nombre_preferido">Nombre preferido</label>
+-          <input id="nombre_preferido" v-model="form.nombre_preferido" maxlength="60" @input="confirmPreferredOnly = false" />
+-        </div>
+-        <div class="form-row">
+-          <label for="apellido_paterno">Apellido paterno</label>
+-          <input id="apellido_paterno" v-model="form.apellido_paterno" :required="!form.nombre_preferido.trim()" maxlength="180" />
+-        </div>
+-        <div class="form-row">
+-          <label for="apellido_materno">Apellido materno</label>
+-          <input id="apellido_materno" v-model="form.apellido_materno" maxlength="180" />
+-        </div>
+-        <div class="form-row">
+-          <label for="celular">Celular</label>
+-          <input id="celular" v-model="form.celular" maxlength="40" />
+-        </div>
+-        <div class="form-row">
+-          <label for="fecha_nacimiento">Fecha de nacimiento</label>
+-          <div class="date-segments">
+-            <input
+-              id="fecha_nacimiento"
+-              ref="birthYearInput"
+-              v-model="birthDate.year"
+-              aria-label="Año de nacimiento"
+-              inputmode="numeric"
+-              maxlength="4"
+-              placeholder="AAAA"
+-              @input="handleBirthDateInput('year', 4, 'month')"
+-            />
+-            <input
+-              ref="birthMonthInput"
+-              v-model="birthDate.month"
+-              aria-label="Mes de nacimiento"
+-              inputmode="numeric"
+-              maxlength="2"
+-              placeholder="MM"
+-              @input="handleBirthDateInput('month', 2, 'day')"
+-            />
+-            <input
+-              ref="birthDayInput"
+-              v-model="birthDate.day"
+-              aria-label="Día de nacimiento"
+-              inputmode="numeric"
+-              maxlength="2"
+-              placeholder="DD"
+-              @input="handleBirthDateInput('day', 2)"
+-            />
++        <p v-if="!canEditPatient" class="message">Selecciona un médico para habilitar la creación de pacientes.</p>
++        <fieldset class="fieldset-reset" :disabled="!canEditPatient">
++          <div class="form-row">
++            <label for="nombre">Nombre</label>
++            <input id="nombre" v-model="form.nombre" :required="!form.nombre_preferido.trim()" maxlength="180" />
++          </div>
++          <div class="form-row">
++            <label for="nombre_preferido">Nombre preferido</label>
++            <input id="nombre_preferido" v-model="form.nombre_preferido" maxlength="60" @input="confirmPreferredOnly = false" />
++          </div>
++          <div class="form-row">
++            <label for="apellido_paterno">Apellido paterno</label>
++            <input id="apellido_paterno" v-model="form.apellido_paterno" :required="!form.nombre_preferido.trim()" maxlength="180" />
++          </div>
++          <div class="form-row">
++            <label for="apellido_materno">Apellido materno</label>
++            <input id="apellido_materno" v-model="form.apellido_materno" maxlength="180" />
++          </div>
++          <div class="form-row">
++            <label for="celular">Celular</label>
++            <input id="celular" v-model="form.celular" maxlength="40" />
++          </div>
++          <div class="form-row">
++            <label for="fecha_nacimiento">Fecha de nacimiento</label>
++            <div class="date-segments">
++              <input
++                id="fecha_nacimiento"
++                ref="birthYearInput"
++                v-model="birthDate.year"
++                aria-label="Año de nacimiento"
++                inputmode="numeric"
++                maxlength="4"
++                placeholder="AAAA"
++                @input="handleBirthDateInput('year', 4, 'month')"
++              />
++              <input
++                ref="birthMonthInput"
++                v-model="birthDate.month"
++                aria-label="Mes de nacimiento"
++                inputmode="numeric"
++                maxlength="2"
++                placeholder="MM"
++                @input="handleBirthDateInput('month', 2, 'day')"
++              />
++              <input
++                ref="birthDayInput"
++                v-model="birthDate.day"
++                aria-label="Día de nacimiento"
++                inputmode="numeric"
++                maxlength="2"
++                placeholder="DD"
++                @input="handleBirthDateInput('day', 2)"
++              />
++            </div>
++          </div>
++          <div v-if="confirmPreferredOnly" class="duplicate-warning">
++            <strong>Solo se capturó nombre preferido, ¿Continuar?</strong>
++            <div class="actions-row">
++              <button class="success" type="button" @click="submit(true)">Sí</button>
++              <button class="danger solid" type="button" @click="confirmPreferredOnly = false">No</button>
++            </div>
+           </div>
+-        </div>
+-        <div v-if="confirmPreferredOnly" class="duplicate-warning">
+-          <strong>Solo se capturó nombre preferido, ¿Continuar?</strong>
+           <div class="actions-row">
+-            <button class="success" type="button" @click="submit(true)">Sí</button>
+-            <button class="danger solid" type="button" @click="confirmPreferredOnly = false">No</button>
++            <button type="submit">{{ selected ? 'Guardar cambios' : 'Crear paciente' }}</button>
++            <button v-if="selected" class="secondary" type="button" @click="setForm(null)">Nuevo</button>
++            <button v-if="selected?.activo" class="danger" type="button" @click="setActive(false)">Desactivar</button>
++            <button v-else-if="selected" class="secondary" type="button" @click="setActive(true)">Activar</button>
++            <button v-if="selected" class="danger" type="button" @click="markForDeletion">Marcar para borrar</button>
+           </div>
+-        </div>
+-        <div class="actions-row">
+-          <button type="submit">{{ selected ? 'Guardar cambios' : 'Crear paciente' }}</button>
+-          <button v-if="selected" class="secondary" type="button" @click="setForm(null)">Nuevo</button>
+-          <button v-if="selected?.activo" class="danger" type="button" @click="setActive(false)">Desactivar</button>
+-          <button v-else-if="selected" class="secondary" type="button" @click="setActive(true)">Activar</button>
+-          <button v-if="selected" class="danger" type="button" @click="markForDeletion">Marcar para borrar</button>
+-        </div>
++        </fieldset>
+         <p v-if="message" class="message">{{ message }}</p>
+         <p v-if="error" class="error">{{ error }}</p>
+       </form>
+@@ -289,11 +362,12 @@ onMounted(load);
+         <div class="page-header compact">
+           <h2>Listado</h2>
+           <form class="inline-actions" @submit.prevent="search">
+-            <input v-model="query" placeholder="Nombre, celular o folio" />
+-            <button type="submit">Buscar</button>
+-            <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
++            <input v-model="query" placeholder="Nombre, celular o folio" :disabled="!canEditPatient" />
++            <button type="submit" :disabled="!canEditPatient">Buscar</button>
++            <button class="secondary" type="button" :disabled="!canEditPatient" @click="query = ''; load()">Limpiar</button>
+           </form>
+         </div>
++        <p v-if="!canEditPatient" class="message">Selecciona un médico para consultar su agenda de pacientes.</p>
+         <p v-if="loading" class="message">Cargando...</p>
+         <div class="table-scroll">
+           <table>
+diff --git a/access-manager/mobile/android/app/src/main/AndroidManifest.xml b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+index 7554f3a..32ad469 100644
+--- a/access-manager/mobile/android/app/src/main/AndroidManifest.xml
++++ b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+@@ -3,7 +3,7 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+ 
+     <application
+-        android:label="Clínicas Alfa"
++        android:label="Capital Medical Center"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
+         <activity
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+index 8b537e2..1b7cc49 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+index d523e1e..5f5c843 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+index a7c8023..f512f2d 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+index 01b7c40..0d65038 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+index f14a988..31a6468 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+index da00275..2f0b9bd 100644
+--- a/access-manager/mobile/lib/main.dart
++++ b/access-manager/mobile/lib/main.dart
+@@ -138,7 +138,7 @@ class _AccessMobileAppState extends State<AccessMobileApp> {
+     final deviceId = _deviceId;
+ 
+     return MaterialApp(
+-      title: 'Llegada de pacientes',
++      title: 'Capital Medical Center',
+       debugShowCheckedModeBanner: false,
+       theme: ThemeData(
+         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF145C8F)),
+@@ -241,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
+                 ClipRRect(
+                   borderRadius: BorderRadius.circular(8),
+                   child: Image.asset(
+-                    'assets/clinicas-alfa-logo.png',
++                    'assets/capital-logo-menu.png',
+                     height: 92,
+                     fit: BoxFit.cover,
+                   ),
+diff --git a/access-manager/mobile/pubspec.yaml b/access-manager/mobile/pubspec.yaml
+index 9214475..4f07b20 100644
+--- a/access-manager/mobile/pubspec.yaml
++++ b/access-manager/mobile/pubspec.yaml
+@@ -65,7 +65,7 @@ flutter:
+   uses-material-design: true
+ 
+   assets:
+-    - assets/clinicas-alfa-logo.png
++    - assets/capital-logo-menu.png
+ 
+   # To add assets to your application, add an assets section, like this:
+   # assets:

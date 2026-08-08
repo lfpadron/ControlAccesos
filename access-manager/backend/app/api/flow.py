@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.core.security import require_role
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
-from app.models.flow import Cita, EventoLlegada, Paciente, QrToken
+from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
 from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
 from app.models.usuario import Usuario
 from app.schemas.flow import (
@@ -137,6 +137,71 @@ def medico_label(medico: Medico | None) -> str | None:
     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
 
 
+def medico_ids_for_paciente(db: Session, paciente_id: UUID) -> list[UUID]:
+    return list(
+        db.execute(
+            select(MedicoPaciente.medico_id)
+            .where(
+                MedicoPaciente.paciente_id == paciente_id,
+                MedicoPaciente.activo.is_(True),
+            )
+            .order_by(MedicoPaciente.created_at)
+        ).scalars()
+    )
+
+
+def paciente_read(db: Session, paciente: Paciente) -> PacienteRead:
+    return PacienteRead.model_validate(paciente).model_copy(
+        update={"medico_ids": medico_ids_for_paciente(db, paciente.id)}
+    )
+
+
+def paciente_belongs_to_medico(db: Session, paciente_id: UUID, medico_id: UUID) -> bool:
+    return (
+        db.execute(
+            select(MedicoPaciente)
+            .where(
+                MedicoPaciente.paciente_id == paciente_id,
+                MedicoPaciente.medico_id == medico_id,
+                MedicoPaciente.activo.is_(True),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def paciente_for_medico_or_404(db: Session, paciente_id: UUID, medico_id: UUID) -> Paciente:
+    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
+    exists_or_404(db, Medico, medico_id, "Médico")
+    if not paciente_belongs_to_medico(db, paciente_id, medico_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Paciente no encontrado para el médico indicado.",
+        )
+    return item
+
+
+def assign_paciente_to_medico(db: Session, paciente_id: UUID, medico_id: UUID) -> None:
+    exists_or_404(db, Medico, medico_id, "Médico")
+    row = db.get(MedicoPaciente, {"medico_id": medico_id, "paciente_id": paciente_id})
+    if row is None:
+        db.add(MedicoPaciente(medico_id=medico_id, paciente_id=paciente_id))
+    else:
+        row.activo = True
+
+
+def pacientes_for_medico_query(medico_id: UUID):
+    return (
+        select(Paciente)
+        .join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id)
+        .where(
+            MedicoPaciente.medico_id == medico_id,
+            MedicoPaciente.activo.is_(True),
+        )
+    )
+
+
 def cita_zona_horaria(db: Session, cita: Cita) -> str:
     complejo = db.get(Complejo, cita.complejo_id)
     return complejo.zona_horaria if complejo is not None else "UTC"
@@ -211,6 +276,11 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
         exists_or_404(db, Paciente, paciente_id, "Paciente")
     if medico_id is not None:
         exists_or_404(db, Medico, medico_id, "Médico")
+    if paciente_id is not None and medico_id is not None and not paciente_belongs_to_medico(db, paciente_id, medico_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El paciente no está asignado al médico indicado.",
+        )
     if complejo_id is not None:
         exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:
@@ -390,13 +460,15 @@ def create_arrival_event(
 @pacientes_router.get("/buscar", response_model=list[PacienteRead])
 def buscar_pacientes(
     q: str = Query(min_length=1),
+    medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
     _current_user: Usuario = OperationalUser,
-) -> list[Paciente]:
+) -> list[PacienteRead]:
+    exists_or_404(db, Medico, medico_id, "Médico")
     term = normalize_search(q)
-    return list(
+    rows = list(
         db.execute(
-            select(Paciente)
+            pacientes_for_medico_query(medico_id)
             .where(
                 or_(
                     func.lower(func.coalesce(Paciente.nombre, "")).like(term),
@@ -411,20 +483,34 @@ def buscar_pacientes(
             .limit(50)
         ).scalars()
     )
+    return [paciente_read(db, row) for row in rows]
 
 
 @pacientes_router.get("", response_model=list[PacienteRead])
-def list_pacientes(db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> list[Paciente]:
-    return list(
+def list_pacientes(
+    medico_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    _current_user: Usuario = OperationalUser,
+) -> list[PacienteRead]:
+    exists_or_404(db, Medico, medico_id, "Médico")
+    rows = list(
         db.execute(
-            select(Paciente).order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre)).limit(200)
+            pacientes_for_medico_query(medico_id)
+            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
+            .limit(200)
         ).scalars()
     )
+    return [paciente_read(db, row) for row in rows]
 
 
 @pacientes_router.get("/{paciente_id}", response_model=PacienteRead)
-def get_paciente(paciente_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> Paciente:
-    return exists_or_404(db, Paciente, paciente_id, "Paciente")
+def get_paciente(
+    paciente_id: UUID,
+    medico_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    _current_user: Usuario = OperationalUser,
+) -> PacienteRead:
+    return paciente_read(db, paciente_for_medico_or_404(db, paciente_id, medico_id))
 
 
 @pacientes_router.post("", response_model=PacienteRead, status_code=status.HTTP_201_CREATED)
@@ -433,9 +519,13 @@ def create_paciente(
     request: Request,
     db: Session = Depends(get_db),
     current_user: Usuario = OperationalUser,
-) -> Paciente:
-    item = Paciente(**payload.model_dump(), folio_paciente=generate_patient_folio(db))
+) -> PacienteRead:
+    data = payload.model_dump()
+    medico_id = data.pop("medico_id")
+    item = Paciente(**data, folio_paciente=generate_patient_folio(db))
     db.add(item)
+    db.flush()
+    assign_paciente_to_medico(db, item.id, medico_id)
     db.flush()
     record_audit_event(
         db,
@@ -445,11 +535,11 @@ def create_paciente(
         usuario_id=current_user.id,
         canal="WEB",
         ip_origen=client_ip(request),
-        valor_despues=audit_safe_dict(item),
+        valor_despues={**audit_safe_dict(item), "medico_ids": [str(medico_id)]},
     )
     db.commit()
     db.refresh(item)
-    return item
+    return paciente_read(db, item)
 
 
 @pacientes_router.put("/{paciente_id}", response_model=PacienteRead)
@@ -457,10 +547,11 @@ def update_paciente(
     paciente_id: UUID,
     payload: PacienteUpdate,
     request: Request,
+    medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
     current_user: Usuario = OperationalUser,
-) -> Paciente:
-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
+) -> PacienteRead:
+    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
     before = audit_safe_dict(item)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
@@ -480,21 +571,40 @@ def update_paciente(
     )
     db.commit()
     db.refresh(item)
-    return item
+    return paciente_read(db, item)
 
 
 @pacientes_router.patch("/{paciente_id}/activar", response_model=PacienteRead)
-def activar_paciente(paciente_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser) -> Paciente:
-    return set_paciente_active(paciente_id, True, request, db, current_user)
+def activar_paciente(
+    paciente_id: UUID,
+    request: Request,
+    medico_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: Usuario = OperationalUser,
+) -> PacienteRead:
+    return set_paciente_active(paciente_id, medico_id, True, request, db, current_user)
 
 
 @pacientes_router.patch("/{paciente_id}/desactivar", response_model=PacienteRead)
-def desactivar_paciente(paciente_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser) -> Paciente:
-    return set_paciente_active(paciente_id, False, request, db, current_user)
+def desactivar_paciente(
+    paciente_id: UUID,
+    request: Request,
+    medico_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: Usuario = OperationalUser,
+) -> PacienteRead:
+    return set_paciente_active(paciente_id, medico_id, False, request, db, current_user)
 
 
-def set_paciente_active(paciente_id: UUID, active: bool, request: Request, db: Session, current_user: Usuario) -> Paciente:
-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
+def set_paciente_active(
+    paciente_id: UUID,
+    medico_id: UUID,
+    active: bool,
+    request: Request,
+    db: Session,
+    current_user: Usuario,
+) -> PacienteRead:
+    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
     before = audit_safe_dict(item)
     item.activo = active
     item.desactivado_en = None if active else now_utc()
@@ -512,17 +622,18 @@ def set_paciente_active(paciente_id: UUID, active: bool, request: Request, db: S
     )
     db.commit()
     db.refresh(item)
-    return item
+    return paciente_read(db, item)
 
 
 @pacientes_router.patch("/{paciente_id}/marcar-borrado", response_model=PacienteRead)
 def marcar_paciente_borrado(
     paciente_id: UUID,
     request: Request,
+    medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
     current_user: Usuario = OperationalUser,
-) -> Paciente:
-    item = exists_or_404(db, Paciente, paciente_id, "Paciente")
+) -> PacienteRead:
+    item = paciente_for_medico_or_404(db, paciente_id, medico_id)
     before = audit_safe_dict(item)
     item.marcado_borrado_en = now_utc()
     db.flush()
@@ -539,7 +650,7 @@ def marcar_paciente_borrado(
     )
     db.commit()
     db.refresh(item)
-    return item
+    return paciente_read(db, item)
 
 
 @citas_router.get("/hoy", response_model=list[CitaListItem])
