@@ -126,11 +126,13 @@ def main() -> None:
             db.add(torre)
             db.flush()
 
-        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == "1")).scalar_one_or_none()
+        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == 1)).scalar_one_or_none()
         if piso is None:
-            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero="1", nombre_visible="Piso 1")
+            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
             db.add(piso)
             db.flush()
+        elif piso.codigo is None:
+            piso.codigo = "1"
 
         punto_acceso = db.execute(
             select(PuntoAcceso).where(PuntoAcceso.piso_id == piso.id, PuntoAcceso.nombre == "Lobby principal")

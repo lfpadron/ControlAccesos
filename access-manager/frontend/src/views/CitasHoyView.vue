@@ -60,7 +60,9 @@ const filters = reactive({
 const filteredComplejos = computed(() =>
   filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
 );
-const filteredPisos = computed(() => (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value));
+const filteredPisos = computed(() =>
+  (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value).sort((a, b) => a.numero - b.numero),
+);
 const filteredConsultorios = computed(() =>
   consultorios.value.filter((item) => {
     if (filters.complejo_id && item.complejo_id !== filters.complejo_id) return false;
@@ -71,6 +73,11 @@ const filteredConsultorios = computed(() =>
 
 function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+}
+
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
 }
 
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
@@ -104,7 +111,7 @@ function syncComplex() {
 }
 
 function syncPiso() {
-  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
+  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
   if (!filteredConsultorios.value.some((item) => item.id === filters.consultorio_id)) {
     filters.consultorio_id = '';
     consultorioSearch.value = '';
@@ -368,7 +375,7 @@ onMounted(async () => {
           <label for="filtro-piso">Piso</label>
           <input id="filtro-piso" v-model="pisoSearch" list="filtro-pisos" @input="syncPiso" @change="syncPiso" />
           <datalist id="filtro-pisos">
-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
+            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>
         </div>
         <div class="form-row">

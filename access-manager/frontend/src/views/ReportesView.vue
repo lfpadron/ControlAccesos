@@ -61,6 +61,11 @@ function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
 }
 
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
@@ -88,7 +93,7 @@ function syncComplex() {
 }
 
 function syncPiso() {
-  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
+  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
 }
 
 function statusText(active: boolean) {
@@ -109,7 +114,8 @@ function institucionName(id: string | null | undefined) {
 }
 
 function pisoName(id: string | null | undefined) {
-  return pisos.value.find((item) => item.id === id)?.nombre_visible ?? '';
+  const piso = pisos.value.find((item) => item.id === id);
+  return piso ? pisoLabel(piso) : '';
 }
 
 function inScope(row: { complejo_id?: string | null; piso_id?: string | null }) {
@@ -152,8 +158,8 @@ const rows = computed<ReportRow[]>(() => {
         tipo: 'Piso',
         institucion: institucionName(complejos.value.find((complex) => complex.id === item.complejo_id)?.institucion_id),
         complejo: complejoName(item.complejo_id),
-        piso: item.nombre_visible,
-        nombre: item.numero,
+        piso: pisoLabel(item),
+        nombre: String(item.numero),
         estado: statusText(item.activo),
       }));
   }
@@ -314,7 +320,7 @@ onMounted(loadData);
             @change="syncPiso"
           />
           <datalist id="reporte-pisos">
-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
+            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>
         </div>
         <div class="form-row">

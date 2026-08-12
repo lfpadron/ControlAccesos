@@ -95,23 +95,31 @@ class TorreRead(TorreCreate):
 class PisoCreate(BaseModel):
     complejo_id: UUID
     torre_id: UUID
-    numero: str = Field(min_length=1, max_length=40)
-    nombre_visible: str = Field(min_length=1, max_length=180)
-    descripcion: str | None = None
+    numero: int | None = Field(default=None, ge=1, le=99)
+    codigo: str | None = Field(default=None, max_length=40)
+    nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
+    descripcion: str | None = Field(default=None, max_length=200)
     activo: bool = True
 
 
 class PisoUpdate(BaseModel):
     complejo_id: UUID | None = None
     torre_id: UUID | None = None
-    numero: str | None = Field(default=None, min_length=1, max_length=40)
-    nombre_visible: str | None = Field(default=None, min_length=1, max_length=180)
-    descripcion: str | None = None
+    codigo: str | None = Field(default=None, max_length=40)
+    nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
+    descripcion: str | None = Field(default=None, max_length=200)
     activo: bool | None = None
 
 
-class PisoRead(PisoCreate):
+class PisoRead(BaseModel):
     id: UUID
+    complejo_id: UUID
+    torre_id: UUID
+    numero: int
+    codigo: str | None = None
+    nombre_visible: str
+    descripcion: str | None = None
+    activo: bool
     created_at: datetime
     updated_at: datetime
 

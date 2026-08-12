@@ -1,0 +1,897 @@
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index e65a70d..3f8ba02 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -99,6 +99,7 @@ class CrudConfig:
+     relation_handler: Callable[[Session, object, dict[str, Any]], None] | None = None
+     response_factory: Callable[[Session, object], object] | None = None
+     audit_extra_factory: Callable[[Session, object], dict[str, Any]] | None = None
++    post_save: Callable[[Session, object], None] | None = None
+ 
+ 
+ def client_ip(request: Request) -> str | None:
+@@ -214,6 +215,61 @@ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | N
+     return int(db.execute(query).scalar_one())
+ 
+ 
++def floor_numbers_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> set[int]:
++    query = select(Piso.numero).where(Piso.torre_id == torre_id)
++    if exclude_piso_id is not None:
++        query = query.where(Piso.id != exclude_piso_id)
++    return {int(number) for number in db.execute(query).scalars()}
++
++
++def next_floor_number(db: Session, torre: Torre) -> int | None:
++    existing_numbers = floor_numbers_for_torre(db, torre.id)
++    for number in range(1, torre.numero_pisos + 1):
++        if number not in existing_numbers:
++            return number
++    return None
++
++
++def default_floor_name(number: int) -> str:
++    return f"Piso {number}"
++
++
++def normalize_piso_payload(data: dict[str, Any]) -> None:
++    if "codigo" in data and data["codigo"] is not None:
++        data["codigo"] = str(data["codigo"]).strip() or None
++    if "nombre_visible" in data and data["nombre_visible"] is not None:
++        data["nombre_visible"] = str(data["nombre_visible"]).strip()
++        if not data["nombre_visible"]:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nombre visible es requerido.")
++    if "descripcion" in data and data["descripcion"] is not None:
++        data["descripcion"] = str(data["descripcion"]).strip() or None
++
++
++def sync_torre_pisos(db: Session, torre: Torre) -> list[Piso]:
++    existing_numbers = floor_numbers_for_torre(db, torre.id)
++    created: list[Piso] = []
++    for number in range(1, torre.numero_pisos + 1):
++        if number in existing_numbers:
++            continue
++        piso = Piso(
++            complejo_id=torre.complejo_id,
++            torre_id=torre.id,
++            numero=number,
++            codigo=str(number),
++            nombre_visible=default_floor_name(number),
++        )
++        db.add(piso)
++        created.append(piso)
++    if created:
++        db.flush()
++    return created
++
++
++def post_save_torre(db: Session, item: object) -> None:
++    if isinstance(item, Torre):
++        sync_torre_pisos(db, item)
++
++
+ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     if data.get("complejo_id") is not None:
+         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
+@@ -233,6 +289,7 @@ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None
+ 
+ 
+ def validate_piso(db: Session, data: dict[str, Any], item: object | None = None) -> None:
++    normalize_piso_payload(data)
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     torre_id = data.get("torre_id", getattr(item, "torre_id", None))
+     if complejo_id is not None:
+@@ -242,13 +299,25 @@ def validate_piso(db: Session, data: dict[str, Any], item: object | None = None)
+     torre = exists_or_404(db, Torre, torre_id, "Torre")
+     if complejo_id is not None and torre.complejo_id != complejo_id:
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
+-    if item is None or item.torre_id != torre.id:
+-        existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
+-        if existing_count >= torre.numero_pisos:
++    current_number = data.get("numero", getattr(item, "numero", None))
++    if item is None and current_number is None:
++        current_number = next_floor_number(db, torre)
++        if current_number is None:
+             raise HTTPException(
+                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                 detail="El número de pisos no puede exceder los definidos en la torre.",
+             )
++        data["numero"] = current_number
++    if current_number is not None:
++        if current_number > torre.numero_pisos:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El número de piso excede los definidos en la torre.")
++        if current_number in floor_numbers_for_torre(db, torre.id, getattr(item, "id", None)):
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El número de piso ya existe en esta torre.")
++    if item is None:
++        if not data.get("codigo"):
++            data["codigo"] = str(data["numero"])
++        if not data.get("nombre_visible"):
++            data["nombre_visible"] = default_floor_name(data["numero"])
+ 
+ 
+ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+@@ -493,6 +562,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+         if config.relation_handler:
+             config.relation_handler(db, item, relation_data)
+             db.flush()
++        if config.post_save:
++            config.post_save(db, item)
+         after_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
+         record_audit_event(
+             db,
+@@ -533,6 +604,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+         if config.relation_handler:
+             config.relation_handler(db, item, relation_data)
+             db.flush()
++        if config.post_save:
++            config.post_save(db, item)
+         after_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
+         record_audit_event(
+             db,
+@@ -637,8 +710,45 @@ usuario_roles_router = create_crud_router(
+     CrudConfig(UsuarioRol, UsuarioRolCreate, UsuarioRolUpdate, UsuarioRolRead, "usuario_roles", "ROL_ASIGNADO", "ROL_ASIGNADO_EDITADO", "created_at", validator=validate_usuario_rol)
+ )
+ torres_router = create_crud_router(
+-    CrudConfig(Torre, TorreCreate, TorreUpdate, TorreRead, "torres", "TORRE_CREADA", "TORRE_EDITADA", "nombre", validator=validate_torre)
++    CrudConfig(
++        Torre,
++        TorreCreate,
++        TorreUpdate,
++        TorreRead,
++        "torres",
++        "TORRE_CREADA",
++        "TORRE_EDITADA",
++        "nombre",
++        validator=validate_torre,
++        post_save=post_save_torre,
++    )
+ )
++
++
++@torres_router.post("/{item_id}/generar-pisos", response_model=list[PisoRead])
++def generar_pisos_torre(
++    item_id: UUID,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = AdminUser,
++) -> list[Piso]:
++    torre = exists_or_404(db, Torre, item_id, "Torre")
++    created = sync_torre_pisos(db, torre)
++    if created:
++        record_audit_event(
++            db,
++            evento="PISOS_GENERADOS",
++            entidad="torres",
++            entidad_id=torre.id,
++            usuario_id=current_user.id,
++            canal="WEB",
++            ip_origen=client_ip(request),
++            valor_despues={"pisos_generados": [floor.numero for floor in created]},
++        )
++    db.commit()
++    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.numero)).scalars())
++
++
+ pisos_router = create_crud_router(
+     CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
+ )
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index d8bbc2f..c9de82f 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -55,12 +55,17 @@ class Torre(TimestampMixin, Base):
+ 
+ class Piso(TimestampMixin, Base):
+     __tablename__ = "pisos"
++    __table_args__ = (
++        CheckConstraint("numero >= 1", name="ck_pisos_numero_positive"),
++        UniqueConstraint("torre_id", "numero", name="uq_pisos_torre_numero"),
++    )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
+     torre_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), nullable=False, index=True)
+-    numero: Mapped[str] = mapped_column(String(40), nullable=False)
+-    nombre_visible: Mapped[str] = mapped_column(String(180), nullable=False)
++    numero: Mapped[int] = mapped_column(Integer, nullable=False)
++    codigo: Mapped[str | None] = mapped_column(String(40))
++    nombre_visible: Mapped[str] = mapped_column(String(20), nullable=False)
+     descripcion: Mapped[str | None] = mapped_column(Text)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 43f88f5..47d3946 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -95,23 +95,31 @@ class TorreRead(TorreCreate):
+ class PisoCreate(BaseModel):
+     complejo_id: UUID
+     torre_id: UUID
+-    numero: str = Field(min_length=1, max_length=40)
+-    nombre_visible: str = Field(min_length=1, max_length=180)
+-    descripcion: str | None = None
++    numero: int | None = Field(default=None, ge=1, le=99)
++    codigo: str | None = Field(default=None, max_length=40)
++    nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
++    descripcion: str | None = Field(default=None, max_length=200)
+     activo: bool = True
+ 
+ 
+ class PisoUpdate(BaseModel):
+     complejo_id: UUID | None = None
+     torre_id: UUID | None = None
+-    numero: str | None = Field(default=None, min_length=1, max_length=40)
+-    nombre_visible: str | None = Field(default=None, min_length=1, max_length=180)
+-    descripcion: str | None = None
++    codigo: str | None = Field(default=None, max_length=40)
++    nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
++    descripcion: str | None = Field(default=None, max_length=200)
+     activo: bool | None = None
+ 
+ 
+-class PisoRead(PisoCreate):
++class PisoRead(BaseModel):
+     id: UUID
++    complejo_id: UUID
++    torre_id: UUID
++    numero: int
++    codigo: str | None = None
++    nombre_visible: str
++    descripcion: str | None = None
++    activo: bool
+     created_at: datetime
+     updated_at: datetime
+ 
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 8afb68e..5513fe6 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -126,11 +126,13 @@ def main() -> None:
+             db.add(torre)
+             db.flush()
+ 
+-        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == "1")).scalar_one_or_none()
++        piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == 1)).scalar_one_or_none()
+         if piso is None:
+-            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero="1", nombre_visible="Piso 1")
++            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
+             db.add(piso)
+             db.flush()
++        elif piso.codigo is None:
++            piso.codigo = "1"
+ 
+         punto_acceso = db.execute(
+             select(PuntoAcceso).where(PuntoAcceso.piso_id == piso.id, PuntoAcceso.nombre == "Lobby principal")
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index b4cf8ba..a3580d9 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -271,24 +271,20 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+             },
+         )
+     )
+-    piso = assert_created(
+-        client.post(
+-            "/api/pisos",
+-            headers=auth_headers,
+-            json={
+-                "complejo_id": complejo["id"],
+-                "torre_id": torre["id"],
+-                "numero": f"T-{suffix}",
+-                "nombre_visible": f"Piso Test {suffix}",
+-            },
+-        )
+-    )
++    pisos_response = client.get("/api/pisos", headers=auth_headers)
++    assert pisos_response.status_code == 200, pisos_response.text
++    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
+     update_response = client.patch(
+         f"/api/pisos/{piso['id']}",
+         headers=auth_headers,
+-        json={"descripcion": "Actualizado por prueba automatizada."},
++        json={
++            "codigo": f"T-{suffix}",
++            "nombre_visible": f"Piso Test {suffix}",
++            "descripcion": "Actualizado por prueba automatizada.",
++        },
+     )
+     assert update_response.status_code == 200, update_response.text
++    piso = update_response.json()
+ 
+     deactivate_response = client.post(f"/api/pisos/{piso['id']}/desactivar", headers=auth_headers)
+     assert deactivate_response.status_code == 200, deactivate_response.text
+@@ -601,18 +597,16 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+             json={"complejo_id": complejo["id"], "nombre": f"Torre Flujo {suffix}", "numero_pisos": 20},
+         )
+     )
+-    piso = assert_created(
+-        client.post(
+-            "/api/pisos",
+-            headers=auth_headers,
+-            json={
+-                "complejo_id": complejo["id"],
+-                "torre_id": torre["id"],
+-                "numero": f"F-{suffix}",
+-                "nombre_visible": f"Piso Flujo {suffix}",
+-            },
+-        )
++    pisos_response = client.get("/api/pisos", headers=auth_headers)
++    assert pisos_response.status_code == 200, pisos_response.text
++    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
++    piso_response = client.patch(
++        f"/api/pisos/{piso['id']}",
++        headers=auth_headers,
++        json={"codigo": f"F-{suffix}", "nombre_visible": f"Piso Flujo {suffix}"},
+     )
++    assert piso_response.status_code == 200, piso_response.text
++    piso = piso_response.json()
+     cluster = assert_created(
+         client.post(
+             "/api/clusters-turnos",
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 8e5ba45..1220e60 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -144,7 +144,8 @@ export type Piso = {
+   id: string;
+   complejo_id: string;
+   torre_id: string;
+-  numero: string;
++  numero: number;
++  codigo?: string | null;
+   nombre_visible: string;
+   descripcion?: string | null;
+   activo: boolean;
+@@ -660,6 +661,8 @@ export const createRole = (payload: Record<string, unknown>) => createResource<R
+ export const updateRole = (id: string, payload: Record<string, unknown>) => updateResource<Role>('roles', id, payload);
+ export const listTorres = () => listResource<Torre>('torres');
+ export const listPisos = () => listResource<Piso>('pisos');
++export const syncTorrePisos = (torreId: string) =>
++  apiFetch<Piso[]>(`/torres/${torreId}/generar-pisos`, { method: 'POST' });
+ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
+ export const listConsultorios = () => listResource<Consultorio>('consultorios');
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index d44af66..b863821 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -143,13 +143,13 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+-      { name: 'numero_pisos', label: 'Pisos definidos', type: 'number', required: true, defaultValue: 1 },
++      { name: 'numero_pisos', label: 'Número de pisos', type: 'number', required: true, defaultValue: 1 },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+       { name: 'nombre', label: 'Nombre' },
+       { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+-      { name: 'numero_pisos', label: 'Pisos definidos' },
++      { name: 'numero_pisos', label: 'Número de pisos' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
+@@ -165,15 +165,17 @@ export const catalogs: Record<string, CatalogConfig> = {
+     fields: [
+       { name: 'complejo_id', label: 'Campus', type: 'select', lookup: 'complejos', required: true },
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true },
+-      { name: 'numero', label: 'Código de piso', required: true, maxLength: 40 },
+-      { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 180 },
+-      { name: 'descripcion', label: 'Descripción', type: 'textarea' },
++      { name: 'numero', label: 'Número de piso', type: 'number' },
++      { name: 'codigo', label: 'Código de piso', maxLength: 40 },
++      { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 20 },
++      { name: 'descripcion', label: 'Descripción', type: 'textarea', maxLength: 200 },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+       { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'torre_id', label: 'Torre', lookup: 'torres' },
+-      { name: 'numero', label: 'Código' },
++      { name: 'numero', label: 'Número de piso' },
++      { name: 'codigo', label: 'Código de piso' },
+       { name: 'nombre_visible', label: 'Nombre visible' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 59dc753..0c9571e 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -8,6 +8,7 @@ import CatalogView from '../views/CatalogView.vue';
+ import RolesView from '../views/RolesView.vue';
+ import UsuariosView from '../views/UsuariosView.vue';
+ import UsuarioRolesView from '../views/UsuarioRolesView.vue';
++import PisosView from '../views/PisosView.vue';
+ import PerfilView from '../views/PerfilView.vue';
+ import AsignacionesView from '../views/AsignacionesView.vue';
+ import AuditoriaView from '../views/AuditoriaView.vue';
+@@ -41,7 +42,7 @@ const router = createRouter({
+     { path: '/roles', component: RolesView },
+     { path: '/usuario-roles', component: UsuarioRolesView },
+     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
+-    { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
++    { path: '/pisos', component: PisosView },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+diff --git a/access-manager/frontend/src/views/BusquedaUsuariosView.vue b/access-manager/frontend/src/views/BusquedaUsuariosView.vue
+index b9787ae..fb2c228 100644
+--- a/access-manager/frontend/src/views/BusquedaUsuariosView.vue
++++ b/access-manager/frontend/src/views/BusquedaUsuariosView.vue
+@@ -75,6 +75,11 @@ function institucionLabel(item: Institucion) {
+   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+ }
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+   const normalized = text.trim().toLowerCase();
+   return rows.find((item) => {
+@@ -102,7 +107,7 @@ function syncComplex() {
+ }
+ 
+ function syncPiso() {
+-  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
++  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
+ }
+ 
+ function roleName(roleId: string) {
+@@ -186,7 +191,7 @@ const filteredRows = computed<UserRow[]>(() =>
+       estado: usuario.estado,
+       instituciones: uniqueNames(scope.institucionIds, instituciones.value, (item: Institucion) => item.nombre).join(', ') || '-',
+       complejos: uniqueNames(scope.complejoIds, complejos.value, (item: Complejo) => item.nombre).join(', ') || '-',
+-      pisos: uniqueNames(scope.pisoIds, pisos.value, (item: Piso) => item.nombre_visible).join(', ') || '-',
++      pisos: uniqueNames(scope.pisoIds, pisos.value, pisoLabel).join(', ') || '-',
+     };
+   }),
+ );
+@@ -313,7 +318,7 @@ onMounted(loadData);
+           <label for="usuarios-piso">Piso</label>
+           <input id="usuarios-piso" v-model="pisoSearch" list="usuarios-pisos" @input="syncPiso" @change="syncPiso" />
+           <datalist id="usuarios-pisos">
+-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
++            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index db3d812..5af126c 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -26,6 +26,15 @@ type Row = Record<string, unknown> & { id: string };
+ type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
+ type SelectOption = { value: string; label: string };
+ 
++function pisoLookupLabel(item: Row | { numero?: unknown; codigo?: unknown; nombre_visible?: unknown }) {
++  const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? item.numero : '';
++  const codigo = typeof item.codigo === 'string' ? item.codigo : '';
++  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible : '';
++  const numberLabel = numero ? `Piso ${numero}` : 'Piso';
++  const detail = codigo || nombreVisible;
++  return detail ? `${numberLabel} · ${detail}` : numberLabel;
++}
++
+ const route = useRoute();
+ const rows = ref<Row[]>([]);
+ const error = ref('');
+@@ -73,7 +82,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
+       const torre = torres.find((row) => row.id === item.torre_id);
+       return {
+         id: item.id,
+-        label: torre ? `${torre.nombre} · ${item.nombre_visible}` : item.nombre_visible,
++        label: torre ? `${torre.nombre} · ${pisoLookupLabel(item)}` : pisoLookupLabel(item),
+         complejo_id: item.complejo_id,
+         torre_id: item.torre_id,
+       };
+@@ -223,7 +232,7 @@ function setLocationFromRow(row: Row) {
+       : towerForId(row.torre_id ?? floorForId(row.piso_id)?.torre_id);
+   const rowPiso =
+     config.value.key === 'pisos'
+-      ? ({ id: row.id, label: String(row.nombre_visible ?? row.numero ?? row.id), complejo_id: row.complejo_id as string, torre_id: row.torre_id as string } satisfies LookupOption)
++      ? ({ id: row.id, label: pisoLookupLabel(row), complejo_id: row.complejo_id as string, torre_id: row.torre_id as string } satisfies LookupOption)
+       : floorForId(row.piso_id);
+   if (!campus || !institucion) return;
+   if (rowPiso && rowTorre) {
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 9f50f6a..6b8b26e 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -60,7 +60,9 @@ const filters = reactive({
+ const filteredComplejos = computed(() =>
+   filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
+ );
+-const filteredPisos = computed(() => (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value));
++const filteredPisos = computed(() =>
++  (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value).sort((a, b) => a.numero - b.numero),
++);
+ const filteredConsultorios = computed(() =>
+   consultorios.value.filter((item) => {
+     if (filters.complejo_id && item.complejo_id !== filters.complejo_id) return false;
+@@ -73,6 +75,11 @@ function institucionLabel(item: Institucion) {
+   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+ }
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+   const normalized = text.trim().toLowerCase();
+   return rows.find((item) => {
+@@ -104,7 +111,7 @@ function syncComplex() {
+ }
+ 
+ function syncPiso() {
+-  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
++  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
+   if (!filteredConsultorios.value.some((item) => item.id === filters.consultorio_id)) {
+     filters.consultorio_id = '';
+     consultorioSearch.value = '';
+@@ -368,7 +375,7 @@ onMounted(async () => {
+           <label for="filtro-piso">Piso</label>
+           <input id="filtro-piso" v-model="pisoSearch" list="filtro-pisos" @input="syncPiso" @change="syncPiso" />
+           <datalist id="filtro-pisos">
+-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
++            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index ed3beb1..a7e8f0e 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -66,7 +66,7 @@ const filteredComplejos = computed(() => {
+ 
+ const filteredPisos = computed(() => {
+   if (!form.complejo_id) return [];
+-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id);
++  return pisos.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.numero - b.numero);
+ });
+ 
+ const filteredConsultorios = computed(() => {
+@@ -78,6 +78,11 @@ function institucionLabel(item: Institucion) {
+   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+ }
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function patientDisplayName(paciente: Paciente) {
+   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+@@ -99,7 +104,8 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string)
+ function setAutocompleteLabels() {
+   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
+   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+-  pisoSearch.value = pisos.value.find((item) => item.id === form.piso_id)?.nombre_visible ?? '';
++  const piso = pisos.value.find((item) => item.id === form.piso_id);
++  pisoSearch.value = piso ? pisoLabel(piso) : '';
+   const consultorio = consultorios.value.find((item) => item.id === form.consultorio_id);
+   consultorioSearch.value = consultorio ? consultorio.nombre_visible || consultorio.codigo : '';
+ }
+@@ -134,7 +140,7 @@ function syncComplex() {
+ }
+ 
+ function syncPiso() {
+-  const match = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible);
++  const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
+   form.piso_id = match?.id ?? '';
+   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
+     clearLocation('piso');
+@@ -330,7 +336,7 @@ onMounted(load);
+             @change="syncPiso"
+           />
+           <datalist id="cita-pisos">
+-            <option v-for="piso in filteredPisos" :key="piso.id" :value="piso.nombre_visible" />
++            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+index 0811f1e..d4f953a 100644
+--- a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
++++ b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+@@ -52,6 +52,11 @@ const selectedCampus = computed(() => complejos.value.find((item) => item.id ===
+ const selectedTower = computed(() => torres.value.find((item) => item.id === filters.torre_id) ?? null);
+ const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function clusterNames(item: ConsultorioClusterConsulta) {
+   return item.clusters.length
+     ? item.clusters.map((cluster) => `${cluster.nombre} (${cluster.activo ? 'Activo' : 'Inactivo'})`).join(', ')
+@@ -123,7 +128,7 @@ function syncPiso() {
+     return;
+   }
+   setFloor(
+-    { id: piso.id, label: piso.nombre_visible },
++    { id: piso.id, label: pisoLabel(piso) },
+     selectedTower.value ? { id: selectedTower.value.id, label: selectedTower.value.nombre } : undefined,
+     selectedCampus.value ? { id: selectedCampus.value.id, label: selectedCampus.value.nombre } : undefined,
+     selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
+@@ -236,7 +241,7 @@ onMounted(loadData);
+           <label for="consulta-piso">Piso</label>
+           <select id="consulta-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="syncPiso(); consultar()">
+             <option value="">Todos los pisos</option>
+-            <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ item.nombre_visible }}</option>
++            <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+           </select>
+         </div>
+       </div>
+diff --git a/access-manager/frontend/src/views/KioskosView.vue b/access-manager/frontend/src/views/KioskosView.vue
+index 8333b14..c8c41f1 100644
+--- a/access-manager/frontend/src/views/KioskosView.vue
++++ b/access-manager/frontend/src/views/KioskosView.vue
+@@ -107,7 +107,9 @@ const puntoComplejos = computed(() =>
+ const puntoTorres = computed(() => (puntoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === puntoForm.complejo_id) : []));
+ const puntoPisos = computed(() =>
+   puntoForm.complejo_id && puntoForm.torre_id
+-    ? pisos.value.filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
++    ? pisos.value
++        .filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
++        .sort((a, b) => a.numero - b.numero)
+     : [],
+ );
+ const kioskoComplejos = computed(() =>
+@@ -116,7 +118,9 @@ const kioskoComplejos = computed(() =>
+ const kioskoTorres = computed(() => (kioskoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === kioskoForm.complejo_id) : []));
+ const kioskoPisos = computed(() =>
+   kioskoForm.complejo_id && kioskoForm.torre_id
+-    ? pisos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
++    ? pisos.value
++        .filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
++        .sort((a, b) => a.numero - b.numero)
+     : [],
+ );
+ const kioskoPuntos = computed(() =>
+@@ -147,6 +151,11 @@ function institucionLabel(item: Institucion) {
+   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+ }
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+   const normalized = text.trim().toLowerCase();
+   return rows.find((item) => {
+@@ -160,7 +169,8 @@ function complejoName(id: string | null | undefined) {
+ }
+ 
+ function pisoName(id: string | null | undefined) {
+-  return pisos.value.find((item) => item.id === id)?.nombre_visible ?? '-';
++  const piso = pisos.value.find((item) => item.id === id);
++  return piso ? pisoLabel(piso) : '-';
+ }
+ 
+ function torreLabel(item: Torre) {
+@@ -191,7 +201,7 @@ function persistLocationFromForm(form: { institucion_id: string; complejo_id: st
+     setTower({ id: torre.id, label: torre.nombre }, { id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
+   } else {
+     setFloor(
+-      { id: piso.id, label: piso.nombre_visible },
++      { id: piso.id, label: pisoLabel(piso) },
+       { id: torre.id, label: torre.nombre },
+       { id: campus.id, label: campus.nombre },
+       { id: institucion.id, label: institucion.nombre },
+@@ -245,14 +255,16 @@ function setPuntoLabels() {
+   puntoSearch.institucion = instituciones.value.find((item) => item.id === puntoForm.institucion_id)?.nombre ?? '';
+   puntoSearch.complejo = complejos.value.find((item) => item.id === puntoForm.complejo_id)?.nombre ?? '';
+   puntoSearch.torre = torres.value.find((item) => item.id === puntoForm.torre_id)?.nombre ?? '';
+-  puntoSearch.piso = pisos.value.find((item) => item.id === puntoForm.piso_id)?.nombre_visible ?? '';
++  const piso = pisos.value.find((item) => item.id === puntoForm.piso_id);
++  puntoSearch.piso = piso ? pisoLabel(piso) : '';
+ }
+ 
+ function setKioskoLabels() {
+   kioskoSearch.institucion = instituciones.value.find((item) => item.id === kioskoForm.institucion_id)?.nombre ?? '';
+   kioskoSearch.complejo = complejos.value.find((item) => item.id === kioskoForm.complejo_id)?.nombre ?? '';
+   kioskoSearch.torre = torres.value.find((item) => item.id === kioskoForm.torre_id)?.nombre ?? '';
+-  kioskoSearch.piso = pisos.value.find((item) => item.id === kioskoForm.piso_id)?.nombre_visible ?? '';
++  const piso = pisos.value.find((item) => item.id === kioskoForm.piso_id);
++  kioskoSearch.piso = piso ? pisoLabel(piso) : '';
+   kioskoSearch.punto = puntos.value.find((item) => item.id === kioskoForm.punto_acceso_id)?.nombre ?? '';
+ }
+ 
+@@ -316,12 +328,12 @@ function syncPuntoTorre() {
+ }
+ 
+ function syncPuntoPiso() {
+-  const match = matchByLabel(puntoPisos.value, puntoSearch.piso, (item) => item.nombre_visible);
++  const match = matchByLabel(puntoPisos.value, puntoSearch.piso, pisoLabel);
+   puntoForm.piso_id = match?.id ?? '';
+   if (match) {
+     const { institucion, campus, torre } = locationForForm(puntoForm);
+     setFloor(
+-      { id: match.id, label: match.nombre_visible },
++      { id: match.id, label: pisoLabel(match) },
+       torre ? { id: torre.id, label: torre.nombre } : undefined,
+       campus ? { id: campus.id, label: campus.nombre } : undefined,
+       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+@@ -397,12 +409,12 @@ function syncKioskoTorre() {
+ }
+ 
+ function syncKioskoPiso() {
+-  const match = matchByLabel(kioskoPisos.value, kioskoSearch.piso, (item) => item.nombre_visible);
++  const match = matchByLabel(kioskoPisos.value, kioskoSearch.piso, pisoLabel);
+   kioskoForm.piso_id = match?.id ?? '';
+   if (match) {
+     const { institucion, campus, torre } = locationForForm(kioskoForm);
+     setFloor(
+-      { id: match.id, label: match.nombre_visible },
++      { id: match.id, label: pisoLabel(match) },
+       torre ? { id: torre.id, label: torre.nombre } : undefined,
+       campus ? { id: campus.id, label: campus.nombre } : undefined,
+       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+@@ -648,7 +660,7 @@ onMounted(loadData);
+           <label for="punto-piso">Piso</label>
+           <input id="punto-piso" v-model="puntoSearch.piso" list="punto-pisos" required :disabled="!puntoForm.torre_id" @input="syncPuntoPiso" @change="syncPuntoPiso" />
+           <datalist id="punto-pisos">
+-            <option v-for="item in puntoPisos" :key="item.id" :value="item.nombre_visible" />
++            <option v-for="item in puntoPisos" :key="item.id" :value="pisoLabel(item)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+@@ -730,7 +742,7 @@ onMounted(loadData);
+           <label for="kiosko-piso">Piso</label>
+           <input id="kiosko-piso" v-model="kioskoSearch.piso" list="kiosko-pisos" required :disabled="!kioskoForm.torre_id" @input="syncKioskoPiso" @change="syncKioskoPiso" />
+           <datalist id="kiosko-pisos">
+-            <option v-for="item in kioskoPisos" :key="item.id" :value="item.nombre_visible" />
++            <option v-for="item in kioskoPisos" :key="item.id" :value="pisoLabel(item)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index 5a69493..2fa1f31 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -170,7 +170,8 @@ function torreLabel(item: Torre) {
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  return item.nombre_visible;
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+ }
+ 
+ function clusterLabel(item: ClusterTurnos) {
+@@ -208,7 +209,7 @@ function persistLocationFromForm() {
+     setTower({ id: torre.id, label: torre.nombre }, { id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
+   } else {
+     setFloor(
+-      { id: piso.id, label: piso.nombre_visible },
++      { id: piso.id, label: pisoLabel(piso) },
+       { id: torre.id, label: torre.nombre },
+       { id: campus.id, label: campus.nombre },
+       { id: institucion.id, label: institucion.nombre },
+@@ -242,7 +243,8 @@ function setAutocompleteLabels() {
+   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
+   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+   torreSearch.value = torres.value.find((item) => item.id === form.torre_id)?.nombre ?? '';
+-  pisoSearch.value = pisos.value.find((item) => item.id === form.piso_id)?.nombre_visible ?? '';
++  const piso = pisos.value.find((item) => item.id === form.piso_id);
++  pisoSearch.value = piso ? pisoLabel(piso) : '';
+ }
+ 
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+@@ -313,7 +315,7 @@ function syncPiso() {
+     const campus = selectedCampus();
+     const institucion = selectedInstitution();
+     setFloor(
+-      { id: match.id, label: match.nombre_visible },
++      { id: match.id, label: pisoLabel(match) },
+       torre ? { id: torre.id, label: torre.nombre } : undefined,
+       campus ? { id: campus.id, label: campus.nombre } : undefined,
+       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
+diff --git a/access-manager/frontend/src/views/ReportesView.vue b/access-manager/frontend/src/views/ReportesView.vue
+index 8f77c00..eb1b0c7 100644
+--- a/access-manager/frontend/src/views/ReportesView.vue
++++ b/access-manager/frontend/src/views/ReportesView.vue
+@@ -61,6 +61,11 @@ function institucionLabel(item: Institucion) {
+   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+ }
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+   const normalized = text.trim().toLowerCase();
+   return rows.find((item) => {
+@@ -88,7 +93,7 @@ function syncComplex() {
+ }
+ 
+ function syncPiso() {
+-  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
++  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
+ }
+ 
+ function statusText(active: boolean) {
+@@ -109,7 +114,8 @@ function institucionName(id: string | null | undefined) {
+ }
+ 
+ function pisoName(id: string | null | undefined) {
+-  return pisos.value.find((item) => item.id === id)?.nombre_visible ?? '';
++  const piso = pisos.value.find((item) => item.id === id);
++  return piso ? pisoLabel(piso) : '';
+ }
+ 
+ function inScope(row: { complejo_id?: string | null; piso_id?: string | null }) {
+@@ -152,8 +158,8 @@ const rows = computed<ReportRow[]>(() => {
+         tipo: 'Piso',
+         institucion: institucionName(complejos.value.find((complex) => complex.id === item.complejo_id)?.institucion_id),
+         complejo: complejoName(item.complejo_id),
+-        piso: item.nombre_visible,
+-        nombre: item.numero,
++        piso: pisoLabel(item),
++        nombre: String(item.numero),
+         estado: statusText(item.activo),
+       }));
+   }
+@@ -314,7 +320,7 @@ onMounted(loadData);
+             @change="syncPiso"
+           />
+           <datalist id="reporte-pisos">
+-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
++            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
+           </datalist>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/TurnosLlamadosView.vue b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+index e2ed0df..14ae095 100644
+--- a/access-manager/frontend/src/views/TurnosLlamadosView.vue
++++ b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+@@ -44,6 +44,11 @@ const filteredConsultorios = computed(() =>
+   }),
+ );
+ 
++function pisoLabel(item: Piso) {
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++}
++
+ function formatMinuteOption(value: number) {
+   if (value < 60) return `${value} min`;
+   const hours = Math.floor(value / 60);
+@@ -208,7 +213,7 @@ onMounted(async () => {
+           <label for="piso-turnos">Piso</label>
+           <select id="piso-turnos" v-model="pisoId" :disabled="!complejoId" @change="onPisoChange">
+             <option value="">Todos</option>
+-            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ item.nombre_visible }}</option>
++            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/UsuarioRolesView.vue b/access-manager/frontend/src/views/UsuarioRolesView.vue
+index 52e30dc..d6e9bef 100644
+--- a/access-manager/frontend/src/views/UsuarioRolesView.vue
++++ b/access-manager/frontend/src/views/UsuarioRolesView.vue
+@@ -100,7 +100,7 @@ const scopedPisos = computed(() =>
+   locationForm.torre_id
+     ? sortByLabel(
+         pisos.value.filter((item) => item.torre_id === locationForm.torre_id),
+-        (item) => `${item.numero} ${item.nombre_visible}`,
++        pisoLabel,
+       )
+     : [],
+ );
+@@ -199,7 +199,8 @@ function institutionLabel(item: Institucion) {
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  return `${item.numero} - ${item.nombre_visible}`;
++  const detail = item.codigo || item.nombre_visible;
++  return detail ? `Piso ${item.numero} - ${detail}` : `Piso ${item.numero}`;
+ }
+ 
+ function consultorioLabel(item: Consultorio) {

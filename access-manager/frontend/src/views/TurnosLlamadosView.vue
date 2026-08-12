@@ -44,6 +44,11 @@ const filteredConsultorios = computed(() =>
   }),
 );
 
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
 function formatMinuteOption(value: number) {
   if (value < 60) return `${value} min`;
   const hours = Math.floor(value / 60);
@@ -208,7 +213,7 @@ onMounted(async () => {
           <label for="piso-turnos">Piso</label>
           <select id="piso-turnos" v-model="pisoId" :disabled="!complejoId" @change="onPisoChange">
             <option value="">Todos</option>
-            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ item.nombre_visible }}</option>
+            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
           </select>
         </div>
         <div class="form-row">

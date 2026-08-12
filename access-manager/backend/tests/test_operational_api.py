@@ -271,24 +271,20 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             },
         )
     )
-    piso = assert_created(
-        client.post(
-            "/api/pisos",
-            headers=auth_headers,
-            json={
-                "complejo_id": complejo["id"],
-                "torre_id": torre["id"],
-                "numero": f"T-{suffix}",
-                "nombre_visible": f"Piso Test {suffix}",
-            },
-        )
-    )
+    pisos_response = client.get("/api/pisos", headers=auth_headers)
+    assert pisos_response.status_code == 200, pisos_response.text
+    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
     update_response = client.patch(
         f"/api/pisos/{piso['id']}",
         headers=auth_headers,
-        json={"descripcion": "Actualizado por prueba automatizada."},
+        json={
+            "codigo": f"T-{suffix}",
+            "nombre_visible": f"Piso Test {suffix}",
+            "descripcion": "Actualizado por prueba automatizada.",
+        },
     )
     assert update_response.status_code == 200, update_response.text
+    piso = update_response.json()
 
     deactivate_response = client.post(f"/api/pisos/{piso['id']}/desactivar", headers=auth_headers)
     assert deactivate_response.status_code == 200, deactivate_response.text
@@ -601,18 +597,16 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
             json={"complejo_id": complejo["id"], "nombre": f"Torre Flujo {suffix}", "numero_pisos": 20},
         )
     )
-    piso = assert_created(
-        client.post(
-            "/api/pisos",
-            headers=auth_headers,
-            json={
-                "complejo_id": complejo["id"],
-                "torre_id": torre["id"],
-                "numero": f"F-{suffix}",
-                "nombre_visible": f"Piso Flujo {suffix}",
-            },
-        )
+    pisos_response = client.get("/api/pisos", headers=auth_headers)
+    assert pisos_response.status_code == 200, pisos_response.text
+    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
+    piso_response = client.patch(
+        f"/api/pisos/{piso['id']}",
+        headers=auth_headers,
+        json={"codigo": f"F-{suffix}", "nombre_visible": f"Piso Flujo {suffix}"},
     )
+    assert piso_response.status_code == 200, piso_response.text
+    piso = piso_response.json()
     cluster = assert_created(
         client.post(
             "/api/clusters-turnos",

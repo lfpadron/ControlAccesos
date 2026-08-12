@@ -66,7 +66,7 @@ const filteredComplejos = computed(() => {
 
 const filteredPisos = computed(() => {
   if (!form.complejo_id) return [];
-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id);
+  return pisos.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.numero - b.numero);
 });
 
 const filteredConsultorios = computed(() => {
@@ -76,6 +76,11 @@ const filteredConsultorios = computed(() => {
 
 function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+}
+
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
 }
 
 function patientDisplayName(paciente: Paciente) {
@@ -99,7 +104,8 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) 
 function setAutocompleteLabels() {
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
-  pisoSearch.value = pisos.value.find((item) => item.id === form.piso_id)?.nombre_visible ?? '';
+  const piso = pisos.value.find((item) => item.id === form.piso_id);
+  pisoSearch.value = piso ? pisoLabel(piso) : '';
   const consultorio = consultorios.value.find((item) => item.id === form.consultorio_id);
   consultorioSearch.value = consultorio ? consultorio.nombre_visible || consultorio.codigo : '';
 }
@@ -134,7 +140,7 @@ function syncComplex() {
 }
 
 function syncPiso() {
-  const match = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible);
+  const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
   form.piso_id = match?.id ?? '';
   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
     clearLocation('piso');
@@ -330,7 +336,7 @@ onMounted(load);
             @change="syncPiso"
           />
           <datalist id="cita-pisos">
-            <option v-for="piso in filteredPisos" :key="piso.id" :value="piso.nombre_visible" />
+            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
           </datalist>
         </div>
         <div class="form-row">

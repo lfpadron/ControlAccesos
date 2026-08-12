@@ -170,7 +170,8 @@ function torreLabel(item: Torre) {
 }
 
 function pisoLabel(item: Piso) {
-  return item.nombre_visible;
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
 }
 
 function clusterLabel(item: ClusterTurnos) {
@@ -208,7 +209,7 @@ function persistLocationFromForm() {
     setTower({ id: torre.id, label: torre.nombre }, { id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
   } else {
     setFloor(
-      { id: piso.id, label: piso.nombre_visible },
+      { id: piso.id, label: pisoLabel(piso) },
       { id: torre.id, label: torre.nombre },
       { id: campus.id, label: campus.nombre },
       { id: institucion.id, label: institucion.nombre },
@@ -242,7 +243,8 @@ function setAutocompleteLabels() {
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
   torreSearch.value = torres.value.find((item) => item.id === form.torre_id)?.nombre ?? '';
-  pisoSearch.value = pisos.value.find((item) => item.id === form.piso_id)?.nombre_visible ?? '';
+  const piso = pisos.value.find((item) => item.id === form.piso_id);
+  pisoSearch.value = piso ? pisoLabel(piso) : '';
 }
 
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
@@ -313,7 +315,7 @@ function syncPiso() {
     const campus = selectedCampus();
     const institucion = selectedInstitution();
     setFloor(
-      { id: match.id, label: match.nombre_visible },
+      { id: match.id, label: pisoLabel(match) },
       torre ? { id: torre.id, label: torre.nombre } : undefined,
       campus ? { id: campus.id, label: campus.nombre } : undefined,
       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,

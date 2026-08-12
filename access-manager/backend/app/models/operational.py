@@ -55,12 +55,17 @@ class Torre(TimestampMixin, Base):
 
 class Piso(TimestampMixin, Base):
     __tablename__ = "pisos"
+    __table_args__ = (
+        CheckConstraint("numero >= 1", name="ck_pisos_numero_positive"),
+        UniqueConstraint("torre_id", "numero", name="uq_pisos_torre_numero"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
     torre_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("torres.id"), nullable=False, index=True)
-    numero: Mapped[str] = mapped_column(String(40), nullable=False)
-    nombre_visible: Mapped[str] = mapped_column(String(180), nullable=False)
+    numero: Mapped[int] = mapped_column(Integer, nullable=False)
+    codigo: Mapped[str | None] = mapped_column(String(40))
+    nombre_visible: Mapped[str] = mapped_column(String(20), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 

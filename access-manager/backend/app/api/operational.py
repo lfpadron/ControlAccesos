@@ -99,6 +99,7 @@ class CrudConfig:
     relation_handler: Callable[[Session, object, dict[str, Any]], None] | None = None
     response_factory: Callable[[Session, object], object] | None = None
     audit_extra_factory: Callable[[Session, object], dict[str, Any]] | None = None
+    post_save: Callable[[Session, object], None] | None = None
 
 
 def client_ip(request: Request) -> str | None:
@@ -214,6 +215,61 @@ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | N
     return int(db.execute(query).scalar_one())
 
 
+def floor_numbers_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> set[int]:
+    query = select(Piso.numero).where(Piso.torre_id == torre_id)
+    if exclude_piso_id is not None:
+        query = query.where(Piso.id != exclude_piso_id)
+    return {int(number) for number in db.execute(query).scalars()}
+
+
+def next_floor_number(db: Session, torre: Torre) -> int | None:
+    existing_numbers = floor_numbers_for_torre(db, torre.id)
+    for number in range(1, torre.numero_pisos + 1):
+        if number not in existing_numbers:
+            return number
+    return None
+
+
+def default_floor_name(number: int) -> str:
+    return f"Piso {number}"
+
+
+def normalize_piso_payload(data: dict[str, Any]) -> None:
+    if "codigo" in data and data["codigo"] is not None:
+        data["codigo"] = str(data["codigo"]).strip() or None
+    if "nombre_visible" in data and data["nombre_visible"] is not None:
+        data["nombre_visible"] = str(data["nombre_visible"]).strip()
+        if not data["nombre_visible"]:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nombre visible es requerido.")
+    if "descripcion" in data and data["descripcion"] is not None:
+        data["descripcion"] = str(data["descripcion"]).strip() or None
+
+
+def sync_torre_pisos(db: Session, torre: Torre) -> list[Piso]:
+    existing_numbers = floor_numbers_for_torre(db, torre.id)
+    created: list[Piso] = []
+    for number in range(1, torre.numero_pisos + 1):
+        if number in existing_numbers:
+            continue
+        piso = Piso(
+            complejo_id=torre.complejo_id,
+            torre_id=torre.id,
+            numero=number,
+            codigo=str(number),
+            nombre_visible=default_floor_name(number),
+        )
+        db.add(piso)
+        created.append(piso)
+    if created:
+        db.flush()
+    return created
+
+
+def post_save_torre(db: Session, item: object) -> None:
+    if isinstance(item, Torre):
+        sync_torre_pisos(db, item)
+
+
 def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     if data.get("complejo_id") is not None:
         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
@@ -233,6 +289,7 @@ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None
 
 
 def validate_piso(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+    normalize_piso_payload(data)
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     torre_id = data.get("torre_id", getattr(item, "torre_id", None))
     if complejo_id is not None:
@@ -242,13 +299,25 @@ def validate_piso(db: Session, data: dict[str, Any], item: object | None = None)
     torre = exists_or_404(db, Torre, torre_id, "Torre")
     if complejo_id is not None and torre.complejo_id != complejo_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La torre no pertenece al campus indicado.")
-    if item is None or item.torre_id != torre.id:
-        existing_count = floor_count_for_torre(db, torre.id, getattr(item, "id", None))
-        if existing_count >= torre.numero_pisos:
+    current_number = data.get("numero", getattr(item, "numero", None))
+    if item is None and current_number is None:
+        current_number = next_floor_number(db, torre)
+        if current_number is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="El número de pisos no puede exceder los definidos en la torre.",
             )
+        data["numero"] = current_number
+    if current_number is not None:
+        if current_number > torre.numero_pisos:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El número de piso excede los definidos en la torre.")
+        if current_number in floor_numbers_for_torre(db, torre.id, getattr(item, "id", None)):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El número de piso ya existe en esta torre.")
+    if item is None:
+        if not data.get("codigo"):
+            data["codigo"] = str(data["numero"])
+        if not data.get("nombre_visible"):
+            data["nombre_visible"] = default_floor_name(data["numero"])
 
 
 def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
@@ -493,6 +562,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         if config.relation_handler:
             config.relation_handler(db, item, relation_data)
             db.flush()
+        if config.post_save:
+            config.post_save(db, item)
         after_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
         record_audit_event(
             db,
@@ -533,6 +604,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         if config.relation_handler:
             config.relation_handler(db, item, relation_data)
             db.flush()
+        if config.post_save:
+            config.post_save(db, item)
         after_extra = config.audit_extra_factory(db, item) if config.audit_extra_factory else {}
         record_audit_event(
             db,
@@ -637,8 +710,45 @@ usuario_roles_router = create_crud_router(
     CrudConfig(UsuarioRol, UsuarioRolCreate, UsuarioRolUpdate, UsuarioRolRead, "usuario_roles", "ROL_ASIGNADO", "ROL_ASIGNADO_EDITADO", "created_at", validator=validate_usuario_rol)
 )
 torres_router = create_crud_router(
-    CrudConfig(Torre, TorreCreate, TorreUpdate, TorreRead, "torres", "TORRE_CREADA", "TORRE_EDITADA", "nombre", validator=validate_torre)
+    CrudConfig(
+        Torre,
+        TorreCreate,
+        TorreUpdate,
+        TorreRead,
+        "torres",
+        "TORRE_CREADA",
+        "TORRE_EDITADA",
+        "nombre",
+        validator=validate_torre,
+        post_save=post_save_torre,
+    )
 )
+
+
+@torres_router.post("/{item_id}/generar-pisos", response_model=list[PisoRead])
+def generar_pisos_torre(
+    item_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = AdminUser,
+) -> list[Piso]:
+    torre = exists_or_404(db, Torre, item_id, "Torre")
+    created = sync_torre_pisos(db, torre)
+    if created:
+        record_audit_event(
+            db,
+            evento="PISOS_GENERADOS",
+            entidad="torres",
+            entidad_id=torre.id,
+            usuario_id=current_user.id,
+            canal="WEB",
+            ip_origen=client_ip(request),
+            valor_despues={"pisos_generados": [floor.numero for floor in created]},
+        )
+    db.commit()
+    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.numero)).scalars())
+
+
 pisos_router = create_crud_router(
     CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
 )

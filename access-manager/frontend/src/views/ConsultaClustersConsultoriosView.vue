@@ -52,6 +52,11 @@ const selectedCampus = computed(() => complejos.value.find((item) => item.id ===
 const selectedTower = computed(() => torres.value.find((item) => item.id === filters.torre_id) ?? null);
 const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
 
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
 function clusterNames(item: ConsultorioClusterConsulta) {
   return item.clusters.length
     ? item.clusters.map((cluster) => `${cluster.nombre} (${cluster.activo ? 'Activo' : 'Inactivo'})`).join(', ')
@@ -123,7 +128,7 @@ function syncPiso() {
     return;
   }
   setFloor(
-    { id: piso.id, label: piso.nombre_visible },
+    { id: piso.id, label: pisoLabel(piso) },
     selectedTower.value ? { id: selectedTower.value.id, label: selectedTower.value.nombre } : undefined,
     selectedCampus.value ? { id: selectedCampus.value.id, label: selectedCampus.value.nombre } : undefined,
     selectedInstitution.value ? { id: selectedInstitution.value.id, label: selectedInstitution.value.nombre } : undefined,
@@ -236,7 +241,7 @@ onMounted(loadData);
           <label for="consulta-piso">Piso</label>
           <select id="consulta-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="syncPiso(); consultar()">
             <option value="">Todos los pisos</option>
-            <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ item.nombre_visible }}</option>
+            <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
           </select>
         </div>
       </div>

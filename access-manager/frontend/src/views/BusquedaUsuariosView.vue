@@ -75,6 +75,11 @@ function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
 }
 
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
@@ -102,7 +107,7 @@ function syncComplex() {
 }
 
 function syncPiso() {
-  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, (item) => item.nombre_visible)?.id ?? '';
+  selectedPisoId.value = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
 }
 
 function roleName(roleId: string) {
@@ -186,7 +191,7 @@ const filteredRows = computed<UserRow[]>(() =>
       estado: usuario.estado,
       instituciones: uniqueNames(scope.institucionIds, instituciones.value, (item: Institucion) => item.nombre).join(', ') || '-',
       complejos: uniqueNames(scope.complejoIds, complejos.value, (item: Complejo) => item.nombre).join(', ') || '-',
-      pisos: uniqueNames(scope.pisoIds, pisos.value, (item: Piso) => item.nombre_visible).join(', ') || '-',
+      pisos: uniqueNames(scope.pisoIds, pisos.value, pisoLabel).join(', ') || '-',
     };
   }),
 );
@@ -313,7 +318,7 @@ onMounted(loadData);
           <label for="usuarios-piso">Piso</label>
           <input id="usuarios-piso" v-model="pisoSearch" list="usuarios-pisos" @input="syncPiso" @change="syncPiso" />
           <datalist id="usuarios-pisos">
-            <option v-for="item in filteredPisos" :key="item.id" :value="item.nombre_visible" />
+            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>
         </div>
         <div class="form-row">

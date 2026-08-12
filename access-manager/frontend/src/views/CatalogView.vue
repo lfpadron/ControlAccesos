@@ -26,6 +26,15 @@ type Row = Record<string, unknown> & { id: string };
 type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
 type SelectOption = { value: string; label: string };
 
+function pisoLookupLabel(item: Row | { numero?: unknown; codigo?: unknown; nombre_visible?: unknown }) {
+  const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? item.numero : '';
+  const codigo = typeof item.codigo === 'string' ? item.codigo : '';
+  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible : '';
+  const numberLabel = numero ? `Piso ${numero}` : 'Piso';
+  const detail = codigo || nombreVisible;
+  return detail ? `${numberLabel} · ${detail}` : numberLabel;
+}
+
 const route = useRoute();
 const rows = ref<Row[]>([]);
 const error = ref('');
@@ -73,7 +82,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
       const torre = torres.find((row) => row.id === item.torre_id);
       return {
         id: item.id,
-        label: torre ? `${torre.nombre} · ${item.nombre_visible}` : item.nombre_visible,
+        label: torre ? `${torre.nombre} · ${pisoLookupLabel(item)}` : pisoLookupLabel(item),
         complejo_id: item.complejo_id,
         torre_id: item.torre_id,
       };
@@ -223,7 +232,7 @@ function setLocationFromRow(row: Row) {
       : towerForId(row.torre_id ?? floorForId(row.piso_id)?.torre_id);
   const rowPiso =
     config.value.key === 'pisos'
-      ? ({ id: row.id, label: String(row.nombre_visible ?? row.numero ?? row.id), complejo_id: row.complejo_id as string, torre_id: row.torre_id as string } satisfies LookupOption)
+      ? ({ id: row.id, label: pisoLookupLabel(row), complejo_id: row.complejo_id as string, torre_id: row.torre_id as string } satisfies LookupOption)
       : floorForId(row.piso_id);
   if (!campus || !institucion) return;
   if (rowPiso && rowTorre) {

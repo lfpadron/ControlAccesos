@@ -8,6 +8,7 @@ import CatalogView from '../views/CatalogView.vue';
 import RolesView from '../views/RolesView.vue';
 import UsuariosView from '../views/UsuariosView.vue';
 import UsuarioRolesView from '../views/UsuarioRolesView.vue';
+import PisosView from '../views/PisosView.vue';
 import PerfilView from '../views/PerfilView.vue';
 import AsignacionesView from '../views/AsignacionesView.vue';
 import AuditoriaView from '../views/AuditoriaView.vue';
@@ -41,7 +42,7 @@ const router = createRouter({
     { path: '/roles', component: RolesView },
     { path: '/usuario-roles', component: UsuarioRolesView },
     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
-    { path: '/pisos', component: CatalogView, meta: { catalog: 'pisos' } },
+    { path: '/pisos', component: PisosView },
     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },

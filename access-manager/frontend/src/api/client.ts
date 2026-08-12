@@ -144,7 +144,8 @@ export type Piso = {
   id: string;
   complejo_id: string;
   torre_id: string;
-  numero: string;
+  numero: number;
+  codigo?: string | null;
   nombre_visible: string;
   descripcion?: string | null;
   activo: boolean;
@@ -660,6 +661,8 @@ export const createRole = (payload: Record<string, unknown>) => createResource<R
 export const updateRole = (id: string, payload: Record<string, unknown>) => updateResource<Role>('roles', id, payload);
 export const listTorres = () => listResource<Torre>('torres');
 export const listPisos = () => listResource<Piso>('pisos');
+export const syncTorrePisos = (torreId: string) =>
+  apiFetch<Piso[]>(`/torres/${torreId}/generar-pisos`, { method: 'POST' });
 export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
 export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
 export const listConsultorios = () => listResource<Consultorio>('consultorios');

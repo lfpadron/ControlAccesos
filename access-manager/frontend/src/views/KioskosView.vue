@@ -107,7 +107,9 @@ const puntoComplejos = computed(() =>
 const puntoTorres = computed(() => (puntoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === puntoForm.complejo_id) : []));
 const puntoPisos = computed(() =>
   puntoForm.complejo_id && puntoForm.torre_id
-    ? pisos.value.filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
+    ? pisos.value
+        .filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
+        .sort((a, b) => a.numero - b.numero)
     : [],
 );
 const kioskoComplejos = computed(() =>
@@ -116,7 +118,9 @@ const kioskoComplejos = computed(() =>
 const kioskoTorres = computed(() => (kioskoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === kioskoForm.complejo_id) : []));
 const kioskoPisos = computed(() =>
   kioskoForm.complejo_id && kioskoForm.torre_id
-    ? pisos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
+    ? pisos.value
+        .filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
+        .sort((a, b) => a.numero - b.numero)
     : [],
 );
 const kioskoPuntos = computed(() =>
@@ -147,6 +151,11 @@ function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
 }
 
+function pisoLabel(item: Piso) {
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
@@ -160,7 +169,8 @@ function complejoName(id: string | null | undefined) {
 }
 
 function pisoName(id: string | null | undefined) {
-  return pisos.value.find((item) => item.id === id)?.nombre_visible ?? '-';
+  const piso = pisos.value.find((item) => item.id === id);
+  return piso ? pisoLabel(piso) : '-';
 }
 
 function torreLabel(item: Torre) {
@@ -191,7 +201,7 @@ function persistLocationFromForm(form: { institucion_id: string; complejo_id: st
     setTower({ id: torre.id, label: torre.nombre }, { id: campus.id, label: campus.nombre }, { id: institucion.id, label: institucion.nombre });
   } else {
     setFloor(
-      { id: piso.id, label: piso.nombre_visible },
+      { id: piso.id, label: pisoLabel(piso) },
       { id: torre.id, label: torre.nombre },
       { id: campus.id, label: campus.nombre },
       { id: institucion.id, label: institucion.nombre },
@@ -245,14 +255,16 @@ function setPuntoLabels() {
   puntoSearch.institucion = instituciones.value.find((item) => item.id === puntoForm.institucion_id)?.nombre ?? '';
   puntoSearch.complejo = complejos.value.find((item) => item.id === puntoForm.complejo_id)?.nombre ?? '';
   puntoSearch.torre = torres.value.find((item) => item.id === puntoForm.torre_id)?.nombre ?? '';
-  puntoSearch.piso = pisos.value.find((item) => item.id === puntoForm.piso_id)?.nombre_visible ?? '';
+  const piso = pisos.value.find((item) => item.id === puntoForm.piso_id);
+  puntoSearch.piso = piso ? pisoLabel(piso) : '';
 }
 
 function setKioskoLabels() {
   kioskoSearch.institucion = instituciones.value.find((item) => item.id === kioskoForm.institucion_id)?.nombre ?? '';
   kioskoSearch.complejo = complejos.value.find((item) => item.id === kioskoForm.complejo_id)?.nombre ?? '';
   kioskoSearch.torre = torres.value.find((item) => item.id === kioskoForm.torre_id)?.nombre ?? '';
-  kioskoSearch.piso = pisos.value.find((item) => item.id === kioskoForm.piso_id)?.nombre_visible ?? '';
+  const piso = pisos.value.find((item) => item.id === kioskoForm.piso_id);
+  kioskoSearch.piso = piso ? pisoLabel(piso) : '';
   kioskoSearch.punto = puntos.value.find((item) => item.id === kioskoForm.punto_acceso_id)?.nombre ?? '';
 }
 
@@ -316,12 +328,12 @@ function syncPuntoTorre() {
 }
 
 function syncPuntoPiso() {
-  const match = matchByLabel(puntoPisos.value, puntoSearch.piso, (item) => item.nombre_visible);
+  const match = matchByLabel(puntoPisos.value, puntoSearch.piso, pisoLabel);
   puntoForm.piso_id = match?.id ?? '';
   if (match) {
     const { institucion, campus, torre } = locationForForm(puntoForm);
     setFloor(
-      { id: match.id, label: match.nombre_visible },
+      { id: match.id, label: pisoLabel(match) },
       torre ? { id: torre.id, label: torre.nombre } : undefined,
       campus ? { id: campus.id, label: campus.nombre } : undefined,
       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
@@ -397,12 +409,12 @@ function syncKioskoTorre() {
 }
 
 function syncKioskoPiso() {
-  const match = matchByLabel(kioskoPisos.value, kioskoSearch.piso, (item) => item.nombre_visible);
+  const match = matchByLabel(kioskoPisos.value, kioskoSearch.piso, pisoLabel);
   kioskoForm.piso_id = match?.id ?? '';
   if (match) {
     const { institucion, campus, torre } = locationForForm(kioskoForm);
     setFloor(
-      { id: match.id, label: match.nombre_visible },
+      { id: match.id, label: pisoLabel(match) },
       torre ? { id: torre.id, label: torre.nombre } : undefined,
       campus ? { id: campus.id, label: campus.nombre } : undefined,
       institucion ? { id: institucion.id, label: institucion.nombre } : undefined,
@@ -648,7 +660,7 @@ onMounted(loadData);
           <label for="punto-piso">Piso</label>
           <input id="punto-piso" v-model="puntoSearch.piso" list="punto-pisos" required :disabled="!puntoForm.torre_id" @input="syncPuntoPiso" @change="syncPuntoPiso" />
           <datalist id="punto-pisos">
-            <option v-for="item in puntoPisos" :key="item.id" :value="item.nombre_visible" />
+            <option v-for="item in puntoPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>
         </div>
         <div class="form-row">
@@ -730,7 +742,7 @@ onMounted(loadData);
           <label for="kiosko-piso">Piso</label>
           <input id="kiosko-piso" v-model="kioskoSearch.piso" list="kiosko-pisos" required :disabled="!kioskoForm.torre_id" @input="syncKioskoPiso" @change="syncKioskoPiso" />
           <datalist id="kiosko-pisos">
-            <option v-for="item in kioskoPisos" :key="item.id" :value="item.nombre_visible" />
+            <option v-for="item in kioskoPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>
         </div>
         <div class="form-row">

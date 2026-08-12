@@ -100,7 +100,7 @@ const scopedPisos = computed(() =>
   locationForm.torre_id
     ? sortByLabel(
         pisos.value.filter((item) => item.torre_id === locationForm.torre_id),
-        (item) => `${item.numero} ${item.nombre_visible}`,
+        pisoLabel,
       )
     : [],
 );
@@ -199,7 +199,8 @@ function institutionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  return `${item.numero} - ${item.nombre_visible}`;
+  const detail = item.codigo || item.nombre_visible;
+  return detail ? `Piso ${item.numero} - ${detail}` : `Piso ${item.numero}`;
 }
 
 function consultorioLabel(item: Consultorio) {
