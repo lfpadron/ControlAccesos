@@ -667,6 +667,9 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
 export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
 export const listConsultorios = () => listResource<Consultorio>('consultorios');
 export const listMedicos = () => listResource<Medico>('medicos');
+export const listAccessiblePisos = () => apiFetch<Piso[]>('/catalogos-operativos/pisos');
+export const listAccessibleConsultorios = () => apiFetch<Consultorio[]>('/catalogos-operativos/consultorios');
+export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
 export const listOperadores = () => listResource<Operador>('operadores');
 export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
 export const listKioskos = () => listResource<Kiosko>('kioskos');
@@ -677,7 +680,7 @@ export const listAsignacionesMedicoConsultorio = () =>
 export const listAsignacionesOperador = () =>
   listResource<AsignacionOperador>('asignaciones-operador');
 export const listAuditoria = () => listResource<Auditoria>('auditoria');
-export const listPacientes = (params: { medico_id: string }) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
+export const listPacientes = (params: { medico_id?: string } = {}) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
 
 export function consultaClustersPorConsultorio(params: {
   torre_id: string;
@@ -719,7 +722,7 @@ function queryString(params: Record<string, string | number | boolean | null | u
 export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
 export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
 
-export function searchPacientes(q: string, medicoId: string) {
+export function searchPacientes(q: string, medicoId?: string) {
   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
 }
 
@@ -841,7 +844,7 @@ export function searchCitas(params: {
   estado?: string;
   tipo?: string;
 }) {
-  return apiFetchPublic<CitaSearchResult[]>(`/citas/buscar${queryString(params)}`);
+  return apiFetch<CitaSearchResult[]>(`/citas/buscar${queryString(params)}`);
 }
 
 export function createCita(payload: Record<string, unknown>, confirmarDuplicado = false) {
@@ -925,17 +928,12 @@ export function getPublicDisplayTurnos(codigoDispositivo: string, token?: string
 }
 
 export function listTurnosDisplayRecientes(params: {
-  complejo_id: string;
+  complejo_id?: string;
   piso_id?: string;
   cluster_espera_id?: string;
   consultorio_id?: string;
+  medico_id?: string;
   minutos?: number;
 }) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== '') {
-      query.set(key, String(value));
-    }
-  }
-  return apiFetch<TurnoDisplayReciente[]>(`/turnos-display/recientes?${query.toString()}`);
+  return apiFetch<TurnoDisplayReciente[]>(`/turnos-display/recientes${queryString(params)}`);
 }

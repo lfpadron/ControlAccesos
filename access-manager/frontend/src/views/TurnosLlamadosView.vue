@@ -3,27 +3,34 @@ import { computed, onMounted, ref } from 'vue';
 import {
   Complejo,
   Consultorio,
+  getCurrentUser,
   Institucion,
   llamarCita,
+  listAccessibleConsultorios,
+  listAccessibleMedicos,
+  listAccessiblePisos,
   listComplejos,
-  listConsultorios,
   listInstituciones,
-  listPisos,
   listTurnosDisplayRecientes,
+  Medico,
   Piso,
   TurnoDisplayReciente,
+  Usuario,
 } from '../api/client';
 
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
 const pisos = ref<Piso[]>([]);
 const consultorios = ref<Consultorio[]>([]);
+const medicos = ref<Medico[]>([]);
+const currentUser = ref<Usuario | null>(null);
 const rows = ref<TurnoDisplayReciente[]>([]);
 const institucionId = ref('');
 const complejoId = ref('');
 const pisoId = ref('');
 const clusterEsperaId = ref('');
 const consultorioId = ref('');
+const medicoId = ref('');
 const minutos = ref(30);
 const loading = ref(false);
 const error = ref('');
@@ -34,11 +41,13 @@ const filteredComplejos = computed(() =>
   institucionId.value ? complejos.value.filter((item) => item.institucion_id === institucionId.value) : complejos.value,
 );
 
-const filteredPisos = computed(() => (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : []));
+const filteredPisos = computed(() =>
+  (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value).sort((a, b) => a.numero - b.numero),
+);
 
 const filteredConsultorios = computed(() =>
   consultorios.value.filter((item) => {
-    if (!complejoId.value || item.complejo_id !== complejoId.value) return false;
+    if (complejoId.value && item.complejo_id !== complejoId.value) return false;
     if (pisoId.value && item.piso_id !== pisoId.value) return false;
     return true;
   }),
@@ -49,6 +58,15 @@ function pisoLabel(item: Piso) {
   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
 }
 
+function medicoLabel(item: Medico) {
+  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
+}
+
+function defaultMedicoId() {
+  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
+}
+
 function formatMinuteOption(value: number) {
   if (value < 60) return `${value} min`;
   const hours = Math.floor(value / 60);
@@ -57,26 +75,29 @@ function formatMinuteOption(value: number) {
 }
 
 async function loadCatalogs() {
-  const [institucionesData, complejosData, pisosData, consultoriosData] = await Promise.all([
+  const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+    getCurrentUser(),
     listInstituciones(),
     listComplejos(),
-    listPisos(),
-    listConsultorios(),
+    listAccessiblePisos(),
+    listAccessibleConsultorios(),
+    listAccessibleMedicos(),
   ]);
+  currentUser.value = userData;
   instituciones.value = institucionesData;
   complejos.value = complejosData;
   pisos.value = pisosData;
   consultorios.value = consultoriosData;
-  institucionId.value ||= complejosData[0]?.institucion_id ?? institucionesData[0]?.id ?? '';
-  complejoId.value ||= filteredComplejos.value[0]?.id ?? complejosData[0]?.id ?? '';
+  medicos.value = medicosData;
+  medicoId.value ||= defaultMedicoId();
+  const firstConsultorio = consultoriosData[0];
+  if (firstConsultorio && !complejoId.value) {
+    complejoId.value = firstConsultorio.complejo_id;
+    institucionId.value = complejosData.find((item) => item.id === firstConsultorio.complejo_id)?.institucion_id ?? '';
+  }
 }
 
 async function loadRows() {
-  if (!complejoId.value) {
-    rows.value = [];
-    error.value = '';
-    return;
-  }
   loading.value = true;
   error.value = '';
   try {
@@ -85,6 +106,7 @@ async function loadRows() {
       piso_id: pisoId.value,
       cluster_espera_id: clusterEsperaId.value,
       consultorio_id: consultorioId.value,
+      medico_id: medicoId.value,
       minutos: minutos.value,
     });
   } catch (err) {
@@ -205,22 +227,29 @@ onMounted(async () => {
         <div class="form-row">
           <label for="complejo-turnos">Campus</label>
           <select id="complejo-turnos" v-model="complejoId" @change="onComplejoChange">
-            <option value="">Selecciona un campus</option>
+            <option value="">Todos</option>
             <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>
         <div class="form-row">
           <label for="piso-turnos">Piso</label>
-          <select id="piso-turnos" v-model="pisoId" :disabled="!complejoId" @change="onPisoChange">
+          <select id="piso-turnos" v-model="pisoId" @change="onPisoChange">
             <option value="">Todos</option>
             <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
           </select>
         </div>
         <div class="form-row">
           <label for="consultorio-turnos">Consultorio</label>
-          <select id="consultorio-turnos" v-model="consultorioId" :disabled="!complejoId" @change="loadRows">
+          <select id="consultorio-turnos" v-model="consultorioId" @change="loadRows">
             <option value="">Todos</option>
             <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ item.nombre_visible || item.codigo }}</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="medico-turnos">Médico</label>
+          <select id="medico-turnos" v-model="medicoId" @change="loadRows">
+            <option value="">Todos</option>
+            <option v-for="item in medicos" :key="item.id" :value="item.id">{{ medicoLabel(item) }}</option>
           </select>
         </div>
         <div class="form-row">

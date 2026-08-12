@@ -7,14 +7,15 @@ import {
   cancelarCita,
   checkinLobby,
   generarQr,
+  getCurrentUser,
   getTicket,
   llamarCita,
+  listAccessibleConsultorios,
+  listAccessibleMedicos,
+  listAccessiblePisos,
   listCitasHoy,
   listComplejos,
-  listConsultorios,
   listInstituciones,
-  listMedicos,
-  listPisos,
   type Cita,
   type CitaFilters,
   type Complejo,
@@ -23,6 +24,7 @@ import {
   type Medico,
   type Piso,
   type TicketResponse,
+  type Usuario,
 } from '../api/client';
 import { todayLocalIso } from '../dateUtils';
 import { exportRows, type ExportFormat } from '../exporters';
@@ -33,6 +35,7 @@ const complejos = ref<Complejo[]>([]);
 const pisos = ref<Piso[]>([]);
 const consultorios = ref<Consultorio[]>([]);
 const medicos = ref<Medico[]>([]);
+const currentUser = ref<Usuario | null>(null);
 const error = ref('');
 const message = ref('');
 const qrPayload = ref('');
@@ -80,6 +83,10 @@ function pisoLabel(item: Piso) {
   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
 }
 
+function medicoLabel(item: Medico) {
+  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
@@ -120,6 +127,11 @@ function syncPiso() {
 
 function syncConsultorio() {
   filters.consultorio_id = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo)?.id ?? '';
+}
+
+function defaultMedicoId() {
+  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
 }
 
 function requestFilters(): CitaFilters {
@@ -169,18 +181,21 @@ async function load() {
 
 async function loadCatalogs() {
   try {
-    const [institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+    const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+      getCurrentUser(),
       listInstituciones(),
       listComplejos(),
-      listPisos(),
-      listConsultorios(),
-      listMedicos(),
+      listAccessiblePisos(),
+      listAccessibleConsultorios(),
+      listAccessibleMedicos(),
     ]);
+    currentUser.value = userData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
     pisos.value = pisosData;
     consultorios.value = consultoriosData;
     medicos.value = medicosData;
+    filters.medico_id ||= defaultMedicoId();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar filtros.';
   }
@@ -285,7 +300,7 @@ function clearFilters() {
   filters.complejo_id = '';
   filters.piso_id = '';
   filters.consultorio_id = '';
-  filters.medico_id = '';
+  filters.medico_id = defaultMedicoId();
   filters.paciente = '';
   institucionSearch.value = '';
   complejoSearch.value = '';
@@ -390,7 +405,7 @@ onMounted(async () => {
           <select id="filtro-medico" v-model="filters.medico_id">
             <option value="">Todos</option>
             <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
+              {{ medicoLabel(medico) }}
             </option>
           </select>
         </div>

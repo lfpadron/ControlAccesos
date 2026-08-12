@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_permission, require_role
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
@@ -35,7 +35,19 @@ from app.schemas.flow import (
     QrValidarResponse,
     TicketResponse,
 )
+from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead
 from app.services.audit_service import audit_safe_dict, record_audit_event
+from app.services.access_scope import (
+    cita_access_predicate,
+    cita_payload_is_accessible,
+    consultorio_catalog_access_predicate,
+    ensure_cita_access,
+    ensure_medico_patient_assignment_access,
+    ensure_paciente_access,
+    medico_catalog_access_predicate,
+    paciente_access_predicate,
+    piso_catalog_access_predicate,
+)
 from app.services.checkin_service import checkin_window_status
 from app.services.folio_service import generate_patient_folio, generate_turn_folio
 from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, now_utc, token_digest, validate_qr
@@ -44,8 +56,16 @@ pacientes_router = APIRouter()
 citas_router = APIRouter()
 qr_router = APIRouter()
 mobile_router = APIRouter()
+catalogos_operativos_router = APIRouter()
 
-OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
+PacientesReadUser = Depends(require_permission("pacientes"))
+PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
+CitasAgendaReadUser = Depends(require_permission("citas"))
+CitasAgendaWriteUser = Depends(require_permission("citas", minimum="editar"))
+CitasTodayReadUser = Depends(require_permission("citas-hoy"))
+CitasOperationalReadUser = Depends(require_permission("citas", "citas-hoy"))
+CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", minimum="editar"))
 MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
 MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
 
@@ -137,6 +157,78 @@ def medico_label(medico: Medico | None) -> str | None:
     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
 
 
+def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> ConsultorioRead:
+    cluster_ids = list(
+        db.execute(
+            select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio.id)
+        ).scalars()
+    )
+    return ConsultorioRead(
+        id=consultorio.id,
+        complejo_id=consultorio.complejo_id,
+        piso_id=consultorio.piso_id,
+        codigo=consultorio.codigo,
+        nombre_visible=consultorio.nombre_visible,
+        instrucciones_acceso=consultorio.instrucciones_acceso,
+        cluster_ids=cluster_ids,
+        activo=consultorio.activo,
+        created_at=consultorio.created_at,
+        updated_at=consultorio.updated_at,
+    )
+
+
+@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
+def list_medicos_operativos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Medico]:
+    query = (
+        select(Medico)
+        .where(Medico.activo.is_(True), medico_catalog_access_predicate(db, current_user, business_today()))
+        .order_by(
+            func.lower(func.coalesce(Medico.apellidos, "")),
+            func.lower(func.coalesce(Medico.nombre, "")),
+            Medico.id,
+        )
+    )
+    return list(db.execute(query).scalars())
+
+
+@catalogos_operativos_router.get("/consultorios", response_model=list[ConsultorioRead])
+def list_consultorios_operativos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[ConsultorioRead]:
+    query = (
+        select(Consultorio)
+        .where(
+            Consultorio.activo.is_(True),
+            consultorio_catalog_access_predicate(db, current_user, business_today()),
+        )
+        .order_by(
+            Consultorio.complejo_id,
+            Consultorio.piso_id,
+            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
+            func.lower(Consultorio.codigo),
+            Consultorio.id,
+        )
+    )
+    return [consultorio_catalog_read(db, item) for item in db.execute(query).scalars()]
+
+
+@catalogos_operativos_router.get("/pisos", response_model=list[PisoRead])
+def list_pisos_operativos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Piso]:
+    query = (
+        select(Piso)
+        .where(Piso.activo.is_(True), piso_catalog_access_predicate(db, current_user, business_today()))
+        .order_by(Piso.complejo_id, Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
+    )
+    return list(db.execute(query).scalars())
+
+
 def medico_ids_for_paciente(db: Session, paciente_id: UUID) -> list[UUID]:
     return list(
         db.execute(
@@ -199,6 +291,16 @@ def pacientes_for_medico_query(medico_id: UUID):
             MedicoPaciente.medico_id == medico_id,
             MedicoPaciente.activo.is_(True),
         )
+    )
+
+
+def patient_order_columns():
+    return (
+        func.lower(func.coalesce(Paciente.apellido_paterno, "")),
+        func.lower(func.coalesce(Paciente.apellido_materno, "")),
+        func.lower(func.coalesce(Paciente.nombre, "")),
+        func.lower(func.coalesce(Paciente.nombre_preferido, "")),
+        Paciente.folio_paciente,
     )
 
 
@@ -410,7 +512,7 @@ def query_citas(
         query = query.where(Cita.estado == estado)
     if tipo is not None:
         query = query.where(Cita.tipo == tipo)
-    return query.order_by(Cita.fecha_cita.desc(), Cita.hora_cita.desc())
+    return query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)
 
 
 def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
@@ -460,15 +562,21 @@ def create_arrival_event(
 @pacientes_router.get("/buscar", response_model=list[PacienteRead])
 def buscar_pacientes(
     q: str = Query(min_length=1),
-    medico_id: UUID = Query(...),
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesReadUser,
 ) -> list[PacienteRead]:
-    exists_or_404(db, Medico, medico_id, "Médico")
+    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
+    if medico_id is not None:
+        exists_or_404(db, Medico, medico_id, "Médico")
+        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
+            MedicoPaciente.medico_id == medico_id,
+            MedicoPaciente.activo.is_(True),
+        )
     term = normalize_search(q)
     rows = list(
         db.execute(
-            pacientes_for_medico_query(medico_id)
+            query
             .where(
                 or_(
                     func.lower(func.coalesce(Paciente.nombre, "")).like(term),
@@ -479,7 +587,7 @@ def buscar_pacientes(
                     func.lower(Paciente.folio_paciente).like(term),
                 )
             )
-            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
+            .order_by(*patient_order_columns())
             .limit(50)
         ).scalars()
     )
@@ -488,15 +596,21 @@ def buscar_pacientes(
 
 @pacientes_router.get("", response_model=list[PacienteRead])
 def list_pacientes(
-    medico_id: UUID = Query(...),
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesReadUser,
 ) -> list[PacienteRead]:
-    exists_or_404(db, Medico, medico_id, "Médico")
+    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
+    if medico_id is not None:
+        exists_or_404(db, Medico, medico_id, "Médico")
+        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
+            MedicoPaciente.medico_id == medico_id,
+            MedicoPaciente.activo.is_(True),
+        )
     rows = list(
         db.execute(
-            pacientes_for_medico_query(medico_id)
-            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
+            query
+            .order_by(*patient_order_columns())
             .limit(200)
         ).scalars()
     )
@@ -506,11 +620,16 @@ def list_pacientes(
 @pacientes_router.get("/{paciente_id}", response_model=PacienteRead)
 def get_paciente(
     paciente_id: UUID,
-    medico_id: UUID = Query(...),
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesReadUser,
 ) -> PacienteRead:
-    return paciente_read(db, paciente_for_medico_or_404(db, paciente_id, medico_id))
+    if medico_id is not None:
+        paciente = paciente_for_medico_or_404(db, paciente_id, medico_id)
+    else:
+        paciente = exists_or_404(db, Paciente, paciente_id, "Paciente")
+    ensure_paciente_access(db, current_user, paciente.id, business_today())
+    return paciente_read(db, paciente)
 
 
 @pacientes_router.post("", response_model=PacienteRead, status_code=status.HTTP_201_CREATED)
@@ -518,10 +637,11 @@ def create_paciente(
     payload: PacienteCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesWriteUser,
 ) -> PacienteRead:
     data = payload.model_dump()
     medico_id = data.pop("medico_id")
+    ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
     item = Paciente(**data, folio_paciente=generate_patient_folio(db))
     db.add(item)
     db.flush()
@@ -549,9 +669,10 @@ def update_paciente(
     request: Request,
     medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesWriteUser,
 ) -> PacienteRead:
     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+    ensure_paciente_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
@@ -580,7 +701,7 @@ def activar_paciente(
     request: Request,
     medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesWriteUser,
 ) -> PacienteRead:
     return set_paciente_active(paciente_id, medico_id, True, request, db, current_user)
 
@@ -591,7 +712,7 @@ def desactivar_paciente(
     request: Request,
     medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesWriteUser,
 ) -> PacienteRead:
     return set_paciente_active(paciente_id, medico_id, False, request, db, current_user)
 
@@ -605,6 +726,7 @@ def set_paciente_active(
     current_user: Usuario,
 ) -> PacienteRead:
     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+    ensure_paciente_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
     item.activo = active
     item.desactivado_en = None if active else now_utc()
@@ -631,9 +753,10 @@ def marcar_paciente_borrado(
     request: Request,
     medico_id: UUID = Query(...),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = PacientesWriteUser,
 ) -> PacienteRead:
     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+    ensure_paciente_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
     item.marcado_borrado_en = now_utc()
     db.flush()
@@ -664,11 +787,10 @@ def citas_hoy(
     estado: str | None = None,
     tipo: str | None = None,
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = CitasTodayReadUser,
 ) -> list[CitaListItem]:
-    rows = db.execute(
-        query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
-    ).scalars()
+    query = query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today()))).scalars()
     return [cita_item(db, row) for row in rows]
 
 
@@ -685,6 +807,7 @@ def buscar_citas(
     estado: str | None = None,
     tipo: str | None = None,
     db: Session = Depends(get_db),
+    current_user: Usuario = CitasOperationalReadUser,
 ) -> list[CitaSearchResult]:
     rows = db.execute(
         query_citas(
@@ -699,7 +822,9 @@ def buscar_citas(
             fecha_nacimiento,
             estado,
             tipo,
-        ).limit(20)
+        )
+        .where(cita_access_predicate(db, current_user, business_today()))
+        .limit(20)
     ).scalars()
     return [cita_search_item(db, row) for row in rows]
 
@@ -715,9 +840,10 @@ def list_citas(
     estado: str | None = None,
     tipo: str | None = None,
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = CitasAgendaReadUser,
 ) -> list[CitaListItem]:
-    rows = db.execute(query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo).limit(200)).scalars()
+    query = query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(200)).scalars()
     return [cita_item(db, row) for row in rows]
 
 
@@ -734,7 +860,7 @@ def registrar_exportacion_citas(
     estado: str | None = None,
     tipo: str | None = None,
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = CitasOperationalReadUser,
 ) -> dict[str, bool]:
     record_audit_event(
         db,
@@ -760,7 +886,8 @@ def registrar_exportacion_citas(
 
 
 @citas_router.get("/{cita_id}", response_model=CitaListItem)
-def get_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> CitaListItem:
+def get_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser) -> CitaListItem:
+    ensure_cita_access(db, current_user, cita_id, business_today())
     return cita_item(db, exists_or_404(db, Cita, cita_id, "Cita"))
 
 
@@ -770,10 +897,12 @@ def create_cita(
     request: Request,
     confirmar_duplicado: bool = Query(default=False),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = CitasAgendaWriteUser,
 ) -> Cita:
     data = payload.model_dump()
     validate_cita_scope(db, data)
+    if not cita_payload_is_accessible(db, current_user, data, business_today()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene alcance para crear esta cita.")
     warnings = duplicate_warnings(db, data)
     if warnings and not confirmar_duplicado:
         raise HTTPException(
@@ -805,9 +934,10 @@ def update_cita(
     request: Request,
     confirmar_duplicado: bool = Query(default=False),
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = CitasAgendaWriteUser,
 ) -> Cita:
     item = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
     data = payload.model_dump(exclude_unset=True)
     merged = {
@@ -821,6 +951,8 @@ def update_cita(
         "hora_cita": data.get("hora_cita", item.hora_cita),
     }
     validate_cita_scope(db, merged, item)
+    if not cita_payload_is_accessible(db, current_user, merged, business_today()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene alcance para actualizar esta cita.")
     warnings = duplicate_warnings(db, merged, exclude_id=item.id)
     if warnings and not confirmar_duplicado:
         raise HTTPException(
@@ -851,6 +983,7 @@ def update_cita(
 
 def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request, db: Session, current_user: Usuario) -> CitaActionResponse:
     item = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
     item.estado = state
     db.flush()
@@ -871,29 +1004,31 @@ def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request,
 
 
 @citas_router.patch("/{cita_id}/cancelar", response_model=CitaActionResponse)
-def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+    ensure_cita_access(db, current_user, cita_id, business_today())
     cancel_qr(db, cita_id)
     return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user)
 
 
 @citas_router.patch("/{cita_id}/autorizar-pasar", response_model=CitaActionResponse)
-def autorizar_pasar(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def autorizar_pasar(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     return set_cita_state(cita_id, "AUTORIZADO_PASAR", "ACCESO_AUTORIZADO", request, db, current_user)
 
 
 @citas_router.patch("/{cita_id}/iniciar-consulta", response_model=CitaActionResponse)
-def iniciar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def iniciar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     return set_cita_state(cita_id, "EN_CONSULTA", "CONSULTA_INICIADA", request, db, current_user)
 
 
 @citas_router.patch("/{cita_id}/finalizar", response_model=CitaActionResponse)
-def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     return set_cita_state(cita_id, "FINALIZADA", "CONSULTA_FINALIZADA", request, db, current_user)
 
 
 @citas_router.post("/{cita_id}/qr", response_model=QrGenerateResponse, status_code=status.HTTP_201_CREATED)
-def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     qr_token, token = generate_qr(db, cita)
     record_audit_event(
         db,
@@ -918,8 +1053,9 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
 
 
 @citas_router.get("/{cita_id}/qr", response_model=QrRead)
-def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
+def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     qr_token, _token = get_active_qr_payload(db, cita)
     db.commit()
     db.refresh(qr_token)
@@ -927,8 +1063,9 @@ def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usu
 
 
 @citas_router.patch("/{cita_id}/qr/cancelar", response_model=CitaActionResponse)
-def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     cancel_qr(db, cita.id)
     record_audit_event(
         db,
@@ -944,8 +1081,9 @@ def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_
 
 
 @citas_router.get("/{cita_id}/ticket", response_model=TicketResponse)
-def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
+def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     return ticket_response_for_cita(db, cita)
 
 
@@ -1030,28 +1168,28 @@ def mobile_buscar_citas(
     fecha_nacimiento: date | None = None,
     fecha: date | None = None,
     db: Session = Depends(get_db),
-    _current_user: Usuario = MobileCheckinUser,
+    current_user: Usuario = MobileCheckinUser,
 ) -> list[CitaSearchResult]:
     if not normalized_digits(celular) and fecha_nacimiento is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Indique celular o fecha de nacimiento para buscar la cita.",
         )
-    rows = db.execute(
-        query_citas(
-            db,
-            fecha or business_today(),
-            paciente=paciente,
-            celular=celular,
-            fecha_nacimiento=fecha_nacimiento,
-        ).limit(20)
-    ).scalars()
+    query = query_citas(
+        db,
+        fecha or business_today(),
+        paciente=paciente,
+        celular=celular,
+        fecha_nacimiento=fecha_nacimiento,
+    )
+    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(20)).scalars()
     return [cita_search_item(db, row) for row in rows]
 
 
 @mobile_router.get("/citas/{cita_id}/ticket", response_model=TicketResponse)
-def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = MobileCheckinUser) -> TicketResponse:
+def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = MobileCheckinUser) -> TicketResponse:
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     return ticket_response_for_cita(db, cita)
 
 
@@ -1064,6 +1202,7 @@ def mobile_checkin_lobby_cita(
     current_user: Usuario = MobileCheckinUser,
 ) -> CheckinResponse:
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     return authenticated_lobby_checkin(cita, payload, request, db, current_user)
 
 
@@ -1152,8 +1291,9 @@ def checkin_lobby_cita(cita_id: UUID, payload: CheckinRequest, request: Request,
 
 
 @citas_router.post("/{cita_id}/checkin-sala", response_model=CheckinResponse)
-def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
+def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id, business_today())
     event = create_arrival_event(db, cita, "CHECKIN_SALA", payload.canal, request, payload.sala_id, current_user.id, payload.dispositivo_id)
     record_audit_event(
         db,

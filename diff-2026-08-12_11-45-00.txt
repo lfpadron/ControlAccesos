@@ -1,0 +1,1292 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 38bc3b9..5908e13 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -15,7 +15,7 @@ from app.constants import (
+     TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO,
+ )
+ from app.core.database import get_db
+-from app.core.security import hash_password, require_role, verify_password
++from app.core.security import hash_password, require_permission, require_role, verify_password
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
+ from app.models.flow import Cita, Paciente
+@@ -31,11 +31,13 @@ from app.schemas.display import (
+     PublicTurnoDisplay,
+     TurnoDisplayRecienteRead,
+ )
++from app.services.access_scope import ensure_cita_access, turno_display_access_predicate
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ router = APIRouter()
+ AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
+-OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
++TurnosLlamadosReadUser = Depends(require_permission("turnos-llamados"))
++TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamados", minimum="editar"))
+ CALL_INTERVAL = timedelta(minutes=5)
+ MAX_CALLS_PER_CITA = 3
+ TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
+@@ -487,26 +489,38 @@ def public_display_turnos(
+ 
+ @router.get("/turnos-display/recientes", response_model=list[TurnoDisplayRecienteRead])
+ def turnos_display_recientes(
+-    complejo_id: UUID,
++    complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     cluster_espera_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
++    medico_id: UUID | None = None,
+     minutos: int = Query(default=30, ge=1, le=240),
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = TurnosLlamadosReadUser,
+ ) -> list[TurnoDisplayRecienteRead]:
+     timestamp = now_utc()
+     sync_turno_states(db, timestamp)
+     query = select(TurnoDisplay).where(
+-        TurnoDisplay.complejo_id == complejo_id,
+         TurnoDisplay.llamado_en >= timestamp - timedelta(minutes=minutos),
++        turno_display_access_predicate(db, current_user),
+     )
++    if complejo_id is not None:
++        query = query.where(TurnoDisplay.complejo_id == complejo_id)
+     if piso_id is not None:
+         query = query.where(TurnoDisplay.piso_id == piso_id)
+     if cluster_espera_id is not None:
+         query = query.where(TurnoDisplay.cluster_espera_id == cluster_espera_id)
+     if consultorio_id is not None:
+         query = query.where(TurnoDisplay.consultorio_id == consultorio_id)
++    if medico_id is not None:
++        query = query.where(
++            select(Cita.id)
++            .where(
++                Cita.id == TurnoDisplay.cita_id,
++                Cita.medico_id == medico_id,
++            )
++            .exists()
++        )
+     rows = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc())).scalars())
+     db.commit()
+     recientes: list[TurnoDisplayRecienteRead] = []
+@@ -538,9 +552,10 @@ def llamar_cita(
+     cita_id: UUID,
+     request: Request,
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = TurnosLlamadosWriteUser,
+ ) -> CitaLlamarResponse:
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id)
+     timestamp = now_utc()
+     if cita.estado in TERMINAL_CALL_STATES:
+         detail = "La cita está marcada como No Se Presentó." if cita.estado == "NO_LLEGO" else f"No se puede llamar una cita en estado {cita.estado}."
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 2e408a5..b06db53 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+-from app.core.security import require_role
++from app.core.security import require_permission, require_role
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+@@ -35,7 +35,19 @@ from app.schemas.flow import (
+     QrValidarResponse,
+     TicketResponse,
+ )
++from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead
+ from app.services.audit_service import audit_safe_dict, record_audit_event
++from app.services.access_scope import (
++    cita_access_predicate,
++    cita_payload_is_accessible,
++    consultorio_catalog_access_predicate,
++    ensure_cita_access,
++    ensure_medico_patient_assignment_access,
++    ensure_paciente_access,
++    medico_catalog_access_predicate,
++    paciente_access_predicate,
++    piso_catalog_access_predicate,
++)
+ from app.services.checkin_service import checkin_window_status
+ from app.services.folio_service import generate_patient_folio, generate_turn_folio
+ from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, now_utc, token_digest, validate_qr
+@@ -44,8 +56,16 @@ pacientes_router = APIRouter()
+ citas_router = APIRouter()
+ qr_router = APIRouter()
+ mobile_router = APIRouter()
+-
+-OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
++catalogos_operativos_router = APIRouter()
++
++CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
++PacientesReadUser = Depends(require_permission("pacientes"))
++PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
++CitasAgendaReadUser = Depends(require_permission("citas"))
++CitasAgendaWriteUser = Depends(require_permission("citas", minimum="editar"))
++CitasTodayReadUser = Depends(require_permission("citas-hoy"))
++CitasOperationalReadUser = Depends(require_permission("citas", "citas-hoy"))
++CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", minimum="editar"))
+ MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
+ MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
+ 
+@@ -137,6 +157,78 @@ def medico_label(medico: Medico | None) -> str | None:
+     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
+ 
+ 
++def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> ConsultorioRead:
++    cluster_ids = list(
++        db.execute(
++            select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio.id)
++        ).scalars()
++    )
++    return ConsultorioRead(
++        id=consultorio.id,
++        complejo_id=consultorio.complejo_id,
++        piso_id=consultorio.piso_id,
++        codigo=consultorio.codigo,
++        nombre_visible=consultorio.nombre_visible,
++        instrucciones_acceso=consultorio.instrucciones_acceso,
++        cluster_ids=cluster_ids,
++        activo=consultorio.activo,
++        created_at=consultorio.created_at,
++        updated_at=consultorio.updated_at,
++    )
++
++
++@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
++def list_medicos_operativos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Medico]:
++    query = (
++        select(Medico)
++        .where(Medico.activo.is_(True), medico_catalog_access_predicate(db, current_user, business_today()))
++        .order_by(
++            func.lower(func.coalesce(Medico.apellidos, "")),
++            func.lower(func.coalesce(Medico.nombre, "")),
++            Medico.id,
++        )
++    )
++    return list(db.execute(query).scalars())
++
++
++@catalogos_operativos_router.get("/consultorios", response_model=list[ConsultorioRead])
++def list_consultorios_operativos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[ConsultorioRead]:
++    query = (
++        select(Consultorio)
++        .where(
++            Consultorio.activo.is_(True),
++            consultorio_catalog_access_predicate(db, current_user, business_today()),
++        )
++        .order_by(
++            Consultorio.complejo_id,
++            Consultorio.piso_id,
++            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
++            func.lower(Consultorio.codigo),
++            Consultorio.id,
++        )
++    )
++    return [consultorio_catalog_read(db, item) for item in db.execute(query).scalars()]
++
++
++@catalogos_operativos_router.get("/pisos", response_model=list[PisoRead])
++def list_pisos_operativos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Piso]:
++    query = (
++        select(Piso)
++        .where(Piso.activo.is_(True), piso_catalog_access_predicate(db, current_user, business_today()))
++        .order_by(Piso.complejo_id, Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
++    )
++    return list(db.execute(query).scalars())
++
++
+ def medico_ids_for_paciente(db: Session, paciente_id: UUID) -> list[UUID]:
+     return list(
+         db.execute(
+@@ -202,6 +294,16 @@ def pacientes_for_medico_query(medico_id: UUID):
+     )
+ 
+ 
++def patient_order_columns():
++    return (
++        func.lower(func.coalesce(Paciente.apellido_paterno, "")),
++        func.lower(func.coalesce(Paciente.apellido_materno, "")),
++        func.lower(func.coalesce(Paciente.nombre, "")),
++        func.lower(func.coalesce(Paciente.nombre_preferido, "")),
++        Paciente.folio_paciente,
++    )
++
++
+ def cita_zona_horaria(db: Session, cita: Cita) -> str:
+     complejo = db.get(Complejo, cita.complejo_id)
+     return complejo.zona_horaria if complejo is not None else "UTC"
+@@ -410,7 +512,7 @@ def query_citas(
+         query = query.where(Cita.estado == estado)
+     if tipo is not None:
+         query = query.where(Cita.tipo == tipo)
+-    return query.order_by(Cita.fecha_cita.desc(), Cita.hora_cita.desc())
++    return query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)
+ 
+ 
+ def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
+@@ -460,15 +562,21 @@ def create_arrival_event(
+ @pacientes_router.get("/buscar", response_model=list[PacienteRead])
+ def buscar_pacientes(
+     q: str = Query(min_length=1),
+-    medico_id: UUID = Query(...),
++    medico_id: UUID | None = Query(default=None),
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesReadUser,
+ ) -> list[PacienteRead]:
+-    exists_or_404(db, Medico, medico_id, "Médico")
++    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
++    if medico_id is not None:
++        exists_or_404(db, Medico, medico_id, "Médico")
++        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
++            MedicoPaciente.medico_id == medico_id,
++            MedicoPaciente.activo.is_(True),
++        )
+     term = normalize_search(q)
+     rows = list(
+         db.execute(
+-            pacientes_for_medico_query(medico_id)
++            query
+             .where(
+                 or_(
+                     func.lower(func.coalesce(Paciente.nombre, "")).like(term),
+@@ -479,7 +587,7 @@ def buscar_pacientes(
+                     func.lower(Paciente.folio_paciente).like(term),
+                 )
+             )
+-            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
++            .order_by(*patient_order_columns())
+             .limit(50)
+         ).scalars()
+     )
+@@ -488,15 +596,21 @@ def buscar_pacientes(
+ 
+ @pacientes_router.get("", response_model=list[PacienteRead])
+ def list_pacientes(
+-    medico_id: UUID = Query(...),
++    medico_id: UUID | None = Query(default=None),
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesReadUser,
+ ) -> list[PacienteRead]:
+-    exists_or_404(db, Medico, medico_id, "Médico")
++    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
++    if medico_id is not None:
++        exists_or_404(db, Medico, medico_id, "Médico")
++        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
++            MedicoPaciente.medico_id == medico_id,
++            MedicoPaciente.activo.is_(True),
++        )
+     rows = list(
+         db.execute(
+-            pacientes_for_medico_query(medico_id)
+-            .order_by(func.coalesce(Paciente.nombre_preferido, Paciente.apellido_paterno, Paciente.nombre))
++            query
++            .order_by(*patient_order_columns())
+             .limit(200)
+         ).scalars()
+     )
+@@ -506,11 +620,16 @@ def list_pacientes(
+ @pacientes_router.get("/{paciente_id}", response_model=PacienteRead)
+ def get_paciente(
+     paciente_id: UUID,
+-    medico_id: UUID = Query(...),
++    medico_id: UUID | None = Query(default=None),
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesReadUser,
+ ) -> PacienteRead:
+-    return paciente_read(db, paciente_for_medico_or_404(db, paciente_id, medico_id))
++    if medico_id is not None:
++        paciente = paciente_for_medico_or_404(db, paciente_id, medico_id)
++    else:
++        paciente = exists_or_404(db, Paciente, paciente_id, "Paciente")
++    ensure_paciente_access(db, current_user, paciente.id, business_today())
++    return paciente_read(db, paciente)
+ 
+ 
+ @pacientes_router.post("", response_model=PacienteRead, status_code=status.HTTP_201_CREATED)
+@@ -518,10 +637,11 @@ def create_paciente(
+     payload: PacienteCreate,
+     request: Request,
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesWriteUser,
+ ) -> PacienteRead:
+     data = payload.model_dump()
+     medico_id = data.pop("medico_id")
++    ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
+     item = Paciente(**data, folio_paciente=generate_patient_folio(db))
+     db.add(item)
+     db.flush()
+@@ -549,9 +669,10 @@ def update_paciente(
+     request: Request,
+     medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesWriteUser,
+ ) -> PacienteRead:
+     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
++    ensure_paciente_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
+     for key, value in payload.model_dump(exclude_unset=True).items():
+         setattr(item, key, value)
+@@ -580,7 +701,7 @@ def activar_paciente(
+     request: Request,
+     medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesWriteUser,
+ ) -> PacienteRead:
+     return set_paciente_active(paciente_id, medico_id, True, request, db, current_user)
+ 
+@@ -591,7 +712,7 @@ def desactivar_paciente(
+     request: Request,
+     medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesWriteUser,
+ ) -> PacienteRead:
+     return set_paciente_active(paciente_id, medico_id, False, request, db, current_user)
+ 
+@@ -605,6 +726,7 @@ def set_paciente_active(
+     current_user: Usuario,
+ ) -> PacienteRead:
+     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
++    ensure_paciente_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
+     item.activo = active
+     item.desactivado_en = None if active else now_utc()
+@@ -631,9 +753,10 @@ def marcar_paciente_borrado(
+     request: Request,
+     medico_id: UUID = Query(...),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = PacientesWriteUser,
+ ) -> PacienteRead:
+     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
++    ensure_paciente_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
+     item.marcado_borrado_en = now_utc()
+     db.flush()
+@@ -664,11 +787,10 @@ def citas_hoy(
+     estado: str | None = None,
+     tipo: str | None = None,
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = CitasTodayReadUser,
+ ) -> list[CitaListItem]:
+-    rows = db.execute(
+-        query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+-    ).scalars()
++    query = query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
++    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today()))).scalars()
+     return [cita_item(db, row) for row in rows]
+ 
+ 
+@@ -685,6 +807,7 @@ def buscar_citas(
+     estado: str | None = None,
+     tipo: str | None = None,
+     db: Session = Depends(get_db),
++    current_user: Usuario = CitasOperationalReadUser,
+ ) -> list[CitaSearchResult]:
+     rows = db.execute(
+         query_citas(
+@@ -699,7 +822,9 @@ def buscar_citas(
+             fecha_nacimiento,
+             estado,
+             tipo,
+-        ).limit(20)
++        )
++        .where(cita_access_predicate(db, current_user, business_today()))
++        .limit(20)
+     ).scalars()
+     return [cita_search_item(db, row) for row in rows]
+ 
+@@ -715,9 +840,10 @@ def list_citas(
+     estado: str | None = None,
+     tipo: str | None = None,
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = OperationalUser,
++    current_user: Usuario = CitasAgendaReadUser,
+ ) -> list[CitaListItem]:
+-    rows = db.execute(query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo).limit(200)).scalars()
++    query = query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
++    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(200)).scalars()
+     return [cita_item(db, row) for row in rows]
+ 
+ 
+@@ -734,7 +860,7 @@ def registrar_exportacion_citas(
+     estado: str | None = None,
+     tipo: str | None = None,
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = CitasOperationalReadUser,
+ ) -> dict[str, bool]:
+     record_audit_event(
+         db,
+@@ -760,7 +886,8 @@ def registrar_exportacion_citas(
+ 
+ 
+ @citas_router.get("/{cita_id}", response_model=CitaListItem)
+-def get_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser) -> CitaListItem:
++def get_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser) -> CitaListItem:
++    ensure_cita_access(db, current_user, cita_id, business_today())
+     return cita_item(db, exists_or_404(db, Cita, cita_id, "Cita"))
+ 
+ 
+@@ -770,10 +897,12 @@ def create_cita(
+     request: Request,
+     confirmar_duplicado: bool = Query(default=False),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = CitasAgendaWriteUser,
+ ) -> Cita:
+     data = payload.model_dump()
+     validate_cita_scope(db, data)
++    if not cita_payload_is_accessible(db, current_user, data, business_today()):
++        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene alcance para crear esta cita.")
+     warnings = duplicate_warnings(db, data)
+     if warnings and not confirmar_duplicado:
+         raise HTTPException(
+@@ -805,9 +934,10 @@ def update_cita(
+     request: Request,
+     confirmar_duplicado: bool = Query(default=False),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = OperationalUser,
++    current_user: Usuario = CitasAgendaWriteUser,
+ ) -> Cita:
+     item = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
+     data = payload.model_dump(exclude_unset=True)
+     merged = {
+@@ -821,6 +951,8 @@ def update_cita(
+         "hora_cita": data.get("hora_cita", item.hora_cita),
+     }
+     validate_cita_scope(db, merged, item)
++    if not cita_payload_is_accessible(db, current_user, merged, business_today()):
++        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene alcance para actualizar esta cita.")
+     warnings = duplicate_warnings(db, merged, exclude_id=item.id)
+     if warnings and not confirmar_duplicado:
+         raise HTTPException(
+@@ -851,6 +983,7 @@ def update_cita(
+ 
+ def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request, db: Session, current_user: Usuario) -> CitaActionResponse:
+     item = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
+     item.estado = state
+     db.flush()
+@@ -871,29 +1004,31 @@ def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request,
+ 
+ 
+ @citas_router.patch("/{cita_id}/cancelar", response_model=CitaActionResponse)
+-def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
++    ensure_cita_access(db, current_user, cita_id, business_today())
+     cancel_qr(db, cita_id)
+     return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user)
+ 
+ 
+ @citas_router.patch("/{cita_id}/autorizar-pasar", response_model=CitaActionResponse)
+-def autorizar_pasar(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def autorizar_pasar(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     return set_cita_state(cita_id, "AUTORIZADO_PASAR", "ACCESO_AUTORIZADO", request, db, current_user)
+ 
+ 
+ @citas_router.patch("/{cita_id}/iniciar-consulta", response_model=CitaActionResponse)
+-def iniciar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def iniciar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     return set_cita_state(cita_id, "EN_CONSULTA", "CONSULTA_INICIADA", request, db, current_user)
+ 
+ 
+ @citas_router.patch("/{cita_id}/finalizar", response_model=CitaActionResponse)
+-def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     return set_cita_state(cita_id, "FINALIZADA", "CONSULTA_FINALIZADA", request, db, current_user)
+ 
+ 
+ @citas_router.post("/{cita_id}/qr", response_model=QrGenerateResponse, status_code=status.HTTP_201_CREATED)
+-def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     qr_token, token = generate_qr(db, cita)
+     record_audit_event(
+         db,
+@@ -918,8 +1053,9 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
+ 
+ 
+ @citas_router.get("/{cita_id}/qr", response_model=QrRead)
+-def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
++def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     qr_token, _token = get_active_qr_payload(db, cita)
+     db.commit()
+     db.refresh(qr_token)
+@@ -927,8 +1063,9 @@ def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usu
+ 
+ 
+ @citas_router.patch("/{cita_id}/qr/cancelar", response_model=CitaActionResponse)
+-def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     cancel_qr(db, cita.id)
+     record_audit_event(
+         db,
+@@ -944,8 +1081,9 @@ def cancelar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_
+ 
+ 
+ @citas_router.get("/{cita_id}/ticket", response_model=TicketResponse)
+-def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = OperationalUser):
++def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     return ticket_response_for_cita(db, cita)
+ 
+ 
+@@ -1030,28 +1168,28 @@ def mobile_buscar_citas(
+     fecha_nacimiento: date | None = None,
+     fecha: date | None = None,
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = MobileCheckinUser,
++    current_user: Usuario = MobileCheckinUser,
+ ) -> list[CitaSearchResult]:
+     if not normalized_digits(celular) and fecha_nacimiento is None:
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+             detail="Indique celular o fecha de nacimiento para buscar la cita.",
+         )
+-    rows = db.execute(
+-        query_citas(
+-            db,
+-            fecha or business_today(),
+-            paciente=paciente,
+-            celular=celular,
+-            fecha_nacimiento=fecha_nacimiento,
+-        ).limit(20)
+-    ).scalars()
++    query = query_citas(
++        db,
++        fecha or business_today(),
++        paciente=paciente,
++        celular=celular,
++        fecha_nacimiento=fecha_nacimiento,
++    )
++    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(20)).scalars()
+     return [cita_search_item(db, row) for row in rows]
+ 
+ 
+ @mobile_router.get("/citas/{cita_id}/ticket", response_model=TicketResponse)
+-def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), _current_user: Usuario = MobileCheckinUser) -> TicketResponse:
++def mobile_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = MobileCheckinUser) -> TicketResponse:
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     return ticket_response_for_cita(db, cita)
+ 
+ 
+@@ -1064,6 +1202,7 @@ def mobile_checkin_lobby_cita(
+     current_user: Usuario = MobileCheckinUser,
+ ) -> CheckinResponse:
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     return authenticated_lobby_checkin(cita, payload, request, db, current_user)
+ 
+ 
+@@ -1152,8 +1291,9 @@ def checkin_lobby_cita(cita_id: UUID, payload: CheckinRequest, request: Request,
+ 
+ 
+ @citas_router.post("/{cita_id}/checkin-sala", response_model=CheckinResponse)
+-def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db), current_user: Usuario = OperationalUser):
++def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
++    ensure_cita_access(db, current_user, cita.id, business_today())
+     event = create_arrival_event(db, cita, "CHECKIN_SALA", payload.canal, request, payload.sala_id, current_user.id, payload.dispositivo_id)
+     record_audit_event(
+         db,
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index 561f0ce..e14d848 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -13,6 +13,7 @@ api_router.include_router(flow.pacientes_router, prefix="/pacientes", tags=["pac
+ api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
+ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
+ api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
++api_router.include_router(flow.catalogos_operativos_router, prefix="/catalogos-operativos", tags=["catalogos-operativos"])
+ api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
+ api_router.include_router(kiosks.router, tags=["kiosks"])
+ api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
+diff --git a/access-manager/backend/app/core/security.py b/access-manager/backend/app/core/security.py
+index b42472f..e4b78c6 100644
+--- a/access-manager/backend/app/core/security.py
++++ b/access-manager/backend/app/core/security.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import UTC, datetime, timedelta
++from datetime import UTC, date, datetime, timedelta
+ import uuid
+ 
+ from argon2 import PasswordHasher
+@@ -17,6 +17,7 @@ from app.models.usuario import Usuario
+ 
+ password_hasher = PasswordHasher()
+ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
++ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
+ 
+ 
+ def hash_password(password: str) -> str:
+@@ -113,6 +114,49 @@ def require_role(*allowed_roles: str, scope: str | None = None):
+     return dependency
+ 
+ 
++def require_permission(*screen_keys: str, minimum: str = "consultar"):
++    if minimum not in ACCESS_ORDER:
++        raise ValueError("minimum debe ser 'sin', 'consultar' o 'editar'")
++
++    def dependency(
++        current_user: Usuario = Depends(get_current_user),
++        db: Session = Depends(get_db),
++    ) -> Usuario:
++        from app.models.operational import Role, UsuarioRol
++
++        today = date.today()
++        roles = list(
++            db.execute(
++                select(Role)
++                .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++                .where(
++                    UsuarioRol.usuario_id == current_user.id,
++                    UsuarioRol.activo.is_(True),
++                    UsuarioRol.fecha_inicio <= today,
++                    (UsuarioRol.fecha_fin.is_(None) | (UsuarioRol.fecha_fin >= today)),
++                    Role.activo.is_(True),
++                )
++            ).scalars()
++        )
++        if any(role.codigo == "ADMIN_SISTEMA" for role in roles):
++            return current_user
++
++        required_level = ACCESS_ORDER[minimum]
++        for role in roles:
++            permissions = role.permisos or {}
++            for screen_key in screen_keys:
++                access = permissions.get(screen_key, "sin")
++                if ACCESS_ORDER.get(access, 0) >= required_level:
++                    return current_user
++
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail="No tiene permisos para ejecutar esta operación.",
++        )
++
++    return dependency
++
++
+ def require_rbac_scope(scope: str):
+     def dependency(current_user: Usuario = Depends(require_role("ADMIN_SISTEMA", scope=scope))) -> Usuario:
+         return current_user
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 1220e60..c29aba9 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -667,6 +667,9 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
+ export const listConsultorios = () => listResource<Consultorio>('consultorios');
+ export const listMedicos = () => listResource<Medico>('medicos');
++export const listAccessiblePisos = () => apiFetch<Piso[]>('/catalogos-operativos/pisos');
++export const listAccessibleConsultorios = () => apiFetch<Consultorio[]>('/catalogos-operativos/consultorios');
++export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
+ export const listOperadores = () => listResource<Operador>('operadores');
+ export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
+ export const listKioskos = () => listResource<Kiosko>('kioskos');
+@@ -677,7 +680,7 @@ export const listAsignacionesMedicoConsultorio = () =>
+ export const listAsignacionesOperador = () =>
+   listResource<AsignacionOperador>('asignaciones-operador');
+ export const listAuditoria = () => listResource<Auditoria>('auditoria');
+-export const listPacientes = (params: { medico_id: string }) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
++export const listPacientes = (params: { medico_id?: string } = {}) => apiFetch<Paciente[]>(`/pacientes${queryString(params)}`);
+ 
+ export function consultaClustersPorConsultorio(params: {
+   torre_id: string;
+@@ -719,7 +722,7 @@ function queryString(params: Record<string, string | number | boolean | null | u
+ export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
+ export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
+ 
+-export function searchPacientes(q: string, medicoId: string) {
++export function searchPacientes(q: string, medicoId?: string) {
+   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
+ }
+ 
+@@ -841,7 +844,7 @@ export function searchCitas(params: {
+   estado?: string;
+   tipo?: string;
+ }) {
+-  return apiFetchPublic<CitaSearchResult[]>(`/citas/buscar${queryString(params)}`);
++  return apiFetch<CitaSearchResult[]>(`/citas/buscar${queryString(params)}`);
+ }
+ 
+ export function createCita(payload: Record<string, unknown>, confirmarDuplicado = false) {
+@@ -925,17 +928,12 @@ export function getPublicDisplayTurnos(codigoDispositivo: string, token?: string
+ }
+ 
+ export function listTurnosDisplayRecientes(params: {
+-  complejo_id: string;
++  complejo_id?: string;
+   piso_id?: string;
+   cluster_espera_id?: string;
+   consultorio_id?: string;
++  medico_id?: string;
+   minutos?: number;
+ }) {
+-  const query = new URLSearchParams();
+-  for (const [key, value] of Object.entries(params)) {
+-    if (value !== undefined && value !== '') {
+-      query.set(key, String(value));
+-    }
+-  }
+-  return apiFetch<TurnoDisplayReciente[]>(`/turnos-display/recientes?${query.toString()}`);
++  return apiFetch<TurnoDisplayReciente[]>(`/turnos-display/recientes${queryString(params)}`);
+ }
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 6b8b26e..efa9884 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -7,14 +7,15 @@ import {
+   cancelarCita,
+   checkinLobby,
+   generarQr,
++  getCurrentUser,
+   getTicket,
+   llamarCita,
++  listAccessibleConsultorios,
++  listAccessibleMedicos,
++  listAccessiblePisos,
+   listCitasHoy,
+   listComplejos,
+-  listConsultorios,
+   listInstituciones,
+-  listMedicos,
+-  listPisos,
+   type Cita,
+   type CitaFilters,
+   type Complejo,
+@@ -23,6 +24,7 @@ import {
+   type Medico,
+   type Piso,
+   type TicketResponse,
++  type Usuario,
+ } from '../api/client';
+ import { todayLocalIso } from '../dateUtils';
+ import { exportRows, type ExportFormat } from '../exporters';
+@@ -33,6 +35,7 @@ const complejos = ref<Complejo[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const consultorios = ref<Consultorio[]>([]);
+ const medicos = ref<Medico[]>([]);
++const currentUser = ref<Usuario | null>(null);
+ const error = ref('');
+ const message = ref('');
+ const qrPayload = ref('');
+@@ -80,6 +83,10 @@ function pisoLabel(item: Piso) {
+   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+ }
+ 
++function medicoLabel(item: Medico) {
++  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+   const normalized = text.trim().toLowerCase();
+   return rows.find((item) => {
+@@ -122,6 +129,11 @@ function syncConsultorio() {
+   filters.consultorio_id = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo)?.id ?? '';
+ }
+ 
++function defaultMedicoId() {
++  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
++  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
++}
++
+ function requestFilters(): CitaFilters {
+   return {
+     fecha: filters.fecha,
+@@ -169,18 +181,21 @@ async function load() {
+ 
+ async function loadCatalogs() {
+   try {
+-    const [institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
++    const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
++      getCurrentUser(),
+       listInstituciones(),
+       listComplejos(),
+-      listPisos(),
+-      listConsultorios(),
+-      listMedicos(),
++      listAccessiblePisos(),
++      listAccessibleConsultorios(),
++      listAccessibleMedicos(),
+     ]);
++    currentUser.value = userData;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
+     pisos.value = pisosData;
+     consultorios.value = consultoriosData;
+     medicos.value = medicosData;
++    filters.medico_id ||= defaultMedicoId();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar filtros.';
+   }
+@@ -285,7 +300,7 @@ function clearFilters() {
+   filters.complejo_id = '';
+   filters.piso_id = '';
+   filters.consultorio_id = '';
+-  filters.medico_id = '';
++  filters.medico_id = defaultMedicoId();
+   filters.paciente = '';
+   institucionSearch.value = '';
+   complejoSearch.value = '';
+@@ -390,7 +405,7 @@ onMounted(async () => {
+           <select id="filtro-medico" v-model="filters.medico_id">
+             <option value="">Todos</option>
+             <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
+-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
++              {{ medicoLabel(medico) }}
+             </option>
+           </select>
+         </div>
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index a7e8f0e..7ad9c64 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -3,13 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue';
+ import {
+   ApiError,
+   createCita,
++  getCurrentUser,
++  listAccessibleConsultorios,
++  listAccessibleMedicos,
++  listAccessiblePisos,
+   listComplejos,
+-  listConsultorios,
+   listCitas,
+   listInstituciones,
+-  listMedicos,
+   listPacientes,
+-  listPisos,
+   type Cita,
+   type Complejo,
+   type Consultorio,
+@@ -17,6 +18,7 @@ import {
+   type Medico,
+   type Paciente,
+   type Piso,
++  type Usuario,
+ } from '../api/client';
+ import { todayLocalIso } from '../dateUtils';
+ 
+@@ -36,6 +38,7 @@ const consultorios = ref<Consultorio[]>([]);
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
+ const pisos = ref<Piso[]>([]);
++const currentUser = ref<Usuario | null>(null);
+ const error = ref('');
+ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+@@ -83,6 +86,10 @@ function pisoLabel(item: Piso) {
+   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+ }
+ 
++function medicoLabel(item: Medico) {
++  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
++}
++
+ function patientDisplayName(paciente: Paciente) {
+   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+@@ -152,6 +159,26 @@ function syncConsultorio() {
+   form.consultorio_id = match?.id ?? '';
+ }
+ 
++function defaultMedicoId() {
++  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
++  return ownMedico?.id ?? medicos.value[0]?.id ?? '';
++}
++
++function setDefaultLocation() {
++  const consultorio = consultorios.value[0];
++  if (consultorio) {
++    form.complejo_id = consultorio.complejo_id;
++    form.piso_id = consultorio.piso_id;
++    form.consultorio_id = consultorio.id;
++    form.institucion_id = complejos.value.find((item) => item.id === consultorio.complejo_id)?.institucion_id ?? '';
++    return;
++  }
++  form.institucion_id = instituciones.value[0]?.id ?? '';
++  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
++  form.piso_id = filteredPisos.value[0]?.id ?? '';
++  form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
++}
++
+ function resetForm() {
+   form.tipo = 'PROGRAMADA';
+   form.fecha_cita = todayLocalIso();
+@@ -159,12 +186,9 @@ function resetForm() {
+   form.duracion_estimada = 30;
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+-  form.medico_id = medicos.value[0]?.id ?? '';
++  form.medico_id = defaultMedicoId();
+   form.paciente_id = pacientes.value[0]?.id ?? '';
+-  form.institucion_id = instituciones.value[0]?.id ?? '';
+-  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+-  form.piso_id = filteredPisos.value[0]?.id ?? '';
+-  form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
++  setDefaultLocation();
+   duplicateWarning.value = null;
+   setAutocompleteLabels();
+ }
+@@ -177,21 +201,23 @@ async function loadPatientsForMedico() {
+ async function load() {
+   error.value = '';
+   try {
+-    const [citasData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
++    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
+       listCitas(),
+-      listMedicos(),
+-      listConsultorios(),
++      getCurrentUser(),
++      listAccessibleMedicos(),
++      listAccessibleConsultorios(),
+       listInstituciones(),
+       listComplejos(),
+-      listPisos(),
++      listAccessiblePisos(),
+     ]);
+     citas.value = citasData;
++    currentUser.value = userData;
+     medicos.value = medicosData;
+     consultorios.value = consultoriosData;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
+     pisos.value = pisosData;
+-    form.medico_id = medicos.value[0]?.id ?? '';
++    form.medico_id = defaultMedicoId();
+     await loadPatientsForMedico();
+     resetForm();
+   } catch (err) {
+@@ -282,7 +308,7 @@ onMounted(load);
+           <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
+             <option value="">Seleccione médico</option>
+             <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
+-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
++              {{ medicoLabel(medico) }}
+             </option>
+           </select>
+         </div>
+@@ -385,7 +411,7 @@ onMounted(load);
+       </form>
+ 
+       <div class="panel table-panel">
+-        <h2>Últimas citas</h2>
++        <h2>Citas</h2>
+         <div class="table-scroll">
+           <table>
+             <thead>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index 93be1c7..bca0ab2 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -4,17 +4,20 @@ import {
+   activatePaciente,
+   createPaciente,
+   deactivatePaciente,
+-  listMedicos,
++  getCurrentUser,
++  listAccessibleMedicos,
+   listPacientes,
+   markPacienteForDeletion,
+   searchPacientes,
+   updatePaciente,
+   type Medico,
+   type Paciente,
++  type Usuario,
+ } from '../api/client';
+ 
+ const pacientes = ref<Paciente[]>([]);
+ const medicos = ref<Medico[]>([]);
++const currentUser = ref<Usuario | null>(null);
+ const selected = ref<Paciente | null>(null);
+ const loading = ref(false);
+ const error = ref('');
+@@ -60,6 +63,17 @@ function medicoLabel(medico: Medico) {
+   return medico.nombre_visible || `${medico.nombre} ${medico.apellidos}`;
+ }
+ 
++function setMedicoSelection(id: string) {
++  medicoId.value = id;
++  const medico = medicos.value.find((item) => item.id === id);
++  medicoSearch.value = medico ? medicoLabel(medico) : '';
++}
++
++function defaultMedicoId() {
++  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
++  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
++}
++
+ function syncMedico() {
+   const normalized = medicoSearch.value.trim().toLowerCase();
+   const match = medicos.value.find((medico) => medicoLabel(medico).toLowerCase() === normalized);
+@@ -124,15 +138,10 @@ function setForm(paciente?: Paciente | null) {
+ }
+ 
+ async function load() {
+-  if (!medicoId.value) {
+-    pacientes.value = [];
+-    setForm(null);
+-    return;
+-  }
+   loading.value = true;
+   error.value = '';
+   try {
+-    pacientes.value = await listPacientes({ medico_id: medicoId.value });
++    pacientes.value = await listPacientes({ medico_id: medicoId.value || undefined });
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes.';
+   } finally {
+@@ -141,11 +150,6 @@ async function load() {
+ }
+ 
+ async function search() {
+-  if (!medicoId.value) {
+-    pacientes.value = [];
+-    error.value = 'Selecciona un médico para buscar pacientes.';
+-    return;
+-  }
+   if (!query.value.trim()) {
+     await load();
+     return;
+@@ -153,7 +157,7 @@ async function search() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value);
++    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value || undefined);
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
+   } finally {
+@@ -237,7 +241,13 @@ async function loadMedicos() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    medicos.value = await listMedicos();
++    const [userData, medicosData] = await Promise.all([getCurrentUser(), listAccessibleMedicos()]);
++    currentUser.value = userData;
++    medicos.value = medicosData;
++    const defaultId = defaultMedicoId();
++    if (defaultId && !medicoId.value) {
++      setMedicoSelection(defaultId);
++    }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar médicos.';
+   } finally {
+@@ -252,7 +262,10 @@ async function onMedicoChange() {
+   await load();
+ }
+ 
+-onMounted(loadMedicos);
++onMounted(async () => {
++  await loadMedicos();
++  await load();
++});
+ </script>
+ 
+ <template>
+@@ -362,12 +375,12 @@ onMounted(loadMedicos);
+         <div class="page-header compact">
+           <h2>Listado</h2>
+           <form class="inline-actions" @submit.prevent="search">
+-            <input v-model="query" placeholder="Nombre, celular o folio" :disabled="!canEditPatient" />
+-            <button type="submit" :disabled="!canEditPatient">Buscar</button>
+-            <button class="secondary" type="button" :disabled="!canEditPatient" @click="query = ''; load()">Limpiar</button>
++            <input v-model="query" placeholder="Nombre, celular o folio" />
++            <button type="submit">Buscar</button>
++            <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
+           </form>
+         </div>
+-        <p v-if="!canEditPatient" class="message">Selecciona un médico para consultar su agenda de pacientes.</p>
++        <p v-if="!canEditPatient" class="message">Selecciona un médico para crear o editar pacientes.</p>
+         <p v-if="loading" class="message">Cargando...</p>
+         <div class="table-scroll">
+           <table>
+diff --git a/access-manager/frontend/src/views/TurnosLlamadosView.vue b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+index 14ae095..53afc71 100644
+--- a/access-manager/frontend/src/views/TurnosLlamadosView.vue
++++ b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+@@ -3,27 +3,34 @@ import { computed, onMounted, ref } from 'vue';
+ import {
+   Complejo,
+   Consultorio,
++  getCurrentUser,
+   Institucion,
+   llamarCita,
++  listAccessibleConsultorios,
++  listAccessibleMedicos,
++  listAccessiblePisos,
+   listComplejos,
+-  listConsultorios,
+   listInstituciones,
+-  listPisos,
+   listTurnosDisplayRecientes,
++  Medico,
+   Piso,
+   TurnoDisplayReciente,
++  Usuario,
+ } from '../api/client';
+ 
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const consultorios = ref<Consultorio[]>([]);
++const medicos = ref<Medico[]>([]);
++const currentUser = ref<Usuario | null>(null);
+ const rows = ref<TurnoDisplayReciente[]>([]);
+ const institucionId = ref('');
+ const complejoId = ref('');
+ const pisoId = ref('');
+ const clusterEsperaId = ref('');
+ const consultorioId = ref('');
++const medicoId = ref('');
+ const minutos = ref(30);
+ const loading = ref(false);
+ const error = ref('');
+@@ -34,11 +41,13 @@ const filteredComplejos = computed(() =>
+   institucionId.value ? complejos.value.filter((item) => item.institucion_id === institucionId.value) : complejos.value,
+ );
+ 
+-const filteredPisos = computed(() => (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : []));
++const filteredPisos = computed(() =>
++  (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value).sort((a, b) => a.numero - b.numero),
++);
+ 
+ const filteredConsultorios = computed(() =>
+   consultorios.value.filter((item) => {
+-    if (!complejoId.value || item.complejo_id !== complejoId.value) return false;
++    if (complejoId.value && item.complejo_id !== complejoId.value) return false;
+     if (pisoId.value && item.piso_id !== pisoId.value) return false;
+     return true;
+   }),
+@@ -49,6 +58,15 @@ function pisoLabel(item: Piso) {
+   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+ }
+ 
++function medicoLabel(item: Medico) {
++  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
++}
++
++function defaultMedicoId() {
++  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
++  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
++}
++
+ function formatMinuteOption(value: number) {
+   if (value < 60) return `${value} min`;
+   const hours = Math.floor(value / 60);
+@@ -57,26 +75,29 @@ function formatMinuteOption(value: number) {
+ }
+ 
+ async function loadCatalogs() {
+-  const [institucionesData, complejosData, pisosData, consultoriosData] = await Promise.all([
++  const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
++    getCurrentUser(),
+     listInstituciones(),
+     listComplejos(),
+-    listPisos(),
+-    listConsultorios(),
++    listAccessiblePisos(),
++    listAccessibleConsultorios(),
++    listAccessibleMedicos(),
+   ]);
++  currentUser.value = userData;
+   instituciones.value = institucionesData;
+   complejos.value = complejosData;
+   pisos.value = pisosData;
+   consultorios.value = consultoriosData;
+-  institucionId.value ||= complejosData[0]?.institucion_id ?? institucionesData[0]?.id ?? '';
+-  complejoId.value ||= filteredComplejos.value[0]?.id ?? complejosData[0]?.id ?? '';
++  medicos.value = medicosData;
++  medicoId.value ||= defaultMedicoId();
++  const firstConsultorio = consultoriosData[0];
++  if (firstConsultorio && !complejoId.value) {
++    complejoId.value = firstConsultorio.complejo_id;
++    institucionId.value = complejosData.find((item) => item.id === firstConsultorio.complejo_id)?.institucion_id ?? '';
++  }
+ }
+ 
+ async function loadRows() {
+-  if (!complejoId.value) {
+-    rows.value = [];
+-    error.value = '';
+-    return;
+-  }
+   loading.value = true;
+   error.value = '';
+   try {
+@@ -85,6 +106,7 @@ async function loadRows() {
+       piso_id: pisoId.value,
+       cluster_espera_id: clusterEsperaId.value,
+       consultorio_id: consultorioId.value,
++      medico_id: medicoId.value,
+       minutos: minutos.value,
+     });
+   } catch (err) {
+@@ -205,24 +227,31 @@ onMounted(async () => {
+         <div class="form-row">
+           <label for="complejo-turnos">Campus</label>
+           <select id="complejo-turnos" v-model="complejoId" @change="onComplejoChange">
+-            <option value="">Selecciona un campus</option>
++            <option value="">Todos</option>
+             <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+           <label for="piso-turnos">Piso</label>
+-          <select id="piso-turnos" v-model="pisoId" :disabled="!complejoId" @change="onPisoChange">
++          <select id="piso-turnos" v-model="pisoId" @change="onPisoChange">
+             <option value="">Todos</option>
+             <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+           <label for="consultorio-turnos">Consultorio</label>
+-          <select id="consultorio-turnos" v-model="consultorioId" :disabled="!complejoId" @change="loadRows">
++          <select id="consultorio-turnos" v-model="consultorioId" @change="loadRows">
+             <option value="">Todos</option>
+             <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ item.nombre_visible || item.codigo }}</option>
+           </select>
+         </div>
++        <div class="form-row">
++          <label for="medico-turnos">Médico</label>
++          <select id="medico-turnos" v-model="medicoId" @change="loadRows">
++            <option value="">Todos</option>
++            <option v-for="item in medicos" :key="item.id" :value="item.id">{{ medicoLabel(item) }}</option>
++          </select>
++        </div>
+         <div class="form-row">
+           <label for="cluster-turnos">Clúster</label>
+           <input id="cluster-turnos" v-model="clusterEsperaId" placeholder="UUID de clúster" @change="loadRows" />

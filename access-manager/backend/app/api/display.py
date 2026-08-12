@@ -15,7 +15,7 @@ from app.constants import (
     TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO,
 )
 from app.core.database import get_db
-from app.core.security import hash_password, require_role, verify_password
+from app.core.security import hash_password, require_permission, require_role, verify_password
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
 from app.models.flow import Cita, Paciente
@@ -31,11 +31,13 @@ from app.schemas.display import (
     PublicTurnoDisplay,
     TurnoDisplayRecienteRead,
 )
+from app.services.access_scope import ensure_cita_access, turno_display_access_predicate
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 router = APIRouter()
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
-OperationalUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO", "RECEPCIONISTA", "MEDICO", "OPERADOR"))
+TurnosLlamadosReadUser = Depends(require_permission("turnos-llamados"))
+TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamados", minimum="editar"))
 CALL_INTERVAL = timedelta(minutes=5)
 MAX_CALLS_PER_CITA = 3
 TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
@@ -487,26 +489,38 @@ def public_display_turnos(
 
 @router.get("/turnos-display/recientes", response_model=list[TurnoDisplayRecienteRead])
 def turnos_display_recientes(
-    complejo_id: UUID,
+    complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     cluster_espera_id: UUID | None = None,
     consultorio_id: UUID | None = None,
+    medico_id: UUID | None = None,
     minutos: int = Query(default=30, ge=1, le=240),
     db: Session = Depends(get_db),
-    _current_user: Usuario = OperationalUser,
+    current_user: Usuario = TurnosLlamadosReadUser,
 ) -> list[TurnoDisplayRecienteRead]:
     timestamp = now_utc()
     sync_turno_states(db, timestamp)
     query = select(TurnoDisplay).where(
-        TurnoDisplay.complejo_id == complejo_id,
         TurnoDisplay.llamado_en >= timestamp - timedelta(minutes=minutos),
+        turno_display_access_predicate(db, current_user),
     )
+    if complejo_id is not None:
+        query = query.where(TurnoDisplay.complejo_id == complejo_id)
     if piso_id is not None:
         query = query.where(TurnoDisplay.piso_id == piso_id)
     if cluster_espera_id is not None:
         query = query.where(TurnoDisplay.cluster_espera_id == cluster_espera_id)
     if consultorio_id is not None:
         query = query.where(TurnoDisplay.consultorio_id == consultorio_id)
+    if medico_id is not None:
+        query = query.where(
+            select(Cita.id)
+            .where(
+                Cita.id == TurnoDisplay.cita_id,
+                Cita.medico_id == medico_id,
+            )
+            .exists()
+        )
     rows = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc())).scalars())
     db.commit()
     recientes: list[TurnoDisplayRecienteRead] = []
@@ -538,9 +552,10 @@ def llamar_cita(
     cita_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Usuario = OperationalUser,
+    current_user: Usuario = TurnosLlamadosWriteUser,
 ) -> CitaLlamarResponse:
     cita = exists_or_404(db, Cita, cita_id, "Cita")
+    ensure_cita_access(db, current_user, cita.id)
     timestamp = now_utc()
     if cita.estado in TERMINAL_CALL_STATES:
         detail = "La cita está marcada como No Se Presentó." if cita.estado == "NO_LLEGO" else f"No se puede llamar una cita en estado {cita.estado}."

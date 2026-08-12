@@ -4,17 +4,20 @@ import {
   activatePaciente,
   createPaciente,
   deactivatePaciente,
-  listMedicos,
+  getCurrentUser,
+  listAccessibleMedicos,
   listPacientes,
   markPacienteForDeletion,
   searchPacientes,
   updatePaciente,
   type Medico,
   type Paciente,
+  type Usuario,
 } from '../api/client';
 
 const pacientes = ref<Paciente[]>([]);
 const medicos = ref<Medico[]>([]);
+const currentUser = ref<Usuario | null>(null);
 const selected = ref<Paciente | null>(null);
 const loading = ref(false);
 const error = ref('');
@@ -58,6 +61,17 @@ function patientDisplayName(paciente: Paciente) {
 
 function medicoLabel(medico: Medico) {
   return medico.nombre_visible || `${medico.nombre} ${medico.apellidos}`;
+}
+
+function setMedicoSelection(id: string) {
+  medicoId.value = id;
+  const medico = medicos.value.find((item) => item.id === id);
+  medicoSearch.value = medico ? medicoLabel(medico) : '';
+}
+
+function defaultMedicoId() {
+  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+  return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
 }
 
 function syncMedico() {
@@ -124,15 +138,10 @@ function setForm(paciente?: Paciente | null) {
 }
 
 async function load() {
-  if (!medicoId.value) {
-    pacientes.value = [];
-    setForm(null);
-    return;
-  }
   loading.value = true;
   error.value = '';
   try {
-    pacientes.value = await listPacientes({ medico_id: medicoId.value });
+    pacientes.value = await listPacientes({ medico_id: medicoId.value || undefined });
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes.';
   } finally {
@@ -141,11 +150,6 @@ async function load() {
 }
 
 async function search() {
-  if (!medicoId.value) {
-    pacientes.value = [];
-    error.value = 'Selecciona un médico para buscar pacientes.';
-    return;
-  }
   if (!query.value.trim()) {
     await load();
     return;
@@ -153,7 +157,7 @@ async function search() {
   loading.value = true;
   error.value = '';
   try {
-    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value);
+    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value || undefined);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
   } finally {
@@ -237,7 +241,13 @@ async function loadMedicos() {
   loading.value = true;
   error.value = '';
   try {
-    medicos.value = await listMedicos();
+    const [userData, medicosData] = await Promise.all([getCurrentUser(), listAccessibleMedicos()]);
+    currentUser.value = userData;
+    medicos.value = medicosData;
+    const defaultId = defaultMedicoId();
+    if (defaultId && !medicoId.value) {
+      setMedicoSelection(defaultId);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar médicos.';
   } finally {
@@ -252,7 +262,10 @@ async function onMedicoChange() {
   await load();
 }
 
-onMounted(loadMedicos);
+onMounted(async () => {
+  await loadMedicos();
+  await load();
+});
 </script>
 
 <template>
@@ -362,12 +375,12 @@ onMounted(loadMedicos);
         <div class="page-header compact">
           <h2>Listado</h2>
           <form class="inline-actions" @submit.prevent="search">
-            <input v-model="query" placeholder="Nombre, celular o folio" :disabled="!canEditPatient" />
-            <button type="submit" :disabled="!canEditPatient">Buscar</button>
-            <button class="secondary" type="button" :disabled="!canEditPatient" @click="query = ''; load()">Limpiar</button>
+            <input v-model="query" placeholder="Nombre, celular o folio" />
+            <button type="submit">Buscar</button>
+            <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
           </form>
         </div>
-        <p v-if="!canEditPatient" class="message">Selecciona un médico para consultar su agenda de pacientes.</p>
+        <p v-if="!canEditPatient" class="message">Selecciona un médico para crear o editar pacientes.</p>
         <p v-if="loading" class="message">Cargando...</p>
         <div class="table-scroll">
           <table>

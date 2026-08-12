@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import uuid
 
 from argon2 import PasswordHasher
@@ -17,6 +17,7 @@ from app.models.usuario import Usuario
 
 password_hasher = PasswordHasher()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
 
 
 def hash_password(password: str) -> str:
@@ -104,6 +105,49 @@ def require_role(*allowed_roles: str, scope: str | None = None):
 
         if user_roles.intersection(allowed_roles):
             return current_user
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tiene permisos para ejecutar esta operación.",
+        )
+
+    return dependency
+
+
+def require_permission(*screen_keys: str, minimum: str = "consultar"):
+    if minimum not in ACCESS_ORDER:
+        raise ValueError("minimum debe ser 'sin', 'consultar' o 'editar'")
+
+    def dependency(
+        current_user: Usuario = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> Usuario:
+        from app.models.operational import Role, UsuarioRol
+
+        today = date.today()
+        roles = list(
+            db.execute(
+                select(Role)
+                .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
+                .where(
+                    UsuarioRol.usuario_id == current_user.id,
+                    UsuarioRol.activo.is_(True),
+                    UsuarioRol.fecha_inicio <= today,
+                    (UsuarioRol.fecha_fin.is_(None) | (UsuarioRol.fecha_fin >= today)),
+                    Role.activo.is_(True),
+                )
+            ).scalars()
+        )
+        if any(role.codigo == "ADMIN_SISTEMA" for role in roles):
+            return current_user
+
+        required_level = ACCESS_ORDER[minimum]
+        for role in roles:
+            permissions = role.permisos or {}
+            for screen_key in screen_keys:
+                access = permissions.get(screen_key, "sin")
+                if ACCESS_ORDER.get(access, 0) >= required_level:
+                    return current_user
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

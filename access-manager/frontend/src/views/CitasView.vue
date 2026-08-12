@@ -3,13 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import {
   ApiError,
   createCita,
+  getCurrentUser,
+  listAccessibleConsultorios,
+  listAccessibleMedicos,
+  listAccessiblePisos,
   listComplejos,
-  listConsultorios,
   listCitas,
   listInstituciones,
-  listMedicos,
   listPacientes,
-  listPisos,
   type Cita,
   type Complejo,
   type Consultorio,
@@ -17,6 +18,7 @@ import {
   type Medico,
   type Paciente,
   type Piso,
+  type Usuario,
 } from '../api/client';
 import { todayLocalIso } from '../dateUtils';
 
@@ -36,6 +38,7 @@ const consultorios = ref<Consultorio[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
 const pisos = ref<Piso[]>([]);
+const currentUser = ref<Usuario | null>(null);
 const error = ref('');
 const message = ref('');
 const duplicateWarning = ref<DuplicateWarning | null>(null);
@@ -81,6 +84,10 @@ function institucionLabel(item: Institucion) {
 function pisoLabel(item: Piso) {
   const detail = item.codigo || item.nombre_visible;
   return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+}
+
+function medicoLabel(item: Medico) {
+  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
 }
 
 function patientDisplayName(paciente: Paciente) {
@@ -152,6 +159,26 @@ function syncConsultorio() {
   form.consultorio_id = match?.id ?? '';
 }
 
+function defaultMedicoId() {
+  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+  return ownMedico?.id ?? medicos.value[0]?.id ?? '';
+}
+
+function setDefaultLocation() {
+  const consultorio = consultorios.value[0];
+  if (consultorio) {
+    form.complejo_id = consultorio.complejo_id;
+    form.piso_id = consultorio.piso_id;
+    form.consultorio_id = consultorio.id;
+    form.institucion_id = complejos.value.find((item) => item.id === consultorio.complejo_id)?.institucion_id ?? '';
+    return;
+  }
+  form.institucion_id = instituciones.value[0]?.id ?? '';
+  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+  form.piso_id = filteredPisos.value[0]?.id ?? '';
+  form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
+}
+
 function resetForm() {
   form.tipo = 'PROGRAMADA';
   form.fecha_cita = todayLocalIso();
@@ -159,12 +186,9 @@ function resetForm() {
   form.duracion_estimada = 30;
   form.origen = 'WEB';
   form.notas_operativas = '';
-  form.medico_id = medicos.value[0]?.id ?? '';
+  form.medico_id = defaultMedicoId();
   form.paciente_id = pacientes.value[0]?.id ?? '';
-  form.institucion_id = instituciones.value[0]?.id ?? '';
-  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
-  form.piso_id = filteredPisos.value[0]?.id ?? '';
-  form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
+  setDefaultLocation();
   duplicateWarning.value = null;
   setAutocompleteLabels();
 }
@@ -177,21 +201,23 @@ async function loadPatientsForMedico() {
 async function load() {
   error.value = '';
   try {
-    const [citasData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
+    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
       listCitas(),
-      listMedicos(),
-      listConsultorios(),
+      getCurrentUser(),
+      listAccessibleMedicos(),
+      listAccessibleConsultorios(),
       listInstituciones(),
       listComplejos(),
-      listPisos(),
+      listAccessiblePisos(),
     ]);
     citas.value = citasData;
+    currentUser.value = userData;
     medicos.value = medicosData;
     consultorios.value = consultoriosData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
     pisos.value = pisosData;
-    form.medico_id = medicos.value[0]?.id ?? '';
+    form.medico_id = defaultMedicoId();
     await loadPatientsForMedico();
     resetForm();
   } catch (err) {
@@ -282,7 +308,7 @@ onMounted(load);
           <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
             <option value="">Seleccione médico</option>
             <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
-              {{ medico.nombre_visible || `${medico.nombre} ${medico.apellidos}` }}
+              {{ medicoLabel(medico) }}
             </option>
           </select>
         </div>
@@ -385,7 +411,7 @@ onMounted(load);
       </form>
 
       <div class="panel table-panel">
-        <h2>Últimas citas</h2>
+        <h2>Citas</h2>
         <div class="table-scroll">
           <table>
             <thead>
