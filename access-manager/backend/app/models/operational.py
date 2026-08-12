@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, time
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +34,8 @@ class UsuarioRol(TimestampMixin, Base):
     piso_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("pisos.id"), index=True)
     consultorio_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("consultorios.id"), index=True)
     medico_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("medicos.id"), index=True)
+    fecha_inicio: Mapped[date] = mapped_column(Date, default=date.today, server_default=func.current_date(), nullable=False)
+    fecha_fin: Mapped[date | None] = mapped_column(Date)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

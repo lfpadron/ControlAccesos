@@ -168,6 +168,7 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
 
 
 def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+    validate_date_range(data, item)
     usuario_id = data.get("usuario_id", getattr(item, "usuario_id", None))
     rol_id = data.get("rol_id", getattr(item, "rol_id", None))
     institucion_id = data.get("institucion_id", getattr(item, "institucion_id", None))
@@ -421,19 +422,29 @@ def validate_asignacion_operador(db: Session, data: dict[str, Any], item: object
 
 def prepare_usuario_create(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password")
+    data["apellidos"] = str(data["apellidos"]).strip()
+    data["nombre"] = str(data["nombre"]).strip()
     data["email"] = str(data["email"]).strip().lower()
     if data.get("correo_alterno") is not None:
         data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
+    if data.get("notas") is not None:
+        data["notas"] = str(data["notas"]).strip() or None
     data["password_hash"] = hash_password(password)
     return data
 
 
 def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
     password = data.pop("password", None)
+    if data.get("apellidos") is not None:
+        data["apellidos"] = str(data["apellidos"]).strip()
+    if data.get("nombre") is not None:
+        data["nombre"] = str(data["nombre"]).strip()
     if data.get("email") is not None:
         data["email"] = str(data["email"]).strip().lower()
     if data.get("correo_alterno") is not None:
         data["correo_alterno"] = str(data["correo_alterno"]).strip().lower()
+    if data.get("notas") is not None:
+        data["notas"] = str(data["notas"]).strip() or None
     if password:
         data["password_hash"] = hash_password(password)
     return data

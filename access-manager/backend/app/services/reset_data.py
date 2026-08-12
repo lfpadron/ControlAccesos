@@ -72,6 +72,7 @@ def ensure_admins(db: Session, password: str | None, admin_role: Role) -> list[U
                     f"Falta {email}. Configura SEED_ADMIN_PASSWORD para poder recrear los dos administradores."
                 )
             admin = Usuario(
+                apellidos="Sistema",
                 nombre=f"Administrador {index}",
                 email=email,
                 password_hash=hash_password(password),
@@ -80,6 +81,8 @@ def ensure_admins(db: Session, password: str | None, admin_role: Role) -> list[U
             db.add(admin)
             db.flush()
         else:
+            if not admin.apellidos:
+                admin.apellidos = "Sistema"
             admin.estado = "ACTIVO"
         db.add(UsuarioRol(usuario_id=admin.id, rol_id=admin_role.id))
         admins.append(admin)

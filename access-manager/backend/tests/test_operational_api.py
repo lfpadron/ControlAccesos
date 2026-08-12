@@ -72,6 +72,7 @@ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str,
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": "Negocio",
                 "nombre": f"Admin Negocio {suffix}",
                 "email": f"admin-negocio-{suffix}@example.com",
                 "password": initial_password,
@@ -157,6 +158,7 @@ def test_admin_can_reset_user_password(client: TestClient, auth_headers: dict[st
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": "Reset",
                 "nombre": f"Usuario Reset {suffix}",
                 "email": f"Usuario-Reset-{suffix}@Example.COM",
                 "password": initial_password,
@@ -194,6 +196,7 @@ def test_user_password_requires_number(client: TestClient, auth_headers: dict[st
         "/api/usuarios",
         headers=auth_headers,
         json={
+            "apellidos": "Password",
             "nombre": f"Usuario Password {suffix}",
             "email": f"password-{suffix}@example.com",
             "password": invalid_password,
@@ -207,6 +210,7 @@ def test_user_password_requires_number(client: TestClient, auth_headers: dict[st
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": "Password",
                 "nombre": f"Usuario Password {suffix}",
                 "email": f"password-{suffix}@example.com",
                 "password": valid_password,
@@ -391,6 +395,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": f"Test {suffix}",
                 "nombre": f"Médico Test {suffix}",
                 "email": f"medico-{suffix}@example.com",
                 "password": "Temporal123!",
@@ -402,6 +407,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": f"Test {suffix}",
                 "nombre": f"Operador Test {suffix}",
                 "email": f"operador-{suffix}@example.com",
                 "password": "Temporal123!",
@@ -730,6 +736,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
             "/api/usuarios",
             headers=auth_headers,
             json={
+                "apellidos": f"Mobile {suffix}",
                 "nombre": f"Recepcionista Mobile {suffix}",
                 "email": f"recepcion-mobile-{suffix}@example.com",
                 "password": "Temporal123!",

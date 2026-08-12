@@ -69,8 +69,11 @@ def main() -> None:
             if existing:
                 logger.info("seed_admin_exists", extra={"email": email})
                 admin = existing
+                if not admin.apellidos:
+                    admin.apellidos = "Sistema"
             else:
                 admin = Usuario(
+                    apellidos="Sistema",
                     nombre=f"Administrador {email.split('@')[0][-1]}",
                     email=email,
                     password_hash=hash_password(settings.seed_admin_password),
@@ -250,13 +253,16 @@ def main() -> None:
         recepcionista_user = db.execute(select(Usuario).where(Usuario.email == "recepcion-demo@example.com")).scalar_one_or_none()
         if recepcionista_user is None:
             recepcionista_user = Usuario(
-                nombre="Recepción Demo",
+                apellidos="Demo",
+                nombre="Recepción",
                 email="recepcion-demo@example.com",
                 password_hash=hash_password(settings.seed_admin_password),
                 estado="ACTIVO",
             )
             db.add(recepcionista_user)
             db.flush()
+        elif not recepcionista_user.apellidos:
+            recepcionista_user.apellidos = "Demo"
 
         recepcionista_role = roles["RECEPCIONISTA"]
         recepcionista_role_assignment = db.execute(
@@ -280,13 +286,16 @@ def main() -> None:
         operador_user = db.execute(select(Usuario).where(Usuario.email == "operador-demo@example.com")).scalar_one_or_none()
         if operador_user is None:
             operador_user = Usuario(
-                nombre="Operador Demo",
+                apellidos="Demo",
+                nombre="Operador",
                 email="operador-demo@example.com",
                 password_hash=hash_password(settings.seed_admin_password),
                 estado="ACTIVO",
             )
             db.add(operador_user)
             db.flush()
+        elif not operador_user.apellidos:
+            operador_user.apellidos = "Demo"
 
         operador_role = roles["OPERADOR"]
         operador_role_assignment = db.execute(

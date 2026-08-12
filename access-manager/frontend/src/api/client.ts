@@ -83,9 +83,11 @@ export type Complejo = {
 
 export type Usuario = {
   id: string;
+  apellidos: string;
   nombre: string;
   email: string;
   correo_alterno?: string | null;
+  notas?: string | null;
   telefono?: string | null;
   two_factor_enabled: boolean;
   force_password_change: boolean;
@@ -120,6 +122,8 @@ export type UsuarioRol = {
   piso_id?: string | null;
   consultorio_id?: string | null;
   medico_id?: string | null;
+  fecha_inicio: string;
+  fecha_fin?: string | null;
   activo: boolean;
   created_at: string;
   updated_at: string;

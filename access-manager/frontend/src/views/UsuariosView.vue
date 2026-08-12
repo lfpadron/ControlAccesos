@@ -35,9 +35,11 @@ const appliedFilters = reactive({
 });
 
 const form = reactive({
+  apellidos: '',
   nombre: '',
   email: '',
   correo_alterno: '',
+  notas: '',
   password: '',
   telefono: '',
   rol_id: '',
@@ -47,9 +49,9 @@ const form = reactive({
 
 const filteredUsers = computed(() => {
   const q = appliedFilters.q.trim().toLowerCase();
-  return usuarios.value.filter((user) => {
+  return [...usuarios.value].sort(compareUsers).filter((user) => {
     if (q) {
-      const haystack = [user.nombre, user.email, user.correo_alterno ?? ''].join(' ').toLowerCase();
+      const haystack = [user.apellidos, user.nombre, user.email, user.correo_alterno ?? ''].join(' ').toLowerCase();
       if (!haystack.includes(q)) return false;
     }
     if (appliedFilters.rol_id && !rolesForUser(user.id).some((item) => item.rol_id === appliedFilters.rol_id && item.activo)) {
@@ -67,22 +69,26 @@ function roleLabel(id: string) {
   return role ? role.nombre || role.codigo : 'Sin rol';
 }
 
+function compareUsers(a: Usuario, b: Usuario) {
+  return `${a.apellidos} ${a.nombre}`.localeCompare(`${b.apellidos} ${b.nombre}`, 'es', { sensitivity: 'base' });
+}
+
 function rolesForUser(userId: string) {
   return usuarioRoles.value.filter((item) => item.usuario_id === userId);
 }
 
 function roleText(userId: string) {
-  const labels = rolesForUser(userId)
-    .filter((item) => item.activo)
-    .map((item) => roleLabel(item.rol_id));
+  const labels = [...new Set(rolesForUser(userId).filter((item) => item.activo).map((item) => roleLabel(item.rol_id)))];
   return labels.length ? labels.join(', ') : 'Sin rol asignado';
 }
 
 function resetForm() {
   selected.value = null;
+  form.apellidos = '';
   form.nombre = '';
   form.email = '';
   form.correo_alterno = '';
+  form.notas = '';
   form.password = '';
   form.telefono = '';
   form.rol_id = '';
@@ -92,9 +98,11 @@ function resetForm() {
 
 function editUser(user: Usuario) {
   selected.value = user;
+  form.apellidos = user.apellidos;
   form.nombre = user.nombre;
   form.email = user.email;
   form.correo_alterno = user.correo_alterno ?? '';
+  form.notas = user.notas ?? '';
   form.password = '';
   form.telefono = user.telefono ?? '';
   form.rol_id = rolesForUser(user.id).find((item) => item.activo)?.rol_id ?? '';
@@ -157,9 +165,11 @@ async function submit() {
   loading.value = true;
   try {
     const payload: Record<string, unknown> = {
+      apellidos: form.apellidos.trim(),
       nombre: form.nombre.trim(),
       email: form.email.trim(),
       correo_alterno: form.correo_alterno.trim() || null,
+      notas: form.notas.trim() || null,
       telefono: form.telefono.trim() || null,
       force_password_change: form.force_password_change,
       estado: form.estado,
@@ -215,6 +225,10 @@ onMounted(loadData);
       <form class="panel form" autocomplete="off" @submit.prevent="submit">
         <h2>{{ selected ? 'Editar usuario' : 'Crear usuario' }}</h2>
         <div class="form-row">
+          <label for="usuario-apellidos">Apellido(s)</label>
+          <input id="usuario-apellidos" v-model="form.apellidos" required maxlength="180" />
+        </div>
+        <div class="form-row">
           <label for="usuario-nombre">Nombre</label>
           <input id="usuario-nombre" v-model="form.nombre" required maxlength="180" />
         </div>
@@ -225,6 +239,10 @@ onMounted(loadData);
         <div class="form-row">
           <label for="usuario-correo-alterno">Correo alterno</label>
           <input id="usuario-correo-alterno" v-model="form.correo_alterno" type="email" maxlength="255" />
+        </div>
+        <div class="form-row">
+          <label for="usuario-notas">Notas</label>
+          <textarea id="usuario-notas" v-model="form.notas" maxlength="500" rows="4"></textarea>
         </div>
         <div class="form-row">
           <label for="usuario-password">Contraseña temporal / nueva</label>
@@ -265,6 +283,7 @@ onMounted(loadData);
           <table>
             <thead>
               <tr>
+                <th>Apellido(s)</th>
                 <th>Nombre</th>
                 <th>Correo</th>
                 <th>Correo alterno</th>
@@ -274,6 +293,7 @@ onMounted(loadData);
             </thead>
             <tbody>
               <tr v-for="user in paginatedUsers" :key="user.id" class="selectable-row" :class="{ selected: selected?.id === user.id }" @click="editUser(user)">
+                <td>{{ user.apellidos }}</td>
                 <td>{{ user.nombre }}</td>
                 <td>{{ user.email }}</td>
                 <td>{{ user.correo_alterno || '-' }}</td>

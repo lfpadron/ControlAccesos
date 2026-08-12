@@ -41,6 +41,8 @@ class UsuarioRolCreate(BaseModel):
     piso_id: UUID | None = None
     consultorio_id: UUID | None = None
     medico_id: UUID | None = None
+    fecha_inicio: date = Field(default_factory=date.today)
+    fecha_fin: date | None = None
     activo: bool = True
 
 
@@ -53,6 +55,8 @@ class UsuarioRolUpdate(BaseModel):
     piso_id: UUID | None = None
     consultorio_id: UUID | None = None
     medico_id: UUID | None = None
+    fecha_inicio: date | None = None
+    fecha_fin: date | None = None
     activo: bool | None = None
 
 
