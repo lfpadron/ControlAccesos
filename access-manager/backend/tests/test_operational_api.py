@@ -282,6 +282,16 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
             },
         )
     )
+    unlinked_self_medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={
+                "nombre": user["nombre"],
+                "apellidos": user["apellidos"],
+            },
+        )
+    )
     other_medico = assert_created(
         client.post(
             "/api/medicos",
@@ -307,6 +317,19 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
     assert create_response.status_code == 422, create_response.text
     assert "no puede asignarse a sí mismo" in create_response.text
 
+    unlinked_create_response = client.post(
+        "/api/usuario-roles",
+        headers=auth_headers,
+        json={
+            "usuario_id": user["id"],
+            "rol_id": medico_role["id"],
+            "medico_id": unlinked_self_medico["id"],
+            "fecha_inicio": "2026-08-12",
+        },
+    )
+    assert unlinked_create_response.status_code == 422, unlinked_create_response.text
+    assert "no puede asignarse a sí mismo" in unlinked_create_response.text
+
     valid_assignment = assert_created(
         client.post(
             "/api/usuario-roles",
@@ -326,6 +349,92 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
     )
     assert update_response.status_code == 422, update_response.text
     assert "no puede asignarse a sí mismo" in update_response.text
+
+
+def test_usuario_rol_rejects_overlapping_active_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Agenda {suffix}",
+                "nombre": f"Usuario Agenda {suffix}",
+                "email": f"usuario-agenda-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+    medico_user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Doctor {suffix}",
+                "nombre": f"Médico Agenda {suffix}",
+                "email": f"medico-agenda-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+    roles_response = client.get("/api/roles", headers=auth_headers)
+    assert roles_response.status_code == 200, roles_response.text
+    medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
+    medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={
+                "usuario_id": medico_user["id"],
+                "nombre": "Médico",
+                "apellidos": f"Agenda {suffix}",
+            },
+        )
+    )
+
+    assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={
+                "usuario_id": user["id"],
+                "rol_id": medico_role["id"],
+                "medico_id": medico["id"],
+                "fecha_inicio": "2026-09-01",
+                "fecha_fin": "2026-09-10",
+            },
+        )
+    )
+
+    overlap_response = client.post(
+        "/api/usuario-roles",
+        headers=auth_headers,
+        json={
+            "usuario_id": user["id"],
+            "rol_id": medico_role["id"],
+            "medico_id": medico["id"],
+            "fecha_inicio": "2026-09-10",
+            "fecha_fin": "2026-09-20",
+        },
+    )
+    assert overlap_response.status_code == 409, overlap_response.text
+    assert "fechas traslapadas" in overlap_response.text
+
+    non_overlap = assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={
+                "usuario_id": user["id"],
+                "rol_id": medico_role["id"],
+                "medico_id": medico["id"],
+                "fecha_inicio": "2026-09-11",
+                "fecha_fin": "2026-09-20",
+            },
+        )
+    )
+    assert non_overlap["activo"] is True
 
 
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:

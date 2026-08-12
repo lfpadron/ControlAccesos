@@ -139,7 +139,7 @@ const selectedDoctor = computed(() => medicos.value.find((item) => item.id === d
 const doctorOptions = computed(() => {
   const q = normalize(doctorSearch.value);
   const rows = sortByLabel(
-    medicos.value.filter((item) => item.usuario_id !== selectedUserId.value),
+    medicos.value.filter((item) => !doctorMatchesSelectedUser(item)),
     doctorSortLabel,
   );
   if (!q) return rows;
@@ -238,7 +238,26 @@ function medicoDisplay(item: Medico) {
 }
 
 function doctorMatchesSelectedUser(item: Medico | null | undefined) {
-  return Boolean(selectedUserId.value && item?.usuario_id && item.usuario_id === selectedUserId.value);
+  const user = selectedUser.value;
+  if (!user || !item) return false;
+  if (item.usuario_id) return item.usuario_id === user.id;
+  return normalize(item.apellidos) === normalize(user.apellidos) && normalize(item.nombre) === normalize(user.nombre);
+}
+
+function dateRangesOverlap(startA: string, endA: string | null | undefined, startB: string, endB: string | null | undefined) {
+  if (!startA || !startB) return false;
+  if (endA && startB > endA) return false;
+  if (endB && startA > endB) return false;
+  return true;
+}
+
+function hasActiveOverlappingDoctorAssignment() {
+  return doctorAssignmentsForSelected.value.some(
+    (item) =>
+      item.activo &&
+      item.medico_id === doctorForm.medico_id &&
+      dateRangesOverlap(doctorForm.fecha_inicio, doctorForm.fecha_fin || null, item.fecha_inicio, item.fecha_fin),
+  );
 }
 
 function optionName<T extends { id: string }>(rows: T[], id: string | null | undefined, labeler: (item: T) => string) {
@@ -497,6 +516,10 @@ async function addDoctorAssignment() {
     return;
   }
   if (!validateDates(doctorForm.fecha_inicio, doctorForm.fecha_fin)) return;
+  if (hasActiveOverlappingDoctorAssignment()) {
+    error.value = 'Ya existe una asignación activa para este usuario y médico con fechas traslapadas.';
+    return;
+  }
   loading.value = true;
   try {
     await createUsuarioRol({

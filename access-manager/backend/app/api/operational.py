@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -135,6 +137,12 @@ def validate_date_range(data: dict[str, Any], item: object | None = None) -> Non
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="fecha_fin no puede ser menor que fecha_inicio.")
 
 
+def normalize_identity_text(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFD", value or "")
+    without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return " ".join(without_accents.lower().split())
+
+
 def validate_unique_role_code(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     codigo = data.get("codigo")
     if codigo is None:
@@ -168,6 +176,43 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El email ya existe.")
 
 
+def medico_matches_usuario_identity(usuario: Usuario, medico: Medico) -> bool:
+    if medico.usuario_id is not None:
+        return medico.usuario_id == usuario.id
+    return (
+        normalize_identity_text(usuario.apellidos) == normalize_identity_text(medico.apellidos)
+        and normalize_identity_text(usuario.nombre) == normalize_identity_text(medico.nombre)
+    )
+
+
+def validate_unique_active_medico_assignment(
+    db: Session,
+    usuario_id: UUID | None,
+    medico_id: UUID | None,
+    fecha_inicio: date | None,
+    fecha_fin: date | None,
+    activo: bool | None,
+    item: object | None = None,
+) -> None:
+    if not activo or usuario_id is None or medico_id is None or fecha_inicio is None:
+        return
+    query = select(UsuarioRol).where(
+        UsuarioRol.usuario_id == usuario_id,
+        UsuarioRol.medico_id == medico_id,
+        UsuarioRol.activo.is_(True),
+        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= fecha_inicio),
+    )
+    if fecha_fin is not None:
+        query = query.where(UsuarioRol.fecha_inicio <= fecha_fin)
+    if item is not None:
+        query = query.where(UsuarioRol.id != item.id)
+    if db.execute(query.limit(1)).scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe una asignación activa para este usuario y médico con fechas traslapadas.",
+        )
+
+
 def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     validate_date_range(data, item)
     usuario_id = data.get("usuario_id", getattr(item, "usuario_id", None))
@@ -178,8 +223,12 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None 
     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
     consultorio_id = data.get("consultorio_id", getattr(item, "consultorio_id", None))
     medico_id = data.get("medico_id", getattr(item, "medico_id", None))
+    fecha_inicio = data.get("fecha_inicio", getattr(item, "fecha_inicio", None))
+    fecha_fin = data.get("fecha_fin", getattr(item, "fecha_fin", None))
+    activo = data.get("activo", getattr(item, "activo", True))
+    usuario = None
     if usuario_id is not None:
-        exists_or_404(db, Usuario, usuario_id, "Usuario")
+        usuario = exists_or_404(db, Usuario, usuario_id, "Usuario")
     if rol_id is not None:
         exists_or_404(db, Role, rol_id, "Rol")
     if institucion_id is not None:
@@ -206,8 +255,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
     if medico_id is not None:
         medico = exists_or_404(db, Medico, medico_id, "Médico")
-        if usuario_id is not None and medico.usuario_id is not None and medico.usuario_id == usuario_id:
+        if usuario is not None and medico_matches_usuario_identity(usuario, medico):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
+        validate_unique_active_medico_assignment(db, usuario_id, medico_id, fecha_inicio, fecha_fin, activo, item)
 
 
 def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:

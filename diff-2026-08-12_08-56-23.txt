@@ -1,0 +1,282 @@
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index a5a2370..b6f1ddd 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
+ 
++import unicodedata
+ from collections.abc import Callable
+ from dataclasses import dataclass
++from datetime import date
+ from typing import Any
+ from uuid import UUID
+ 
+@@ -135,6 +137,12 @@ def validate_date_range(data: dict[str, Any], item: object | None = None) -> Non
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="fecha_fin no puede ser menor que fecha_inicio.")
+ 
+ 
++def normalize_identity_text(value: str | None) -> str:
++    normalized = unicodedata.normalize("NFD", value or "")
++    without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
++    return " ".join(without_accents.lower().split())
++
++
+ def validate_unique_role_code(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     codigo = data.get("codigo")
+     if codigo is None:
+@@ -168,6 +176,43 @@ def validate_unique_email(db: Session, data: dict[str, Any], item: object | None
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El email ya existe.")
+ 
+ 
++def medico_matches_usuario_identity(usuario: Usuario, medico: Medico) -> bool:
++    if medico.usuario_id is not None:
++        return medico.usuario_id == usuario.id
++    return (
++        normalize_identity_text(usuario.apellidos) == normalize_identity_text(medico.apellidos)
++        and normalize_identity_text(usuario.nombre) == normalize_identity_text(medico.nombre)
++    )
++
++
++def validate_unique_active_medico_assignment(
++    db: Session,
++    usuario_id: UUID | None,
++    medico_id: UUID | None,
++    fecha_inicio: date | None,
++    fecha_fin: date | None,
++    activo: bool | None,
++    item: object | None = None,
++) -> None:
++    if not activo or usuario_id is None or medico_id is None or fecha_inicio is None:
++        return
++    query = select(UsuarioRol).where(
++        UsuarioRol.usuario_id == usuario_id,
++        UsuarioRol.medico_id == medico_id,
++        UsuarioRol.activo.is_(True),
++        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= fecha_inicio),
++    )
++    if fecha_fin is not None:
++        query = query.where(UsuarioRol.fecha_inicio <= fecha_fin)
++    if item is not None:
++        query = query.where(UsuarioRol.id != item.id)
++    if db.execute(query.limit(1)).scalar_one_or_none() is not None:
++        raise HTTPException(
++            status_code=status.HTTP_409_CONFLICT,
++            detail="Ya existe una asignación activa para este usuario y médico con fechas traslapadas.",
++        )
++
++
+ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     validate_date_range(data, item)
+     usuario_id = data.get("usuario_id", getattr(item, "usuario_id", None))
+@@ -178,8 +223,12 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None
+     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+     consultorio_id = data.get("consultorio_id", getattr(item, "consultorio_id", None))
+     medico_id = data.get("medico_id", getattr(item, "medico_id", None))
++    fecha_inicio = data.get("fecha_inicio", getattr(item, "fecha_inicio", None))
++    fecha_fin = data.get("fecha_fin", getattr(item, "fecha_fin", None))
++    activo = data.get("activo", getattr(item, "activo", True))
++    usuario = None
+     if usuario_id is not None:
+-        exists_or_404(db, Usuario, usuario_id, "Usuario")
++        usuario = exists_or_404(db, Usuario, usuario_id, "Usuario")
+     if rol_id is not None:
+         exists_or_404(db, Role, rol_id, "Rol")
+     if institucion_id is not None:
+@@ -206,8 +255,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+     if medico_id is not None:
+         medico = exists_or_404(db, Medico, medico_id, "Médico")
+-        if usuario_id is not None and medico.usuario_id is not None and medico.usuario_id == usuario_id:
++        if usuario is not None and medico_matches_usuario_identity(usuario, medico):
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
++        validate_unique_active_medico_assignment(db, usuario_id, medico_id, fecha_inicio, fecha_fin, activo, item)
+ 
+ 
+ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 334d735..446617f 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -282,6 +282,16 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
+             },
+         )
+     )
++    unlinked_self_medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={
++                "nombre": user["nombre"],
++                "apellidos": user["apellidos"],
++            },
++        )
++    )
+     other_medico = assert_created(
+         client.post(
+             "/api/medicos",
+@@ -307,6 +317,19 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
+     assert create_response.status_code == 422, create_response.text
+     assert "no puede asignarse a sí mismo" in create_response.text
+ 
++    unlinked_create_response = client.post(
++        "/api/usuario-roles",
++        headers=auth_headers,
++        json={
++            "usuario_id": user["id"],
++            "rol_id": medico_role["id"],
++            "medico_id": unlinked_self_medico["id"],
++            "fecha_inicio": "2026-08-12",
++        },
++    )
++    assert unlinked_create_response.status_code == 422, unlinked_create_response.text
++    assert "no puede asignarse a sí mismo" in unlinked_create_response.text
++
+     valid_assignment = assert_created(
+         client.post(
+             "/api/usuario-roles",
+@@ -328,6 +351,92 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
+     assert "no puede asignarse a sí mismo" in update_response.text
+ 
+ 
++def test_usuario_rol_rejects_overlapping_active_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++
++    user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "apellidos": f"Agenda {suffix}",
++                "nombre": f"Usuario Agenda {suffix}",
++                "email": f"usuario-agenda-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++    medico_user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "apellidos": f"Doctor {suffix}",
++                "nombre": f"Médico Agenda {suffix}",
++                "email": f"medico-agenda-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++    roles_response = client.get("/api/roles", headers=auth_headers)
++    assert roles_response.status_code == 200, roles_response.text
++    medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
++    medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={
++                "usuario_id": medico_user["id"],
++                "nombre": "Médico",
++                "apellidos": f"Agenda {suffix}",
++            },
++        )
++    )
++
++    assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={
++                "usuario_id": user["id"],
++                "rol_id": medico_role["id"],
++                "medico_id": medico["id"],
++                "fecha_inicio": "2026-09-01",
++                "fecha_fin": "2026-09-10",
++            },
++        )
++    )
++
++    overlap_response = client.post(
++        "/api/usuario-roles",
++        headers=auth_headers,
++        json={
++            "usuario_id": user["id"],
++            "rol_id": medico_role["id"],
++            "medico_id": medico["id"],
++            "fecha_inicio": "2026-09-10",
++            "fecha_fin": "2026-09-20",
++        },
++    )
++    assert overlap_response.status_code == 409, overlap_response.text
++    assert "fechas traslapadas" in overlap_response.text
++
++    non_overlap = assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={
++                "usuario_id": user["id"],
++                "rol_id": medico_role["id"],
++                "medico_id": medico["id"],
++                "fecha_inicio": "2026-09-11",
++                "fecha_fin": "2026-09-20",
++            },
++        )
++    )
++    assert non_overlap["activo"] is True
++
++
+ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/views/UsuarioRolesView.vue b/access-manager/frontend/src/views/UsuarioRolesView.vue
+index 3048ec2..50547af 100644
+--- a/access-manager/frontend/src/views/UsuarioRolesView.vue
++++ b/access-manager/frontend/src/views/UsuarioRolesView.vue
+@@ -139,7 +139,7 @@ const selectedDoctor = computed(() => medicos.value.find((item) => item.id === d
+ const doctorOptions = computed(() => {
+   const q = normalize(doctorSearch.value);
+   const rows = sortByLabel(
+-    medicos.value.filter((item) => item.usuario_id !== selectedUserId.value),
++    medicos.value.filter((item) => !doctorMatchesSelectedUser(item)),
+     doctorSortLabel,
+   );
+   if (!q) return rows;
+@@ -238,7 +238,26 @@ function medicoDisplay(item: Medico) {
+ }
+ 
+ function doctorMatchesSelectedUser(item: Medico | null | undefined) {
+-  return Boolean(selectedUserId.value && item?.usuario_id && item.usuario_id === selectedUserId.value);
++  const user = selectedUser.value;
++  if (!user || !item) return false;
++  if (item.usuario_id) return item.usuario_id === user.id;
++  return normalize(item.apellidos) === normalize(user.apellidos) && normalize(item.nombre) === normalize(user.nombre);
++}
++
++function dateRangesOverlap(startA: string, endA: string | null | undefined, startB: string, endB: string | null | undefined) {
++  if (!startA || !startB) return false;
++  if (endA && startB > endA) return false;
++  if (endB && startA > endB) return false;
++  return true;
++}
++
++function hasActiveOverlappingDoctorAssignment() {
++  return doctorAssignmentsForSelected.value.some(
++    (item) =>
++      item.activo &&
++      item.medico_id === doctorForm.medico_id &&
++      dateRangesOverlap(doctorForm.fecha_inicio, doctorForm.fecha_fin || null, item.fecha_inicio, item.fecha_fin),
++  );
+ }
+ 
+ function optionName<T extends { id: string }>(rows: T[], id: string | null | undefined, labeler: (item: T) => string) {
+@@ -497,6 +516,10 @@ async function addDoctorAssignment() {
+     return;
+   }
+   if (!validateDates(doctorForm.fecha_inicio, doctorForm.fecha_fin)) return;
++  if (hasActiveOverlappingDoctorAssignment()) {
++    error.value = 'Ya existe una asignación activa para este usuario y médico con fechas traslapadas.';
++    return;
++  }
+   loading.value = true;
+   try {
+     await createUsuarioRol({
