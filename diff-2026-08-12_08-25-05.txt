@@ -1,0 +1,235 @@
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 3f8ba02..a5a2370 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -205,7 +205,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None
+         if piso_id is not None and consultorio.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+     if medico_id is not None:
+-        exists_or_404(db, Medico, medico_id, "Médico")
++        medico = exists_or_404(db, Medico, medico_id, "Médico")
++        if usuario_id is not None and medico.usuario_id is not None and medico.usuario_id == usuario_id:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
+ 
+ 
+ def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index a3580d9..334d735 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -239,6 +239,95 @@ def test_user_password_requires_number(client: TestClient, auth_headers: dict[st
+     assert "al menos 1 número" in invalid_self_change.text
+ 
+ 
++def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++
++    user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "apellidos": f"Self {suffix}",
++                "nombre": f"Usuario Médico {suffix}",
++                "email": f"usuario-medico-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++    other_user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "apellidos": f"Otro {suffix}",
++                "nombre": f"Médico Asignable {suffix}",
++                "email": f"medico-asignable-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++
++    roles_response = client.get("/api/roles", headers=auth_headers)
++    assert roles_response.status_code == 200, roles_response.text
++    medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
++
++    self_medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={
++                "usuario_id": user["id"],
++                "nombre": "Médico",
++                "apellidos": f"Propio {suffix}",
++            },
++        )
++    )
++    other_medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={
++                "usuario_id": other_user["id"],
++                "nombre": "Médico",
++                "apellidos": f"Asignable {suffix}",
++            },
++        )
++    )
++
++    create_response = client.post(
++        "/api/usuario-roles",
++        headers=auth_headers,
++        json={
++            "usuario_id": user["id"],
++            "rol_id": medico_role["id"],
++            "medico_id": self_medico["id"],
++            "fecha_inicio": "2026-08-12",
++        },
++    )
++    assert create_response.status_code == 422, create_response.text
++    assert "no puede asignarse a sí mismo" in create_response.text
++
++    valid_assignment = assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={
++                "usuario_id": user["id"],
++                "rol_id": medico_role["id"],
++                "medico_id": other_medico["id"],
++                "fecha_inicio": "2026-08-12",
++            },
++        )
++    )
++    update_response = client.patch(
++        f"/api/usuario-roles/{valid_assignment['id']}",
++        headers=auth_headers,
++        json={"medico_id": self_medico["id"]},
++    )
++    assert update_response.status_code == 422, update_response.text
++    assert "no puede asignarse a sí mismo" in update_response.text
++
++
+ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/views/UsuarioRolesView.vue b/access-manager/frontend/src/views/UsuarioRolesView.vue
+index d6e9bef..1484f08 100644
+--- a/access-manager/frontend/src/views/UsuarioRolesView.vue
++++ b/access-manager/frontend/src/views/UsuarioRolesView.vue
+@@ -1,5 +1,5 @@
+ <script setup lang="ts">
+-import { computed, onMounted, reactive, ref } from 'vue';
++import { computed, onMounted, reactive, ref, watch } from 'vue';
+ import {
+   createUsuarioRol,
+   listComplejos,
+@@ -74,7 +74,7 @@ const paginatedUsers = computed(() => usuarios.value.slice((page.value - 1) * PA
+ const selectedUser = computed(() => userById(selectedUserId.value));
+ 
+ const roleOptions = computed(() => sortByLabel(roles.value, roleLabelFromItem));
+-const sortedInstituciones = computed(() => sortByLabel(instituciones.value, institutionLabel));
++const sortedInstituciones = computed(() => sortByLabel(instituciones.value.filter((item) => item.activo), institutionLabel));
+ const institutionOptions = computed(() => {
+   const q = normalize(locationForm.institucionSearch);
+   if (!q) return sortedInstituciones.value;
+@@ -83,7 +83,7 @@ const institutionOptions = computed(() => {
+ const scopedCampus = computed(() =>
+   locationForm.institucion_id
+     ? sortByLabel(
+-        campus.value.filter((item) => item.institucion_id === locationForm.institucion_id),
++        campus.value.filter((item) => item.activo && item.institucion_id === locationForm.institucion_id),
+         (item) => item.nombre,
+       )
+     : [],
+@@ -91,7 +91,7 @@ const scopedCampus = computed(() =>
+ const scopedTorres = computed(() =>
+   locationForm.complejo_id
+     ? sortByLabel(
+-        torres.value.filter((item) => item.complejo_id === locationForm.complejo_id),
++        torres.value.filter((item) => item.activo && item.complejo_id === locationForm.complejo_id),
+         (item) => item.nombre,
+       )
+     : [],
+@@ -99,7 +99,7 @@ const scopedTorres = computed(() =>
+ const scopedPisos = computed(() =>
+   locationForm.torre_id
+     ? sortByLabel(
+-        pisos.value.filter((item) => item.torre_id === locationForm.torre_id),
++        pisos.value.filter((item) => item.activo && item.torre_id === locationForm.torre_id),
+         pisoLabel,
+       )
+     : [],
+@@ -107,7 +107,7 @@ const scopedPisos = computed(() =>
+ const scopedConsultorios = computed(() =>
+   locationForm.piso_id
+     ? sortByLabel(
+-        consultorios.value.filter((item) => item.piso_id === locationForm.piso_id),
++        consultorios.value.filter((item) => item.activo && item.piso_id === locationForm.piso_id),
+         consultorioLabel,
+       )
+     : [],
+@@ -135,7 +135,10 @@ const doctorAssignmentsForSelected = computed(() =>
+ const selectedDoctor = computed(() => medicos.value.find((item) => item.id === doctorForm.medico_id) ?? null);
+ const doctorOptions = computed(() => {
+   const q = normalize(doctorSearch.value);
+-  const rows = sortByLabel(medicos.value, (item) => `${item.nombre} ${item.apellidos}`);
++  const rows = sortByLabel(
++    medicos.value.filter((item) => item.usuario_id !== selectedUserId.value),
++    (item) => `${item.nombre} ${item.apellidos}`,
++  );
+   if (!q) return rows;
+   return rows.filter((item) => {
+     const user = item.usuario_id ? userById(item.usuario_id) : null;
+@@ -223,6 +226,10 @@ function medicoDisplay(item: Medico) {
+   };
+ }
+ 
++function doctorMatchesSelectedUser(item: Medico | null | undefined) {
++  return Boolean(selectedUserId.value && item?.usuario_id && item.usuario_id === selectedUserId.value);
++}
++
+ function optionName<T extends { id: string }>(rows: T[], id: string | null | undefined, labeler: (item: T) => string) {
+   if (!id) return '-';
+   const row = rows.find((item) => item.id === id);
+@@ -473,6 +480,10 @@ async function addDoctorAssignment() {
+     error.value = 'Seleccione un médico.';
+     return;
+   }
++  if (doctorMatchesSelectedUser(selectedDoctor.value)) {
++    error.value = 'El usuario seleccionado no puede asignarse a sí mismo como médico.';
++    return;
++  }
+   if (!validateDates(doctorForm.fecha_inicio, doctorForm.fecha_fin)) return;
+   loading.value = true;
+   try {
+@@ -521,6 +532,12 @@ function onDoctorSearchInput() {
+   doctorForm.medico_id = match?.id ?? '';
+ }
+ 
++watch(selectedUserId, () => {
++  if (doctorMatchesSelectedUser(selectedDoctor.value)) {
++    resetDoctorForm();
++  }
++});
++
+ onMounted(loadReferenceData);
+ </script>
+ 
+diff --git a/diff-2026-08-12_01-14-30.txt b/diff-2026-08-12_01-14-30.txt
+index 405b470..e69de29 100644
+--- a/diff-2026-08-12_01-14-30.txt
++++ b/diff-2026-08-12_01-14-30.txt
+@@ -1,12 +0,0 @@
+-diff --git a/access-manager/frontend/src/views/PisosView.vue b/access-manager/frontend/src/views/PisosView.vue
+-index d7c15b1..c276a3b 100644
+---- a/access-manager/frontend/src/views/PisosView.vue
+-+++ b/access-manager/frontend/src/views/PisosView.vue
+-@@ -40,6 +40,7 @@ const torreOptions = computed(() => {
+-   const campusId = locationContext.campus?.id ?? '';
+-   return [...torres.value]
+-     .filter((item) => {
+-+      if (!item.activo) return false;
+-       if (campusId) return item.complejo_id === campusId;
+-       if (!institucionId) return true;
+-       return campus.value.find((row) => row.id === item.complejo_id)?.institucion_id === institucionId;

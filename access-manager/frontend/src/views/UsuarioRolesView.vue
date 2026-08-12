@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   createUsuarioRol,
   listComplejos,
@@ -74,7 +74,7 @@ const paginatedUsers = computed(() => usuarios.value.slice((page.value - 1) * PA
 const selectedUser = computed(() => userById(selectedUserId.value));
 
 const roleOptions = computed(() => sortByLabel(roles.value, roleLabelFromItem));
-const sortedInstituciones = computed(() => sortByLabel(instituciones.value, institutionLabel));
+const sortedInstituciones = computed(() => sortByLabel(instituciones.value.filter((item) => item.activo), institutionLabel));
 const institutionOptions = computed(() => {
   const q = normalize(locationForm.institucionSearch);
   if (!q) return sortedInstituciones.value;
@@ -83,7 +83,7 @@ const institutionOptions = computed(() => {
 const scopedCampus = computed(() =>
   locationForm.institucion_id
     ? sortByLabel(
-        campus.value.filter((item) => item.institucion_id === locationForm.institucion_id),
+        campus.value.filter((item) => item.activo && item.institucion_id === locationForm.institucion_id),
         (item) => item.nombre,
       )
     : [],
@@ -91,7 +91,7 @@ const scopedCampus = computed(() =>
 const scopedTorres = computed(() =>
   locationForm.complejo_id
     ? sortByLabel(
-        torres.value.filter((item) => item.complejo_id === locationForm.complejo_id),
+        torres.value.filter((item) => item.activo && item.complejo_id === locationForm.complejo_id),
         (item) => item.nombre,
       )
     : [],
@@ -99,7 +99,7 @@ const scopedTorres = computed(() =>
 const scopedPisos = computed(() =>
   locationForm.torre_id
     ? sortByLabel(
-        pisos.value.filter((item) => item.torre_id === locationForm.torre_id),
+        pisos.value.filter((item) => item.activo && item.torre_id === locationForm.torre_id),
         pisoLabel,
       )
     : [],
@@ -107,7 +107,7 @@ const scopedPisos = computed(() =>
 const scopedConsultorios = computed(() =>
   locationForm.piso_id
     ? sortByLabel(
-        consultorios.value.filter((item) => item.piso_id === locationForm.piso_id),
+        consultorios.value.filter((item) => item.activo && item.piso_id === locationForm.piso_id),
         consultorioLabel,
       )
     : [],
@@ -135,7 +135,10 @@ const doctorAssignmentsForSelected = computed(() =>
 const selectedDoctor = computed(() => medicos.value.find((item) => item.id === doctorForm.medico_id) ?? null);
 const doctorOptions = computed(() => {
   const q = normalize(doctorSearch.value);
-  const rows = sortByLabel(medicos.value, (item) => `${item.nombre} ${item.apellidos}`);
+  const rows = sortByLabel(
+    medicos.value.filter((item) => item.usuario_id !== selectedUserId.value),
+    (item) => `${item.nombre} ${item.apellidos}`,
+  );
   if (!q) return rows;
   return rows.filter((item) => {
     const user = item.usuario_id ? userById(item.usuario_id) : null;
@@ -221,6 +224,10 @@ function medicoDisplay(item: Medico) {
     nombre: item.nombre,
     correo: user?.email ?? '-',
   };
+}
+
+function doctorMatchesSelectedUser(item: Medico | null | undefined) {
+  return Boolean(selectedUserId.value && item?.usuario_id && item.usuario_id === selectedUserId.value);
 }
 
 function optionName<T extends { id: string }>(rows: T[], id: string | null | undefined, labeler: (item: T) => string) {
@@ -473,6 +480,10 @@ async function addDoctorAssignment() {
     error.value = 'Seleccione un médico.';
     return;
   }
+  if (doctorMatchesSelectedUser(selectedDoctor.value)) {
+    error.value = 'El usuario seleccionado no puede asignarse a sí mismo como médico.';
+    return;
+  }
   if (!validateDates(doctorForm.fecha_inicio, doctorForm.fecha_fin)) return;
   loading.value = true;
   try {
@@ -520,6 +531,12 @@ function onDoctorSearchInput() {
   const match = doctorOptions.value.find((item) => normalize(medicoLabel(item)) === value || normalize(`${item.nombre} ${item.apellidos}`) === value);
   doctorForm.medico_id = match?.id ?? '';
 }
+
+watch(selectedUserId, () => {
+  if (doctorMatchesSelectedUser(selectedDoctor.value)) {
+    resetDoctorForm();
+  }
+});
 
 onMounted(loadReferenceData);
 </script>

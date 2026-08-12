@@ -205,7 +205,9 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None 
         if piso_id is not None and consultorio.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
     if medico_id is not None:
-        exists_or_404(db, Medico, medico_id, "Médico")
+        medico = exists_or_404(db, Medico, medico_id, "Médico")
+        if usuario_id is not None and medico.usuario_id is not None and medico.usuario_id == usuario_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
 
 
 def floor_count_for_torre(db: Session, torre_id: UUID, exclude_piso_id: UUID | None = None) -> int:

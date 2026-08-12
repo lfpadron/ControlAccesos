@@ -239,6 +239,95 @@ def test_user_password_requires_number(client: TestClient, auth_headers: dict[st
     assert "al menos 1 número" in invalid_self_change.text
 
 
+def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Self {suffix}",
+                "nombre": f"Usuario Médico {suffix}",
+                "email": f"usuario-medico-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+    other_user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Otro {suffix}",
+                "nombre": f"Médico Asignable {suffix}",
+                "email": f"medico-asignable-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+
+    roles_response = client.get("/api/roles", headers=auth_headers)
+    assert roles_response.status_code == 200, roles_response.text
+    medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
+
+    self_medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={
+                "usuario_id": user["id"],
+                "nombre": "Médico",
+                "apellidos": f"Propio {suffix}",
+            },
+        )
+    )
+    other_medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={
+                "usuario_id": other_user["id"],
+                "nombre": "Médico",
+                "apellidos": f"Asignable {suffix}",
+            },
+        )
+    )
+
+    create_response = client.post(
+        "/api/usuario-roles",
+        headers=auth_headers,
+        json={
+            "usuario_id": user["id"],
+            "rol_id": medico_role["id"],
+            "medico_id": self_medico["id"],
+            "fecha_inicio": "2026-08-12",
+        },
+    )
+    assert create_response.status_code == 422, create_response.text
+    assert "no puede asignarse a sí mismo" in create_response.text
+
+    valid_assignment = assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={
+                "usuario_id": user["id"],
+                "rol_id": medico_role["id"],
+                "medico_id": other_medico["id"],
+                "fecha_inicio": "2026-08-12",
+            },
+        )
+    )
+    update_response = client.patch(
+        f"/api/usuario-roles/{valid_assignment['id']}",
+        headers=auth_headers,
+        json={"medico_id": self_medico["id"]},
+    )
+    assert update_response.status_code == 422, update_response.text
+    assert "no puede asignarse a sí mismo" in update_response.text
+
+
 def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 
