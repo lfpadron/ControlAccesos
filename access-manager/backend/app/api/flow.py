@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -13,8 +13,10 @@ from app.core.security import require_permission, require_role
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+from app.models.institucion import Institucion
 from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
 from app.models.usuario import Usuario
+from app.schemas.complejo import ComplejoRead
 from app.schemas.flow import (
     CheckinRequest,
     CheckinResponse,
@@ -35,7 +37,8 @@ from app.schemas.flow import (
     QrValidarResponse,
     TicketResponse,
 )
-from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead
+from app.schemas.institucion import InstitucionRead
+from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead, TorreRead
 from app.services.audit_service import audit_safe_dict, record_audit_event
 from app.services.access_scope import (
     cita_access_predicate,
@@ -190,6 +193,79 @@ def list_medicos_operativos(
             func.lower(func.coalesce(Medico.nombre, "")),
             Medico.id,
         )
+    )
+    return list(db.execute(query).scalars())
+
+
+@catalogos_operativos_router.get("/instituciones", response_model=list[InstitucionRead])
+def list_instituciones_operativas(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Institucion]:
+    query = (
+        select(Institucion)
+        .where(
+            Institucion.activo.is_(True),
+            select(Consultorio.id)
+            .join(Complejo, Complejo.id == Consultorio.complejo_id)
+            .where(
+                Complejo.institucion_id == Institucion.id,
+                Consultorio.activo.is_(True),
+                Complejo.activo.is_(True),
+                consultorio_catalog_access_predicate(db, current_user, business_today()),
+            )
+            .correlate(Institucion)
+            .exists(),
+        )
+        .order_by(func.lower(Institucion.nombre), Institucion.id)
+    )
+    return list(db.execute(query).scalars())
+
+
+@catalogos_operativos_router.get("/complejos", response_model=list[ComplejoRead])
+def list_complejos_operativos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Complejo]:
+    query = (
+        select(Complejo)
+        .where(
+            Complejo.activo.is_(True),
+            select(Consultorio.id)
+            .where(
+                Consultorio.complejo_id == Complejo.id,
+                Consultorio.activo.is_(True),
+                consultorio_catalog_access_predicate(db, current_user, business_today()),
+            )
+            .correlate(Complejo)
+            .exists(),
+        )
+        .order_by(func.lower(Complejo.nombre), Complejo.id)
+    )
+    return list(db.execute(query).scalars())
+
+
+@catalogos_operativos_router.get("/torres", response_model=list[TorreRead])
+def list_torres_operativas(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Torre]:
+    query = (
+        select(Torre)
+        .where(
+            Torre.activo.is_(True),
+            select(Consultorio.id)
+            .join(Piso, Piso.id == Consultorio.piso_id)
+            .where(
+                Piso.torre_id == Torre.id,
+                Piso.activo.is_(True),
+                Consultorio.activo.is_(True),
+                consultorio_catalog_access_predicate(db, current_user, business_today()),
+            )
+            .correlate(Torre)
+            .exists(),
+        )
+        .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
     )
     return list(db.execute(query).scalars())
 
@@ -445,6 +521,8 @@ def duplicate_warnings(db: Session, data: dict, exclude_id: UUID | None = None) 
 def query_citas(
     db: Session,
     fecha: date | None = None,
+    fecha_inicio: date | None = None,
+    hora_inicio: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -500,6 +578,20 @@ def query_citas(
         query = query.where(Paciente.fecha_nacimiento == fecha_nacimiento)
     if fecha is not None:
         query = query.where(Cita.fecha_cita == fecha)
+        if hora_inicio is not None:
+            query = query.where(Cita.hora_cita >= hora_inicio)
+    elif fecha_inicio is not None:
+        if hora_inicio is not None:
+            query = query.where(
+                or_(
+                    Cita.fecha_cita > fecha_inicio,
+                    and_(Cita.fecha_cita == fecha_inicio, Cita.hora_cita >= hora_inicio),
+                )
+            )
+        else:
+            query = query.where(Cita.fecha_cita >= fecha_inicio)
+    elif hora_inicio is not None:
+        query = query.where(Cita.hora_cita >= hora_inicio)
     if complejo_id is not None:
         query = query.where(Cita.complejo_id == complejo_id)
     if piso_id is not None:
@@ -779,6 +871,7 @@ def marcar_paciente_borrado(
 @citas_router.get("/hoy", response_model=list[CitaListItem])
 def citas_hoy(
     fecha: date | None = None,
+    hora_inicio: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -789,7 +882,18 @@ def citas_hoy(
     db: Session = Depends(get_db),
     current_user: Usuario = CitasTodayReadUser,
 ) -> list[CitaListItem]:
-    query = query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+    query = query_citas(
+        db,
+        fecha=fecha or business_today(),
+        hora_inicio=hora_inicio,
+        complejo_id=complejo_id,
+        piso_id=piso_id,
+        consultorio_id=consultorio_id,
+        medico_id=medico_id,
+        paciente=paciente,
+        estado=estado,
+        tipo=tipo,
+    )
     rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today()))).scalars()
     return [cita_item(db, row) for row in rows]
 
@@ -798,6 +902,8 @@ def citas_hoy(
 def buscar_citas(
     paciente: str = Query(min_length=1),
     fecha: date | None = None,
+    fecha_inicio: date | None = None,
+    hora_inicio: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -812,16 +918,18 @@ def buscar_citas(
     rows = db.execute(
         query_citas(
             db,
-            fecha or business_today(),
-            complejo_id,
-            piso_id,
-            consultorio_id,
-            medico_id,
-            paciente,
-            celular,
-            fecha_nacimiento,
-            estado,
-            tipo,
+            fecha=fecha if fecha is not None else (None if fecha_inicio is not None else business_today()),
+            fecha_inicio=fecha_inicio,
+            hora_inicio=hora_inicio,
+            complejo_id=complejo_id,
+            piso_id=piso_id,
+            consultorio_id=consultorio_id,
+            medico_id=medico_id,
+            paciente=paciente,
+            celular=celular,
+            fecha_nacimiento=fecha_nacimiento,
+            estado=estado,
+            tipo=tipo,
         )
         .where(cita_access_predicate(db, current_user, business_today()))
         .limit(20)
@@ -832,6 +940,8 @@ def buscar_citas(
 @citas_router.get("", response_model=list[CitaListItem])
 def list_citas(
     fecha: date | None = None,
+    fecha_inicio: date | None = None,
+    hora_inicio: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -842,7 +952,19 @@ def list_citas(
     db: Session = Depends(get_db),
     current_user: Usuario = CitasAgendaReadUser,
 ) -> list[CitaListItem]:
-    query = query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
+    query = query_citas(
+        db,
+        fecha=fecha,
+        fecha_inicio=fecha_inicio,
+        hora_inicio=hora_inicio,
+        complejo_id=complejo_id,
+        piso_id=piso_id,
+        consultorio_id=consultorio_id,
+        medico_id=medico_id,
+        paciente=paciente,
+        estado=estado,
+        tipo=tipo,
+    )
     rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(200)).scalars()
     return [cita_item(db, row) for row in rows]
 
@@ -852,6 +974,8 @@ def registrar_exportacion_citas(
     request: Request,
     formato: str = Query(pattern="^(excel|csv|json)$"),
     fecha: date | None = None,
+    fecha_inicio: date | None = None,
+    hora_inicio: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -872,6 +996,8 @@ def registrar_exportacion_citas(
         valor_despues={
             "formato": formato,
             "fecha": str(fecha or business_today()),
+            "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
+            "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
             "complejo_id": str(complejo_id) if complejo_id else None,
             "piso_id": str(piso_id) if piso_id else None,
             "consultorio_id": str(consultorio_id) if consultorio_id else None,
@@ -1177,7 +1303,7 @@ def mobile_buscar_citas(
         )
     query = query_citas(
         db,
-        fecha or business_today(),
+        fecha=fecha or business_today(),
         paciente=paciente,
         celular=celular,
         fecha_nacimiento=fecha_nacimiento,

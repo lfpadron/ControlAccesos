@@ -4,12 +4,13 @@ import {
   ApiError,
   createCita,
   getCurrentUser,
+  listAccessibleComplejos,
   listAccessibleConsultorios,
+  listAccessibleInstituciones,
   listAccessibleMedicos,
   listAccessiblePisos,
-  listComplejos,
+  listAccessibleTorres,
   listCitas,
-  listInstituciones,
   listPacientes,
   type Cita,
   type Complejo,
@@ -18,9 +19,10 @@ import {
   type Medico,
   type Paciente,
   type Piso,
+  type Torre,
   type Usuario,
 } from '../api/client';
-import { todayLocalIso } from '../dateUtils';
+import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
 
 type DuplicateWarning = {
   mensaje: string;
@@ -37,6 +39,7 @@ const medicos = ref<Medico[]>([]);
 const consultorios = ref<Consultorio[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const currentUser = ref<Usuario | null>(null);
 const error = ref('');
@@ -44,14 +47,17 @@ const message = ref('');
 const duplicateWarning = ref<DuplicateWarning | null>(null);
 const institucionSearch = ref('');
 const complejoSearch = ref('');
+const torreSearch = ref('');
 const pisoSearch = ref('');
 const consultorioSearch = ref('');
+const pacienteSearch = ref('');
 
 const form = reactive({
   tipo: 'PROGRAMADA',
   paciente_id: '',
   medico_id: '',
   institucion_id: '',
+  torre_id: '',
   consultorio_id: '',
   complejo_id: '',
   piso_id: '',
@@ -62,19 +68,33 @@ const form = reactive({
   notas_operativas: '',
 });
 
+const tableFilters = reactive({
+  fecha_inicio: todayLocalIso(),
+  hora_inicio: localTimeMinusHours(1),
+});
+
 const filteredComplejos = computed(() => {
   if (!form.institucion_id) return [];
   return complejos.value.filter((item) => item.institucion_id === form.institucion_id);
 });
 
+const filteredTorres = computed(() => {
+  if (!form.complejo_id) return [];
+  return torres.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.nombre.localeCompare(b.nombre));
+});
+
 const filteredPisos = computed(() => {
   if (!form.complejo_id) return [];
-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.numero - b.numero);
+  return pisos.value
+    .filter((item) => item.complejo_id === form.complejo_id && (!form.torre_id || item.torre_id === form.torre_id))
+    .sort((a, b) => a.numero - b.numero);
 });
 
 const filteredConsultorios = computed(() => {
   if (!form.complejo_id || !form.piso_id) return [];
-  return consultorios.value.filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id);
+  return consultorios.value
+    .filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id)
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
 });
 
 function institucionLabel(item: Institucion) {
@@ -82,17 +102,30 @@ function institucionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return [item.codigo || String(item.numero), item.nombre_visible].filter(Boolean).join(' · ');
+}
+
+function consultorioLabel(item: Consultorio) {
+  return [item.codigo, item.nombre_visible].filter(Boolean).join(' · ');
+}
+
+function torreLabel(item: Torre) {
+  return item.nombre;
 }
 
 function medicoLabel(item: Medico) {
-  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
+  return [item.apellidos, item.nombre].filter(Boolean).join(' ');
 }
 
 function patientDisplayName(paciente: Paciente) {
   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+}
+
+function patientOptionLabel(paciente: Paciente) {
+  const legalName = [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre].filter(Boolean).join(' ');
+  const name = paciente.nombre_preferido && legalName ? `${legalName} · ${paciente.nombre_preferido}` : legalName || paciente.nombre_preferido || 'Sin nombre';
+  return `${name} · ${paciente.folio_paciente}`;
 }
 
 function statusLabel(status: string) {
@@ -111,18 +144,26 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) 
 function setAutocompleteLabels() {
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+  const torre = torres.value.find((item) => item.id === form.torre_id);
+  torreSearch.value = torre ? torreLabel(torre) : '';
   const piso = pisos.value.find((item) => item.id === form.piso_id);
   pisoSearch.value = piso ? pisoLabel(piso) : '';
   const consultorio = consultorios.value.find((item) => item.id === form.consultorio_id);
-  consultorioSearch.value = consultorio ? consultorio.nombre_visible || consultorio.codigo : '';
+  consultorioSearch.value = consultorio ? consultorioLabel(consultorio) : '';
+  const paciente = pacientes.value.find((item) => item.id === form.paciente_id);
+  pacienteSearch.value = paciente ? patientOptionLabel(paciente) : '';
 }
 
-function clearLocation(from: 'institucion' | 'complejo' | 'piso') {
+function clearLocation(from: 'institucion' | 'complejo' | 'torre' | 'piso') {
   if (from === 'institucion') {
     form.complejo_id = '';
     complejoSearch.value = '';
   }
   if (from === 'institucion' || from === 'complejo') {
+    form.torre_id = '';
+    torreSearch.value = '';
+  }
+  if (from === 'institucion' || from === 'complejo' || from === 'torre') {
     form.piso_id = '';
     pisoSearch.value = '';
   }
@@ -141,22 +182,40 @@ function syncInstitution() {
 function syncComplex() {
   const match = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre);
   form.complejo_id = match?.id ?? '';
-  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+  if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
     clearLocation('complejo');
+  }
+}
+
+function syncTorre() {
+  const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
+  form.torre_id = match?.id ?? '';
+  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+    clearLocation('torre');
   }
 }
 
 function syncPiso() {
   const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
   form.piso_id = match?.id ?? '';
+  if (match && !form.torre_id) {
+    form.torre_id = match.torre_id;
+    const torre = torres.value.find((item) => item.id === match.torre_id);
+    torreSearch.value = torre ? torreLabel(torre) : '';
+  }
   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
     clearLocation('piso');
   }
 }
 
 function syncConsultorio() {
-  const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo);
+  const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, consultorioLabel);
   form.consultorio_id = match?.id ?? '';
+}
+
+function syncPaciente() {
+  const match = matchByLabel(pacientes.value, pacienteSearch.value, patientOptionLabel);
+  form.paciente_id = match?.id ?? '';
 }
 
 function defaultMedicoId() {
@@ -167,14 +226,17 @@ function defaultMedicoId() {
 function setDefaultLocation() {
   const consultorio = consultorios.value[0];
   if (consultorio) {
+    const piso = pisos.value.find((item) => item.id === consultorio.piso_id);
     form.complejo_id = consultorio.complejo_id;
     form.piso_id = consultorio.piso_id;
+    form.torre_id = piso?.torre_id ?? '';
     form.consultorio_id = consultorio.id;
     form.institucion_id = complejos.value.find((item) => item.id === consultorio.complejo_id)?.institucion_id ?? '';
     return;
   }
   form.institucion_id = instituciones.value[0]?.id ?? '';
   form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+  form.torre_id = filteredTorres.value[0]?.id ?? '';
   form.piso_id = filteredPisos.value[0]?.id ?? '';
   form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
 }
@@ -187,7 +249,8 @@ function resetForm() {
   form.origen = 'WEB';
   form.notas_operativas = '';
   form.medico_id = defaultMedicoId();
-  form.paciente_id = pacientes.value[0]?.id ?? '';
+  form.paciente_id = '';
+  pacienteSearch.value = '';
   setDefaultLocation();
   duplicateWarning.value = null;
   setAutocompleteLabels();
@@ -195,19 +258,40 @@ function resetForm() {
 
 async function loadPatientsForMedico() {
   pacientes.value = form.medico_id ? await listPacientes({ medico_id: form.medico_id }) : [];
-  form.paciente_id = pacientes.value[0]?.id ?? '';
+  if (!pacientes.value.some((item) => item.id === form.paciente_id)) {
+    form.paciente_id = '';
+    pacienteSearch.value = '';
+  }
+  setAutocompleteLabels();
+}
+
+function tableRequestFilters() {
+  return {
+    fecha_inicio: tableFilters.fecha_inicio,
+    hora_inicio: tableFilters.hora_inicio,
+  };
+}
+
+async function loadTable() {
+  error.value = '';
+  try {
+    citas.value = await listCitas(tableRequestFilters());
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
+  }
 }
 
 async function load() {
   error.value = '';
   try {
-    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
-      listCitas(),
+    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+      listCitas(tableRequestFilters()),
       getCurrentUser(),
       listAccessibleMedicos(),
       listAccessibleConsultorios(),
-      listInstituciones(),
-      listComplejos(),
+      listAccessibleInstituciones(),
+      listAccessibleComplejos(),
+      listAccessibleTorres(),
       listAccessiblePisos(),
     ]);
     citas.value = citasData;
@@ -216,6 +300,7 @@ async function load() {
     consultorios.value = consultoriosData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = torresData;
     pisos.value = pisosData;
     form.medico_id = defaultMedicoId();
     await loadPatientsForMedico();
@@ -227,6 +312,8 @@ async function load() {
 
 async function onMedicoChange() {
   error.value = '';
+  form.paciente_id = '';
+  pacienteSearch.value = '';
   try {
     await loadPatientsForMedico();
   } catch (err) {
@@ -241,12 +328,12 @@ async function submit(confirmarDuplicado = false) {
     duplicateWarning.value = null;
   }
   try {
-    const { institucion_id: _institucionId, ...payload } = form;
+    const { institucion_id: _institucionId, torre_id: _torreId, ...payload } = form;
     await createCita({ ...payload }, confirmarDuplicado);
     message.value = 'Cita creada.';
     duplicateWarning.value = null;
     resetForm();
-    await load();
+    await loadTable();
   } catch (err) {
     const duplicate = duplicateDetail(err);
     if (duplicate) {
@@ -255,6 +342,12 @@ async function submit(confirmarDuplicado = false) {
     }
     error.value = err instanceof Error ? err.message : 'No fue posible crear la cita.';
   }
+}
+
+function clearTableFilters() {
+  tableFilters.fecha_inicio = todayLocalIso();
+  tableFilters.hora_inicio = localTimeMinusHours(1);
+  void loadTable();
 }
 
 function duplicateDetail(err: unknown): DuplicateWarning | null {
@@ -314,12 +407,19 @@ onMounted(load);
         </div>
         <div class="form-row">
           <label for="paciente">Paciente</label>
-          <select id="paciente" v-model="form.paciente_id" required :disabled="!form.medico_id || pacientes.length === 0">
-            <option value="">Seleccione paciente</option>
-            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
-              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
-            </option>
-          </select>
+          <input
+            id="paciente"
+            v-model="pacienteSearch"
+            list="cita-pacientes"
+            required
+            :disabled="!form.medico_id || pacientes.length === 0"
+            placeholder="Apellido o nombre"
+            @input="syncPaciente"
+            @change="syncPaciente"
+          />
+          <datalist id="cita-pacientes">
+            <option v-for="paciente in pacientes" :key="paciente.id" :value="patientOptionLabel(paciente)" />
+          </datalist>
         </div>
         <div class="form-row">
           <label for="institucion">Institución</label>
@@ -366,6 +466,21 @@ onMounted(load);
           </datalist>
         </div>
         <div class="form-row">
+          <label for="torre">Torre</label>
+          <input
+            id="torre"
+            v-model="torreSearch"
+            list="cita-torres"
+            required
+            :disabled="!form.complejo_id"
+            @input="syncTorre"
+            @change="syncTorre"
+          />
+          <datalist id="cita-torres">
+            <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
+          </datalist>
+        </div>
+        <div class="form-row">
           <label for="consultorio">Consultorio</label>
           <input
             id="consultorio"
@@ -380,7 +495,7 @@ onMounted(load);
             <option
               v-for="consultorio in filteredConsultorios"
               :key="consultorio.id"
-              :value="consultorio.nombre_visible || consultorio.codigo"
+              :value="consultorioLabel(consultorio)"
             />
           </datalist>
         </div>
@@ -411,7 +526,21 @@ onMounted(load);
       </form>
 
       <div class="panel table-panel">
-        <h2>Citas</h2>
+        <div class="page-header compact">
+          <h2>Citas</h2>
+          <form class="inline-actions" @submit.prevent="loadTable">
+            <label class="inline-field">
+              Fecha inicio
+              <input v-model="tableFilters.fecha_inicio" type="date" />
+            </label>
+            <label class="inline-field">
+              Hora inicio
+              <input v-model="tableFilters.hora_inicio" type="time" />
+            </label>
+            <button type="submit">Filtrar</button>
+            <button class="secondary" type="button" @click="clearTableFilters">Limpiar</button>
+          </form>
+        </div>
         <div class="table-scroll">
           <table>
             <thead>

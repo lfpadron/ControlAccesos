@@ -667,6 +667,9 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
 export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
 export const listConsultorios = () => listResource<Consultorio>('consultorios');
 export const listMedicos = () => listResource<Medico>('medicos');
+export const listAccessibleInstituciones = () => apiFetch<Institucion[]>('/catalogos-operativos/instituciones');
+export const listAccessibleComplejos = () => apiFetch<Complejo[]>('/catalogos-operativos/complejos');
+export const listAccessibleTorres = () => apiFetch<Torre[]>('/catalogos-operativos/torres');
 export const listAccessiblePisos = () => apiFetch<Piso[]>('/catalogos-operativos/pisos');
 export const listAccessibleConsultorios = () => apiFetch<Consultorio[]>('/catalogos-operativos/consultorios');
 export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
@@ -699,6 +702,8 @@ export function consultaClustersPorPiso(params: {
 
 export type CitaFilters = {
   fecha?: string;
+  fecha_inicio?: string;
+  hora_inicio?: string;
   complejo_id?: string;
   piso_id?: string;
   consultorio_id?: string;
@@ -835,6 +840,8 @@ export function deactivateKiosko(id: string) {
 export function searchCitas(params: {
   paciente: string;
   fecha?: string;
+  fecha_inicio?: string;
+  hora_inicio?: string;
   complejo_id?: string;
   piso_id?: string;
   consultorio_id?: string;

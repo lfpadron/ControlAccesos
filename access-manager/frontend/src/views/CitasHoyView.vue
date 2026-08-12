@@ -10,12 +10,12 @@ import {
   getCurrentUser,
   getTicket,
   llamarCita,
+  listAccessibleComplejos,
   listAccessibleConsultorios,
+  listAccessibleInstituciones,
   listAccessibleMedicos,
   listAccessiblePisos,
   listCitasHoy,
-  listComplejos,
-  listInstituciones,
   type Cita,
   type CitaFilters,
   type Complejo,
@@ -26,7 +26,7 @@ import {
   type TicketResponse,
   type Usuario,
 } from '../api/client';
-import { todayLocalIso } from '../dateUtils';
+import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
 import { exportRows, type ExportFormat } from '../exporters';
 
 const citas = ref<Cita[]>([]);
@@ -51,6 +51,7 @@ const consultorioSearch = ref('');
 
 const filters = reactive({
   fecha: todayLocalIso(),
+  hora_inicio: localTimeMinusHours(1),
   estado: '',
   institucion_id: '',
   complejo_id: '',
@@ -137,6 +138,7 @@ function defaultMedicoId() {
 function requestFilters(): CitaFilters {
   return {
     fecha: filters.fecha,
+    hora_inicio: filters.hora_inicio,
     estado: filters.estado,
     complejo_id: filters.complejo_id,
     piso_id: filters.piso_id,
@@ -183,8 +185,8 @@ async function loadCatalogs() {
   try {
     const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
       getCurrentUser(),
-      listInstituciones(),
-      listComplejos(),
+      listAccessibleInstituciones(),
+      listAccessibleComplejos(),
       listAccessiblePisos(),
       listAccessibleConsultorios(),
       listAccessibleMedicos(),
@@ -295,6 +297,7 @@ function nextSlot() {
 
 function clearFilters() {
   filters.fecha = todayLocalIso();
+  filters.hora_inicio = localTimeMinusHours(1);
   filters.estado = '';
   filters.institucion_id = '';
   filters.complejo_id = '';
@@ -356,6 +359,10 @@ onMounted(async () => {
         <div class="form-row">
           <label for="filtro-fecha">Fecha</label>
           <input id="filtro-fecha" v-model="filters.fecha" type="date" required />
+        </div>
+        <div class="form-row">
+          <label for="filtro-hora-inicio">Hora inicio</label>
+          <input id="filtro-hora-inicio" v-model="filters.hora_inicio" type="time" />
         </div>
         <div class="form-row">
           <label for="filtro-estado">Estado</label>

@@ -1,0 +1,829 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index b06db53..a3550c1 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -1,11 +1,11 @@
+ from __future__ import annotations
+ 
+-from datetime import date, datetime
++from datetime import date, datetime, time
+ from uuid import UUID
+ from zoneinfo import ZoneInfo
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+-from sqlalchemy import func, or_, select
++from sqlalchemy import and_, func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+@@ -13,8 +13,10 @@ from app.core.security import require_permission, require_role
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
++from app.models.institucion import Institucion
+ from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
+ from app.models.usuario import Usuario
++from app.schemas.complejo import ComplejoRead
+ from app.schemas.flow import (
+     CheckinRequest,
+     CheckinResponse,
+@@ -35,7 +37,8 @@ from app.schemas.flow import (
+     QrValidarResponse,
+     TicketResponse,
+ )
+-from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead
++from app.schemas.institucion import InstitucionRead
++from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead, TorreRead
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ from app.services.access_scope import (
+     cita_access_predicate,
+@@ -194,6 +197,79 @@ def list_medicos_operativos(
+     return list(db.execute(query).scalars())
+ 
+ 
++@catalogos_operativos_router.get("/instituciones", response_model=list[InstitucionRead])
++def list_instituciones_operativas(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Institucion]:
++    query = (
++        select(Institucion)
++        .where(
++            Institucion.activo.is_(True),
++            select(Consultorio.id)
++            .join(Complejo, Complejo.id == Consultorio.complejo_id)
++            .where(
++                Complejo.institucion_id == Institucion.id,
++                Consultorio.activo.is_(True),
++                Complejo.activo.is_(True),
++                consultorio_catalog_access_predicate(db, current_user, business_today()),
++            )
++            .correlate(Institucion)
++            .exists(),
++        )
++        .order_by(func.lower(Institucion.nombre), Institucion.id)
++    )
++    return list(db.execute(query).scalars())
++
++
++@catalogos_operativos_router.get("/complejos", response_model=list[ComplejoRead])
++def list_complejos_operativos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Complejo]:
++    query = (
++        select(Complejo)
++        .where(
++            Complejo.activo.is_(True),
++            select(Consultorio.id)
++            .where(
++                Consultorio.complejo_id == Complejo.id,
++                Consultorio.activo.is_(True),
++                consultorio_catalog_access_predicate(db, current_user, business_today()),
++            )
++            .correlate(Complejo)
++            .exists(),
++        )
++        .order_by(func.lower(Complejo.nombre), Complejo.id)
++    )
++    return list(db.execute(query).scalars())
++
++
++@catalogos_operativos_router.get("/torres", response_model=list[TorreRead])
++def list_torres_operativas(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Torre]:
++    query = (
++        select(Torre)
++        .where(
++            Torre.activo.is_(True),
++            select(Consultorio.id)
++            .join(Piso, Piso.id == Consultorio.piso_id)
++            .where(
++                Piso.torre_id == Torre.id,
++                Piso.activo.is_(True),
++                Consultorio.activo.is_(True),
++                consultorio_catalog_access_predicate(db, current_user, business_today()),
++            )
++            .correlate(Torre)
++            .exists(),
++        )
++        .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
++    )
++    return list(db.execute(query).scalars())
++
++
+ @catalogos_operativos_router.get("/consultorios", response_model=list[ConsultorioRead])
+ def list_consultorios_operativos(
+     db: Session = Depends(get_db),
+@@ -445,6 +521,8 @@ def duplicate_warnings(db: Session, data: dict, exclude_id: UUID | None = None)
+ def query_citas(
+     db: Session,
+     fecha: date | None = None,
++    fecha_inicio: date | None = None,
++    hora_inicio: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -500,6 +578,20 @@ def query_citas(
+         query = query.where(Paciente.fecha_nacimiento == fecha_nacimiento)
+     if fecha is not None:
+         query = query.where(Cita.fecha_cita == fecha)
++        if hora_inicio is not None:
++            query = query.where(Cita.hora_cita >= hora_inicio)
++    elif fecha_inicio is not None:
++        if hora_inicio is not None:
++            query = query.where(
++                or_(
++                    Cita.fecha_cita > fecha_inicio,
++                    and_(Cita.fecha_cita == fecha_inicio, Cita.hora_cita >= hora_inicio),
++                )
++            )
++        else:
++            query = query.where(Cita.fecha_cita >= fecha_inicio)
++    elif hora_inicio is not None:
++        query = query.where(Cita.hora_cita >= hora_inicio)
+     if complejo_id is not None:
+         query = query.where(Cita.complejo_id == complejo_id)
+     if piso_id is not None:
+@@ -779,6 +871,7 @@ def marcar_paciente_borrado(
+ @citas_router.get("/hoy", response_model=list[CitaListItem])
+ def citas_hoy(
+     fecha: date | None = None,
++    hora_inicio: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -789,7 +882,18 @@ def citas_hoy(
+     db: Session = Depends(get_db),
+     current_user: Usuario = CitasTodayReadUser,
+ ) -> list[CitaListItem]:
+-    query = query_citas(db, fecha or business_today(), complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
++    query = query_citas(
++        db,
++        fecha=fecha or business_today(),
++        hora_inicio=hora_inicio,
++        complejo_id=complejo_id,
++        piso_id=piso_id,
++        consultorio_id=consultorio_id,
++        medico_id=medico_id,
++        paciente=paciente,
++        estado=estado,
++        tipo=tipo,
++    )
+     rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today()))).scalars()
+     return [cita_item(db, row) for row in rows]
+ 
+@@ -798,6 +902,8 @@ def citas_hoy(
+ def buscar_citas(
+     paciente: str = Query(min_length=1),
+     fecha: date | None = None,
++    fecha_inicio: date | None = None,
++    hora_inicio: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -812,16 +918,18 @@ def buscar_citas(
+     rows = db.execute(
+         query_citas(
+             db,
+-            fecha or business_today(),
+-            complejo_id,
+-            piso_id,
+-            consultorio_id,
+-            medico_id,
+-            paciente,
+-            celular,
+-            fecha_nacimiento,
+-            estado,
+-            tipo,
++            fecha=fecha if fecha is not None else (None if fecha_inicio is not None else business_today()),
++            fecha_inicio=fecha_inicio,
++            hora_inicio=hora_inicio,
++            complejo_id=complejo_id,
++            piso_id=piso_id,
++            consultorio_id=consultorio_id,
++            medico_id=medico_id,
++            paciente=paciente,
++            celular=celular,
++            fecha_nacimiento=fecha_nacimiento,
++            estado=estado,
++            tipo=tipo,
+         )
+         .where(cita_access_predicate(db, current_user, business_today()))
+         .limit(20)
+@@ -832,6 +940,8 @@ def buscar_citas(
+ @citas_router.get("", response_model=list[CitaListItem])
+ def list_citas(
+     fecha: date | None = None,
++    fecha_inicio: date | None = None,
++    hora_inicio: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -842,7 +952,19 @@ def list_citas(
+     db: Session = Depends(get_db),
+     current_user: Usuario = CitasAgendaReadUser,
+ ) -> list[CitaListItem]:
+-    query = query_citas(db, fecha, complejo_id, piso_id, consultorio_id, medico_id, paciente, None, None, estado, tipo)
++    query = query_citas(
++        db,
++        fecha=fecha,
++        fecha_inicio=fecha_inicio,
++        hora_inicio=hora_inicio,
++        complejo_id=complejo_id,
++        piso_id=piso_id,
++        consultorio_id=consultorio_id,
++        medico_id=medico_id,
++        paciente=paciente,
++        estado=estado,
++        tipo=tipo,
++    )
+     rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(200)).scalars()
+     return [cita_item(db, row) for row in rows]
+ 
+@@ -852,6 +974,8 @@ def registrar_exportacion_citas(
+     request: Request,
+     formato: str = Query(pattern="^(excel|csv|json)$"),
+     fecha: date | None = None,
++    fecha_inicio: date | None = None,
++    hora_inicio: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -872,6 +996,8 @@ def registrar_exportacion_citas(
+         valor_despues={
+             "formato": formato,
+             "fecha": str(fecha or business_today()),
++            "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
++            "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
+             "complejo_id": str(complejo_id) if complejo_id else None,
+             "piso_id": str(piso_id) if piso_id else None,
+             "consultorio_id": str(consultorio_id) if consultorio_id else None,
+@@ -1177,7 +1303,7 @@ def mobile_buscar_citas(
+         )
+     query = query_citas(
+         db,
+-        fecha or business_today(),
++        fecha=fecha or business_today(),
+         paciente=paciente,
+         celular=celular,
+         fecha_nacimiento=fecha_nacimiento,
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index c29aba9..684a2e8 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -667,6 +667,9 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
+ export const listConsultorios = () => listResource<Consultorio>('consultorios');
+ export const listMedicos = () => listResource<Medico>('medicos');
++export const listAccessibleInstituciones = () => apiFetch<Institucion[]>('/catalogos-operativos/instituciones');
++export const listAccessibleComplejos = () => apiFetch<Complejo[]>('/catalogos-operativos/complejos');
++export const listAccessibleTorres = () => apiFetch<Torre[]>('/catalogos-operativos/torres');
+ export const listAccessiblePisos = () => apiFetch<Piso[]>('/catalogos-operativos/pisos');
+ export const listAccessibleConsultorios = () => apiFetch<Consultorio[]>('/catalogos-operativos/consultorios');
+ export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
+@@ -699,6 +702,8 @@ export function consultaClustersPorPiso(params: {
+ 
+ export type CitaFilters = {
+   fecha?: string;
++  fecha_inicio?: string;
++  hora_inicio?: string;
+   complejo_id?: string;
+   piso_id?: string;
+   consultorio_id?: string;
+@@ -835,6 +840,8 @@ export function deactivateKiosko(id: string) {
+ export function searchCitas(params: {
+   paciente: string;
+   fecha?: string;
++  fecha_inicio?: string;
++  hora_inicio?: string;
+   complejo_id?: string;
+   piso_id?: string;
+   consultorio_id?: string;
+diff --git a/access-manager/frontend/src/dateUtils.ts b/access-manager/frontend/src/dateUtils.ts
+index b739920..581827d 100644
+--- a/access-manager/frontend/src/dateUtils.ts
++++ b/access-manager/frontend/src/dateUtils.ts
+@@ -3,3 +3,8 @@ export function todayLocalIso() {
+   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+   return local.toISOString().slice(0, 10);
+ }
++
++export function localTimeMinusHours(hours: number) {
++  const date = new Date(Date.now() - hours * 60 * 60 * 1000);
++  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
++}
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 0c61cf9..5a730a3 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -450,6 +450,17 @@ textarea {
+   gap: 0.5rem;
+ }
+ 
++.inline-field {
++  align-items: center;
++  display: inline-flex;
++  gap: 0.4rem;
++}
++
++.inline-field input,
++.inline-field select {
++  min-width: 9rem;
++}
++
+ .segmented-actions {
+   display: flex;
+   flex-wrap: wrap;
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index efa9884..c507980 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -10,12 +10,12 @@ import {
+   getCurrentUser,
+   getTicket,
+   llamarCita,
++  listAccessibleComplejos,
+   listAccessibleConsultorios,
++  listAccessibleInstituciones,
+   listAccessibleMedicos,
+   listAccessiblePisos,
+   listCitasHoy,
+-  listComplejos,
+-  listInstituciones,
+   type Cita,
+   type CitaFilters,
+   type Complejo,
+@@ -26,7 +26,7 @@ import {
+   type TicketResponse,
+   type Usuario,
+ } from '../api/client';
+-import { todayLocalIso } from '../dateUtils';
++import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
+ import { exportRows, type ExportFormat } from '../exporters';
+ 
+ const citas = ref<Cita[]>([]);
+@@ -51,6 +51,7 @@ const consultorioSearch = ref('');
+ 
+ const filters = reactive({
+   fecha: todayLocalIso(),
++  hora_inicio: localTimeMinusHours(1),
+   estado: '',
+   institucion_id: '',
+   complejo_id: '',
+@@ -137,6 +138,7 @@ function defaultMedicoId() {
+ function requestFilters(): CitaFilters {
+   return {
+     fecha: filters.fecha,
++    hora_inicio: filters.hora_inicio,
+     estado: filters.estado,
+     complejo_id: filters.complejo_id,
+     piso_id: filters.piso_id,
+@@ -183,8 +185,8 @@ async function loadCatalogs() {
+   try {
+     const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+       getCurrentUser(),
+-      listInstituciones(),
+-      listComplejos(),
++      listAccessibleInstituciones(),
++      listAccessibleComplejos(),
+       listAccessiblePisos(),
+       listAccessibleConsultorios(),
+       listAccessibleMedicos(),
+@@ -295,6 +297,7 @@ function nextSlot() {
+ 
+ function clearFilters() {
+   filters.fecha = todayLocalIso();
++  filters.hora_inicio = localTimeMinusHours(1);
+   filters.estado = '';
+   filters.institucion_id = '';
+   filters.complejo_id = '';
+@@ -357,6 +360,10 @@ onMounted(async () => {
+           <label for="filtro-fecha">Fecha</label>
+           <input id="filtro-fecha" v-model="filters.fecha" type="date" required />
+         </div>
++        <div class="form-row">
++          <label for="filtro-hora-inicio">Hora inicio</label>
++          <input id="filtro-hora-inicio" v-model="filters.hora_inicio" type="time" />
++        </div>
+         <div class="form-row">
+           <label for="filtro-estado">Estado</label>
+           <select id="filtro-estado" v-model="filters.estado">
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 7ad9c64..3b85a19 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -4,12 +4,13 @@ import {
+   ApiError,
+   createCita,
+   getCurrentUser,
++  listAccessibleComplejos,
+   listAccessibleConsultorios,
++  listAccessibleInstituciones,
+   listAccessibleMedicos,
+   listAccessiblePisos,
+-  listComplejos,
++  listAccessibleTorres,
+   listCitas,
+-  listInstituciones,
+   listPacientes,
+   type Cita,
+   type Complejo,
+@@ -18,9 +19,10 @@ import {
+   type Medico,
+   type Paciente,
+   type Piso,
++  type Torre,
+   type Usuario,
+ } from '../api/client';
+-import { todayLocalIso } from '../dateUtils';
++import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
+ 
+ type DuplicateWarning = {
+   mensaje: string;
+@@ -37,6 +39,7 @@ const medicos = ref<Medico[]>([]);
+ const consultorios = ref<Consultorio[]>([]);
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
++const torres = ref<Torre[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const currentUser = ref<Usuario | null>(null);
+ const error = ref('');
+@@ -44,14 +47,17 @@ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+ const institucionSearch = ref('');
+ const complejoSearch = ref('');
++const torreSearch = ref('');
+ const pisoSearch = ref('');
+ const consultorioSearch = ref('');
++const pacienteSearch = ref('');
+ 
+ const form = reactive({
+   tipo: 'PROGRAMADA',
+   paciente_id: '',
+   medico_id: '',
+   institucion_id: '',
++  torre_id: '',
+   consultorio_id: '',
+   complejo_id: '',
+   piso_id: '',
+@@ -62,19 +68,33 @@ const form = reactive({
+   notas_operativas: '',
+ });
+ 
++const tableFilters = reactive({
++  fecha_inicio: todayLocalIso(),
++  hora_inicio: localTimeMinusHours(1),
++});
++
+ const filteredComplejos = computed(() => {
+   if (!form.institucion_id) return [];
+   return complejos.value.filter((item) => item.institucion_id === form.institucion_id);
+ });
+ 
++const filteredTorres = computed(() => {
++  if (!form.complejo_id) return [];
++  return torres.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.nombre.localeCompare(b.nombre));
++});
++
+ const filteredPisos = computed(() => {
+   if (!form.complejo_id) return [];
+-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.numero - b.numero);
++  return pisos.value
++    .filter((item) => item.complejo_id === form.complejo_id && (!form.torre_id || item.torre_id === form.torre_id))
++    .sort((a, b) => a.numero - b.numero);
+ });
+ 
+ const filteredConsultorios = computed(() => {
+   if (!form.complejo_id || !form.piso_id) return [];
+-  return consultorios.value.filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id);
++  return consultorios.value
++    .filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id)
++    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+ });
+ 
+ function institucionLabel(item: Institucion) {
+@@ -82,12 +102,19 @@ function institucionLabel(item: Institucion) {
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return [item.codigo || String(item.numero), item.nombre_visible].filter(Boolean).join(' · ');
++}
++
++function consultorioLabel(item: Consultorio) {
++  return [item.codigo, item.nombre_visible].filter(Boolean).join(' · ');
++}
++
++function torreLabel(item: Torre) {
++  return item.nombre;
+ }
+ 
+ function medicoLabel(item: Medico) {
+-  return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
++  return [item.apellidos, item.nombre].filter(Boolean).join(' ');
+ }
+ 
+ function patientDisplayName(paciente: Paciente) {
+@@ -95,6 +122,12 @@ function patientDisplayName(paciente: Paciente) {
+   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+ }
+ 
++function patientOptionLabel(paciente: Paciente) {
++  const legalName = [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre].filter(Boolean).join(' ');
++  const name = paciente.nombre_preferido && legalName ? `${legalName} · ${paciente.nombre_preferido}` : legalName || paciente.nombre_preferido || 'Sin nombre';
++  return `${name} · ${paciente.folio_paciente}`;
++}
++
+ function statusLabel(status: string) {
+   if (status === 'NO_LLEGO') return 'No Se Presentó';
+   return status;
+@@ -111,18 +144,26 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string)
+ function setAutocompleteLabels() {
+   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
+   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
++  const torre = torres.value.find((item) => item.id === form.torre_id);
++  torreSearch.value = torre ? torreLabel(torre) : '';
+   const piso = pisos.value.find((item) => item.id === form.piso_id);
+   pisoSearch.value = piso ? pisoLabel(piso) : '';
+   const consultorio = consultorios.value.find((item) => item.id === form.consultorio_id);
+-  consultorioSearch.value = consultorio ? consultorio.nombre_visible || consultorio.codigo : '';
++  consultorioSearch.value = consultorio ? consultorioLabel(consultorio) : '';
++  const paciente = pacientes.value.find((item) => item.id === form.paciente_id);
++  pacienteSearch.value = paciente ? patientOptionLabel(paciente) : '';
+ }
+ 
+-function clearLocation(from: 'institucion' | 'complejo' | 'piso') {
++function clearLocation(from: 'institucion' | 'complejo' | 'torre' | 'piso') {
+   if (from === 'institucion') {
+     form.complejo_id = '';
+     complejoSearch.value = '';
+   }
+   if (from === 'institucion' || from === 'complejo') {
++    form.torre_id = '';
++    torreSearch.value = '';
++  }
++  if (from === 'institucion' || from === 'complejo' || from === 'torre') {
+     form.piso_id = '';
+     pisoSearch.value = '';
+   }
+@@ -141,24 +182,42 @@ function syncInstitution() {
+ function syncComplex() {
+   const match = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre);
+   form.complejo_id = match?.id ?? '';
+-  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
++  if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
+     clearLocation('complejo');
+   }
+ }
+ 
++function syncTorre() {
++  const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
++  form.torre_id = match?.id ?? '';
++  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
++    clearLocation('torre');
++  }
++}
++
+ function syncPiso() {
+   const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
+   form.piso_id = match?.id ?? '';
++  if (match && !form.torre_id) {
++    form.torre_id = match.torre_id;
++    const torre = torres.value.find((item) => item.id === match.torre_id);
++    torreSearch.value = torre ? torreLabel(torre) : '';
++  }
+   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
+     clearLocation('piso');
+   }
+ }
+ 
+ function syncConsultorio() {
+-  const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo);
++  const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, consultorioLabel);
+   form.consultorio_id = match?.id ?? '';
+ }
+ 
++function syncPaciente() {
++  const match = matchByLabel(pacientes.value, pacienteSearch.value, patientOptionLabel);
++  form.paciente_id = match?.id ?? '';
++}
++
+ function defaultMedicoId() {
+   const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+   return ownMedico?.id ?? medicos.value[0]?.id ?? '';
+@@ -167,14 +226,17 @@ function defaultMedicoId() {
+ function setDefaultLocation() {
+   const consultorio = consultorios.value[0];
+   if (consultorio) {
++    const piso = pisos.value.find((item) => item.id === consultorio.piso_id);
+     form.complejo_id = consultorio.complejo_id;
+     form.piso_id = consultorio.piso_id;
++    form.torre_id = piso?.torre_id ?? '';
+     form.consultorio_id = consultorio.id;
+     form.institucion_id = complejos.value.find((item) => item.id === consultorio.complejo_id)?.institucion_id ?? '';
+     return;
+   }
+   form.institucion_id = instituciones.value[0]?.id ?? '';
+   form.complejo_id = filteredComplejos.value[0]?.id ?? '';
++  form.torre_id = filteredTorres.value[0]?.id ?? '';
+   form.piso_id = filteredPisos.value[0]?.id ?? '';
+   form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
+ }
+@@ -187,7 +249,8 @@ function resetForm() {
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+   form.medico_id = defaultMedicoId();
+-  form.paciente_id = pacientes.value[0]?.id ?? '';
++  form.paciente_id = '';
++  pacienteSearch.value = '';
+   setDefaultLocation();
+   duplicateWarning.value = null;
+   setAutocompleteLabels();
+@@ -195,19 +258,40 @@ function resetForm() {
+ 
+ async function loadPatientsForMedico() {
+   pacientes.value = form.medico_id ? await listPacientes({ medico_id: form.medico_id }) : [];
+-  form.paciente_id = pacientes.value[0]?.id ?? '';
++  if (!pacientes.value.some((item) => item.id === form.paciente_id)) {
++    form.paciente_id = '';
++    pacienteSearch.value = '';
++  }
++  setAutocompleteLabels();
++}
++
++function tableRequestFilters() {
++  return {
++    fecha_inicio: tableFilters.fecha_inicio,
++    hora_inicio: tableFilters.hora_inicio,
++  };
++}
++
++async function loadTable() {
++  error.value = '';
++  try {
++    citas.value = await listCitas(tableRequestFilters());
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
++  }
+ }
+ 
+ async function load() {
+   error.value = '';
+   try {
+-    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, pisosData] = await Promise.all([
+-      listCitas(),
++    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
++      listCitas(tableRequestFilters()),
+       getCurrentUser(),
+       listAccessibleMedicos(),
+       listAccessibleConsultorios(),
+-      listInstituciones(),
+-      listComplejos(),
++      listAccessibleInstituciones(),
++      listAccessibleComplejos(),
++      listAccessibleTorres(),
+       listAccessiblePisos(),
+     ]);
+     citas.value = citasData;
+@@ -216,6 +300,7 @@ async function load() {
+     consultorios.value = consultoriosData;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
++    torres.value = torresData;
+     pisos.value = pisosData;
+     form.medico_id = defaultMedicoId();
+     await loadPatientsForMedico();
+@@ -227,6 +312,8 @@ async function load() {
+ 
+ async function onMedicoChange() {
+   error.value = '';
++  form.paciente_id = '';
++  pacienteSearch.value = '';
+   try {
+     await loadPatientsForMedico();
+   } catch (err) {
+@@ -241,12 +328,12 @@ async function submit(confirmarDuplicado = false) {
+     duplicateWarning.value = null;
+   }
+   try {
+-    const { institucion_id: _institucionId, ...payload } = form;
++    const { institucion_id: _institucionId, torre_id: _torreId, ...payload } = form;
+     await createCita({ ...payload }, confirmarDuplicado);
+     message.value = 'Cita creada.';
+     duplicateWarning.value = null;
+     resetForm();
+-    await load();
++    await loadTable();
+   } catch (err) {
+     const duplicate = duplicateDetail(err);
+     if (duplicate) {
+@@ -257,6 +344,12 @@ async function submit(confirmarDuplicado = false) {
+   }
+ }
+ 
++function clearTableFilters() {
++  tableFilters.fecha_inicio = todayLocalIso();
++  tableFilters.hora_inicio = localTimeMinusHours(1);
++  void loadTable();
++}
++
+ function duplicateDetail(err: unknown): DuplicateWarning | null {
+   if (!(err instanceof ApiError) || err.status !== 409 || !err.detail || typeof err.detail !== 'object') {
+     return null;
+@@ -314,12 +407,19 @@ onMounted(load);
+         </div>
+         <div class="form-row">
+           <label for="paciente">Paciente</label>
+-          <select id="paciente" v-model="form.paciente_id" required :disabled="!form.medico_id || pacientes.length === 0">
+-            <option value="">Seleccione paciente</option>
+-            <option v-for="paciente in pacientes" :key="paciente.id" :value="paciente.id">
+-              {{ patientDisplayName(paciente) }} · {{ paciente.folio_paciente }}
+-            </option>
+-          </select>
++          <input
++            id="paciente"
++            v-model="pacienteSearch"
++            list="cita-pacientes"
++            required
++            :disabled="!form.medico_id || pacientes.length === 0"
++            placeholder="Apellido o nombre"
++            @input="syncPaciente"
++            @change="syncPaciente"
++          />
++          <datalist id="cita-pacientes">
++            <option v-for="paciente in pacientes" :key="paciente.id" :value="patientOptionLabel(paciente)" />
++          </datalist>
+         </div>
+         <div class="form-row">
+           <label for="institucion">Institución</label>
+@@ -365,6 +465,21 @@ onMounted(load);
+             <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
+           </datalist>
+         </div>
++        <div class="form-row">
++          <label for="torre">Torre</label>
++          <input
++            id="torre"
++            v-model="torreSearch"
++            list="cita-torres"
++            required
++            :disabled="!form.complejo_id"
++            @input="syncTorre"
++            @change="syncTorre"
++          />
++          <datalist id="cita-torres">
++            <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
++          </datalist>
++        </div>
+         <div class="form-row">
+           <label for="consultorio">Consultorio</label>
+           <input
+@@ -380,7 +495,7 @@ onMounted(load);
+             <option
+               v-for="consultorio in filteredConsultorios"
+               :key="consultorio.id"
+-              :value="consultorio.nombre_visible || consultorio.codigo"
++              :value="consultorioLabel(consultorio)"
+             />
+           </datalist>
+         </div>
+@@ -411,7 +526,21 @@ onMounted(load);
+       </form>
+ 
+       <div class="panel table-panel">
+-        <h2>Citas</h2>
++        <div class="page-header compact">
++          <h2>Citas</h2>
++          <form class="inline-actions" @submit.prevent="loadTable">
++            <label class="inline-field">
++              Fecha inicio
++              <input v-model="tableFilters.fecha_inicio" type="date" />
++            </label>
++            <label class="inline-field">
++              Hora inicio
++              <input v-model="tableFilters.hora_inicio" type="time" />
++            </label>
++            <button type="submit">Filtrar</button>
++            <button class="secondary" type="button" @click="clearTableFilters">Limpiar</button>
++          </form>
++        </div>
+         <div class="table-scroll">
+           <table>
+             <thead>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index bca0ab2..d2b3980 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -60,7 +60,7 @@ function patientDisplayName(paciente: Paciente) {
+ }
+ 
+ function medicoLabel(medico: Medico) {
+-  return medico.nombre_visible || `${medico.nombre} ${medico.apellidos}`;
++  return [medico.apellidos, medico.nombre].filter(Boolean).join(' ');
+ }
+ 
+ function setMedicoSelection(id: string) {

@@ -60,7 +60,7 @@ function patientDisplayName(paciente: Paciente) {
 }
 
 function medicoLabel(medico: Medico) {
-  return medico.nombre_visible || `${medico.nombre} ${medico.apellidos}`;
+  return [medico.apellidos, medico.nombre].filter(Boolean).join(' ');
 }
 
 function setMedicoSelection(id: string) {
