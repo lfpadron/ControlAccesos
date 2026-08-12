@@ -45,6 +45,9 @@ const error = ref('');
 const message = ref('');
 const page = ref(1);
 const doctorSearch = ref('');
+const doctorDropdownOpen = ref(false);
+const highlightedDoctorIndex = ref(-1);
+let doctorBlurTimer: ReturnType<typeof setTimeout> | null = null;
 
 const filters = reactive({
   q: '',
@@ -137,7 +140,7 @@ const doctorOptions = computed(() => {
   const q = normalize(doctorSearch.value);
   const rows = sortByLabel(
     medicos.value.filter((item) => item.usuario_id !== selectedUserId.value),
-    (item) => `${item.nombre} ${item.apellidos}`,
+    doctorSortLabel,
   );
   if (!q) return rows;
   return rows.filter((item) => {
@@ -146,6 +149,9 @@ const doctorOptions = computed(() => {
     return normalize(haystack).includes(q);
   });
 });
+const highlightedDoctor = computed(() =>
+  highlightedDoctorIndex.value >= 0 ? doctorOptions.value[highlightedDoctorIndex.value] ?? null : null,
+);
 
 function normalize(value: string | null | undefined) {
   return (value ?? '')
@@ -211,10 +217,14 @@ function consultorioLabel(item: Consultorio) {
   return `${item.codigo} - ${description}`;
 }
 
+function doctorSortLabel(item: Medico) {
+  return `${item.apellidos} ${item.nombre}`;
+}
+
 function medicoLabel(item: Medico) {
   const user = item.usuario_id ? userById(item.usuario_id) : null;
   const email = user?.email ? ` (${user.email})` : '';
-  return `${item.nombre} ${item.apellidos}${email}`;
+  return `${item.apellidos}, ${item.nombre}${email}`;
 }
 
 function medicoDisplay(item: Medico) {
@@ -223,6 +233,7 @@ function medicoDisplay(item: Medico) {
     apellidos: item.apellidos,
     nombre: item.nombre,
     correo: user?.email ?? '-',
+    estado: item.activo ? 'Activo' : 'Inactivo',
   };
 }
 
@@ -269,6 +280,7 @@ function resetDoctorForm() {
   doctorForm.medico_id = '';
   doctorForm.fecha_inicio = todayLocalIso();
   doctorForm.fecha_fin = '';
+  closeDoctorDropdown();
 }
 
 function resetLowerLocation(level: 'institucion' | 'campus' | 'torre' | 'piso') {
@@ -525,11 +537,64 @@ async function deactivateAssignment(item: UsuarioRol) {
   }
 }
 
+function openDoctorDropdown() {
+  if (!selectedUser.value) return;
+  if (doctorBlurTimer !== null) {
+    clearTimeout(doctorBlurTimer);
+    doctorBlurTimer = null;
+  }
+  void ensureUsersLoaded();
+  doctorDropdownOpen.value = true;
+  highlightedDoctorIndex.value = doctorOptions.value.length ? Math.max(0, doctorOptions.value.findIndex((item) => item.id === doctorForm.medico_id)) : -1;
+}
+
+function closeDoctorDropdown() {
+  doctorDropdownOpen.value = false;
+  highlightedDoctorIndex.value = -1;
+}
+
+function scheduleDoctorDropdownClose() {
+  doctorBlurTimer = setTimeout(closeDoctorDropdown, 120);
+}
+
+function selectDoctor(item: Medico) {
+  doctorForm.medico_id = item.id;
+  doctorSearch.value = medicoLabel(item);
+  closeDoctorDropdown();
+}
+
 function onDoctorSearchInput() {
   void ensureUsersLoaded();
+  doctorDropdownOpen.value = Boolean(selectedUser.value);
   const value = normalize(doctorSearch.value);
-  const match = doctorOptions.value.find((item) => normalize(medicoLabel(item)) === value || normalize(`${item.nombre} ${item.apellidos}`) === value);
+  const match = doctorOptions.value.find(
+    (item) => normalize(medicoLabel(item)) === value || normalize(`${item.apellidos} ${item.nombre}`) === value || normalize(`${item.nombre} ${item.apellidos}`) === value,
+  );
   doctorForm.medico_id = match?.id ?? '';
+  highlightedDoctorIndex.value = doctorOptions.value.length ? 0 : -1;
+}
+
+function onDoctorSearchKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    openDoctorDropdown();
+    highlightedDoctorIndex.value = Math.min(highlightedDoctorIndex.value + 1, doctorOptions.value.length - 1);
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    openDoctorDropdown();
+    highlightedDoctorIndex.value = Math.max(highlightedDoctorIndex.value - 1, 0);
+    return;
+  }
+  if (event.key === 'Enter' && doctorDropdownOpen.value && highlightedDoctor.value) {
+    event.preventDefault();
+    selectDoctor(highlightedDoctor.value);
+    return;
+  }
+  if (event.key === 'Escape') {
+    closeDoctorDropdown();
+  }
 }
 
 watch(selectedUserId, () => {
@@ -717,17 +782,42 @@ onMounted(loadReferenceData);
         <p v-if="!selectedUser" class="message">Seleccione un usuario para habilitar asignaciones.</p>
         <div class="form-row">
           <label for="asignacion-medico-search">Médico</label>
-          <input
-            id="asignacion-medico-search"
-            v-model="doctorSearch"
-            :disabled="!selectedUser"
-            list="medicos-asignacion"
-            @focus="ensureUsersLoaded"
-            @input="onDoctorSearchInput"
-          />
-          <datalist id="medicos-asignacion">
-            <option v-for="item in doctorOptions" :key="item.id" :value="medicoLabel(item)" />
-          </datalist>
+          <div class="combobox">
+            <input
+              id="asignacion-medico-search"
+              v-model="doctorSearch"
+              :aria-activedescendant="highlightedDoctor ? `medico-option-${highlightedDoctor.id}` : undefined"
+              aria-autocomplete="list"
+              aria-controls="medicos-asignacion-options"
+              :aria-expanded="doctorDropdownOpen"
+              autocomplete="off"
+              :disabled="!selectedUser"
+              role="combobox"
+              @blur="scheduleDoctorDropdownClose"
+              @focus="openDoctorDropdown"
+              @input="onDoctorSearchInput"
+              @keydown="onDoctorSearchKeydown"
+            />
+            <div v-if="doctorDropdownOpen" id="medicos-asignacion-options" class="combobox-list" role="listbox">
+              <button
+                v-for="(item, index) in doctorOptions"
+                :id="`medico-option-${item.id}`"
+                :key="item.id"
+                class="combobox-option"
+                :class="{ highlighted: index === highlightedDoctorIndex, selected: item.id === doctorForm.medico_id }"
+                role="option"
+                type="button"
+                :aria-selected="item.id === doctorForm.medico_id"
+                @click="selectDoctor(item)"
+                @mousedown.prevent
+                @mouseenter="highlightedDoctorIndex = index"
+              >
+                <span class="combobox-option-title">{{ item.apellidos }}, {{ item.nombre }}</span>
+                <span class="combobox-option-meta">{{ medicoDisplay(item).correo }} - {{ medicoDisplay(item).estado }}</span>
+              </button>
+              <div v-if="doctorOptions.length === 0" class="combobox-empty">Sin resultados</div>
+            </div>
+          </div>
         </div>
         <div v-if="selectedDoctor" class="form-grid">
           <div class="form-row">
@@ -741,6 +831,10 @@ onMounted(loadReferenceData);
           <div class="form-row">
             <label>Correo</label>
             <input :value="medicoDisplay(selectedDoctor).correo" disabled />
+          </div>
+          <div class="form-row">
+            <label>Estado</label>
+            <span class="status" :class="selectedDoctor.activo ? 'ok' : 'muted'">{{ medicoDisplay(selectedDoctor).estado }}</span>
           </div>
         </div>
         <div class="form-grid">
