@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select, true
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.complejo import Complejo
 from app.models.display import TurnoDisplay
@@ -95,6 +95,7 @@ def _location_access_predicate(
                 UsuarioRol.torre_id.is_not(None),
                 select(Piso.id)
                 .where(Piso.id == piso_id_col, Piso.torre_id == UsuarioRol.torre_id)
+                .correlate_except(Piso)
                 .exists(),
             ),
             UsuarioRol.complejo_id == complejo_id_col,
@@ -102,6 +103,7 @@ def _location_access_predicate(
                 UsuarioRol.institucion_id.is_not(None),
                 select(Complejo.id)
                 .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
+                .correlate_except(Complejo)
                 .exists(),
             ),
         ),
@@ -196,33 +198,65 @@ def piso_catalog_access_predicate(db: Session, user: Usuario, today: date | None
     )
 
 
-def cita_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+def _cita_access_predicate_for(
+    db: Session,
+    user: Usuario,
+    consultorio_id_col: Any,
+    piso_id_col: Any,
+    complejo_id_col: Any,
+    medico_id_col: Any,
+    today: date | None = None,
+) -> Any:
     if user_has_global_access(db, user, today):
         return true()
     return or_(
-        _location_access_predicate(user, Cita.consultorio_id, Cita.piso_id, Cita.complejo_id, today),
-        _medico_access_predicate(user, Cita.medico_id, today),
+        _location_access_predicate(user, consultorio_id_col, piso_id_col, complejo_id_col, today),
+        _medico_access_predicate(user, medico_id_col, today),
+    )
+
+
+def cita_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+    return _cita_access_predicate_for(
+        db,
+        user,
+        Cita.consultorio_id,
+        Cita.piso_id,
+        Cita.complejo_id,
+        Cita.medico_id,
+        today,
     )
 
 
 def paciente_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
     if user_has_global_access(db, user, today):
         return true()
+    medico_paciente = aliased(MedicoPaciente)
+    cita = aliased(Cita)
     paciente_by_medico = (
-        select(MedicoPaciente.paciente_id)
+        select(medico_paciente.paciente_id)
         .where(
-            MedicoPaciente.paciente_id == Paciente.id,
-            MedicoPaciente.activo.is_(True),
-            _medico_access_predicate(user, MedicoPaciente.medico_id, today),
+            medico_paciente.paciente_id == Paciente.id,
+            medico_paciente.activo.is_(True),
+            _medico_access_predicate(user, medico_paciente.medico_id, today),
         )
+        .correlate(Paciente)
         .exists()
     )
     paciente_by_cita = (
-        select(Cita.id)
+        select(cita.id)
         .where(
-            Cita.paciente_id == Paciente.id,
-            cita_access_predicate(db, user, today),
+            cita.paciente_id == Paciente.id,
+            _cita_access_predicate_for(
+                db,
+                user,
+                cita.consultorio_id,
+                cita.piso_id,
+                cita.complejo_id,
+                cita.medico_id,
+                today,
+            ),
         )
+        .correlate(Paciente)
         .exists()
     )
     return or_(paciente_by_medico, paciente_by_cita)
