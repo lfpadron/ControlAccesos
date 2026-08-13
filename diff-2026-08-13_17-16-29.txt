@@ -1,0 +1,646 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index cca39df..9400a95 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -167,8 +167,12 @@ def update_profile(
+     db: Session = Depends(get_db),
+     current_user: Usuario = Depends(get_current_user),
+ ) -> UsuarioRead:
+-    before = {"correo_alterno": current_user.correo_alterno}
+-    current_user.correo_alterno = normalize_profile_email(payload.correo_alterno)
++    before = {"correo_alterno": current_user.correo_alterno, "telefono": current_user.telefono}
++    data = payload.model_dump(exclude_unset=True)
++    if "correo_alterno" in data:
++        current_user.correo_alterno = normalize_profile_email(data["correo_alterno"])
++    if "telefono" in data:
++        current_user.telefono = str(data["telefono"]).strip() if data["telefono"] is not None else None
+     db.flush()
+     record_audit_event(
+         db,
+@@ -179,7 +183,7 @@ def update_profile(
+         canal="WEB",
+         ip_origen=request.client.host if request.client else None,
+         valor_antes=before,
+-        valor_despues={"correo_alterno": current_user.correo_alterno},
++        valor_despues={"correo_alterno": current_user.correo_alterno, "telefono": current_user.telefono},
+     )
+     db.commit()
+     db.refresh(current_user)
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index d4b32ba..4b9944a 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -89,12 +89,21 @@ class UsuarioUpdate(BaseModel):
+ 
+ class UsuarioProfileUpdate(BaseModel):
+     correo_alterno: EmailStr | None = Field(default=None, max_length=255)
++    telefono: str | None = Field(default=None, max_length=64)
+ 
+     @field_validator("correo_alterno", mode="before")
+     @classmethod
+     def normalize_correo_alterno(cls, value: object) -> object:
+         return normalize_optional_email(value)
+ 
++    @field_validator("telefono", mode="before")
++    @classmethod
++    def normalize_telefono(cls, value: object) -> object:
++        if isinstance(value, str):
++            normalized = value.strip()
++            return normalized or None
++        return value
++
+ 
+ class UsuarioRead(BaseModel):
+     id: UUID
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 2f39ff9..779a15b 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -14,6 +14,9 @@ const fullscreen = computed(() => Boolean(route.meta.fullscreen));
+ const currentUser = ref<Usuario | null>(null);
+ const { clearCampus, clearFloor, clearLocation, clearTower } = useLocationContext();
+ const showUserBadge = computed(() => Boolean(getToken() && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
++const currentUserDisplayName = computed(() =>
++  [currentUser.value?.nombre, currentUser.value?.apellidos].filter(Boolean).join(' ') || currentUser.value?.email || '',
++);
+ const footerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+ const footerClockFormatter = new Intl.DateTimeFormat('es-MX', {
+   hour: '2-digit',
+@@ -145,7 +148,7 @@ watch(
+       <div v-if="showUserBadge" class="user-badge-row">
+         <RouterLink class="user-badge" to="/perfil">
+           <span>Usuario</span>
+-          <strong>{{ currentUser?.nombre }}</strong>
++          <strong>{{ currentUserDisplayName }}</strong>
+           <em v-if="currentUser?.force_password_change">Cambio de contraseña pendiente</em>
+         </RouterLink>
+       </div>
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 684a2e8..62e56c1 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -537,7 +537,7 @@ export function getCurrentUser() {
+   return apiFetch<Usuario>('/auth/me');
+ }
+ 
+-export function updateMyProfile(payload: { correo_alterno?: string | null }) {
++export function updateMyProfile(payload: { correo_alterno?: string | null; telefono?: string | null }) {
+   return apiFetch<Usuario>('/auth/me', {
+     method: 'PATCH',
+     body: JSON.stringify(payload),
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 5af126c..355fdc0 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -17,10 +17,13 @@ import {
+   listTorres,
+   listUsuarios,
+   updateResource,
++  type Usuario,
++  type UsuarioRol,
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext, type LocationSelection } from '../composables/useLocationContext';
+ import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
++import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ type Row = Record<string, unknown> & { id: string };
+ type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
+@@ -42,13 +45,17 @@ const loading = ref(false);
+ const editingId = ref<string | null>(null);
+ const form = reactive<Record<string, unknown>>({});
+ const lookups = reactive<Record<string, LookupOption[]>>({});
++const currentUser = ref<Usuario | null>(null);
++const usuarioRoles = ref<UsuarioRol[]>([]);
+ const institutionSearch = ref('');
+ const complexSearch = ref('');
+ 
+ const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)]);
+ const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+-const lockedTowerKeys = new Set(['pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
++const userAssignmentScopedKeys = new Set(['torres']);
++const lockedTowerKeys = new Set(['pisos']);
+ const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
++const isUserAssignmentScoped = computed(() => userAssignmentScopedKeys.has(config.value.key));
+ const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
+ const {
+   clearCampus,
+@@ -133,7 +140,36 @@ const scopedClusters = computed(() => {
+   return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId && item.piso_id === pisoId);
+ });
+ 
+-const displayedRows = computed(() => rows.value.filter(rowMatchesLocation));
++const userLocationScope = computed(() =>
++  buildUserLocationScope({
++    currentUser: currentUser.value,
++    usuarioRoles: usuarioRoles.value,
++    instituciones: (lookups.instituciones ?? []).map((item) => ({ id: item.id })),
++    complejos: (lookups.complejos ?? []).flatMap((item) =>
++      item.institucion_id ? [{ id: item.id, institucion_id: item.institucion_id }] : [],
++    ),
++    torres: rows.value.flatMap((item) =>
++      config.value.key === 'torres' && typeof item.complejo_id === 'string'
++        ? [{ id: item.id, complejo_id: item.complejo_id }]
++        : [],
++    ),
++    pisos: (lookups.pisos ?? []).flatMap((item) =>
++      item.complejo_id && item.torre_id ? [{ id: item.id, complejo_id: item.complejo_id, torre_id: item.torre_id }] : [],
++    ),
++    consultorios: (lookups.consultorios ?? []).flatMap((item) =>
++      item.complejo_id && item.piso_id ? [{ id: item.id, complejo_id: item.complejo_id, piso_id: item.piso_id }] : [],
++    ),
++  }),
++);
++
++const userScopedRows = computed(() => {
++  if (config.value.key === 'torres') {
++    return filterTorresByUserAssignment(rows.value, userLocationScope.value);
++  }
++  return rows.value;
++});
++
++const displayedRows = computed(() => userScopedRows.value.filter(rowMatchesLocation));
+ 
+ const submitDisabled = computed(() => {
+   if (loading.value) return true;
+@@ -427,6 +463,13 @@ async function loadLookups() {
+     keys.add('instituciones');
+     keys.add('complejos');
+   }
++  if (isUserAssignmentScoped.value) {
++    keys.add('instituciones');
++    keys.add('complejos');
++    keys.add('torres');
++    keys.add('pisos');
++    keys.add('consultorios');
++  }
+   for (const field of config.value.fields) {
+     if (field.lookup) {
+       keys.add(field.lookup);
+@@ -448,11 +491,22 @@ async function loadRows() {
+   rows.value = await listResource<Row>(config.value.resource);
+ }
+ 
++async function loadUserAssignments() {
++  if (!isUserAssignmentScoped.value) {
++    currentUser.value = null;
++    usuarioRoles.value = [];
++    return;
++  }
++  const scopeData = await loadCurrentUserLocationAssignments();
++  currentUser.value = scopeData.currentUser;
++  usuarioRoles.value = scopeData.usuarioRoles;
++}
++
+ async function loadData() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    await Promise.all([loadLookups(), loadRows()]);
++    await Promise.all([loadLookups(), loadRows(), loadUserAssignments()]);
+     resetForm();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar el catálogo.';
+@@ -486,6 +540,19 @@ function fieldAutocomplete(field: CatalogField) {
+   return undefined;
+ }
+ 
++function fieldDatalistId(field: CatalogField) {
++  return config.value.key === 'torres' && field.name === 'nombre' ? `${fieldId(field)}-options` : undefined;
++}
++
++function textAutocompleteOptions(field: CatalogField) {
++  if (config.value.key !== 'torres' || field.name !== 'nombre') {
++    return [];
++  }
++  return [...new Set(scopedTorres.value.map((item) => item.label))]
++    .filter((option) => option !== fieldValue(field.name))
++    .sort((left, right) => left.localeCompare(right, 'es', { sensitivity: 'base' }));
++}
++
+ function selectOptions(field: CatalogField): SelectOption[] {
+   if (field.options) return field.options;
+   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
+@@ -851,6 +918,7 @@ onMounted(loadData);
+             v-else
+             :id="fieldId(field)"
+             :autocomplete="fieldAutocomplete(field)"
++            :list="fieldDatalistId(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+             :minlength="field.minLength"
+@@ -861,6 +929,9 @@ onMounted(loadData);
+             :type="fieldInputType(field)"
+             @input="updateField(field.name, $event)"
+           />
++          <datalist v-if="textAutocompleteOptions(field).length" :id="fieldDatalistId(field)">
++            <option v-for="option in textAutocompleteOptions(field)" :key="option" :value="option" />
++          </datalist>
+         </div>
+         <p v-if="error" class="error">{{ error }}</p>
+         <div class="actions-row">
+diff --git a/access-manager/frontend/src/views/ComplejosView.vue b/access-manager/frontend/src/views/ComplejosView.vue
+index 1777e11..81f269f 100644
+--- a/access-manager/frontend/src/views/ComplejosView.vue
++++ b/access-manager/frontend/src/views/ComplejosView.vue
+@@ -4,18 +4,32 @@ import {
+   activateComplejo,
+   createComplejo,
+   deactivateComplejo,
++  listConsultorios,
+   listComplejos,
+   listInstituciones,
++  listPisos,
++  listTorres,
+   listZonasHorarias,
+   updateComplejo,
+   type Complejo,
++  type Consultorio,
+   type Institucion,
++  type Piso,
++  type Torre,
++  type Usuario,
++  type UsuarioRol,
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { buildUserLocationScope, filterComplejosByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ const complejos = ref<Complejo[]>([]);
+ const instituciones = ref<Institucion[]>([]);
++const torres = ref<Torre[]>([]);
++const pisos = ref<Piso[]>([]);
++const consultorios = ref<Consultorio[]>([]);
++const currentUser = ref<Usuario | null>(null);
++const usuarioRoles = ref<UsuarioRol[]>([]);
+ const selected = ref<Complejo | null>(null);
+ const nombre = ref('');
+ const descripcion = ref('');
+@@ -36,22 +50,56 @@ const activeInstitutionId = computed(() => {
+ });
+ const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === activeInstitutionId.value) ?? null);
+ const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? locationContext.institucion?.label ?? '');
++const userScope = computed(() =>
++  buildUserLocationScope({
++    currentUser: currentUser.value,
++    usuarioRoles: usuarioRoles.value,
++    instituciones: instituciones.value,
++    complejos: complejos.value,
++    torres: torres.value,
++    pisos: pisos.value,
++    consultorios: consultorios.value,
++  }),
++);
++const assignedComplejos = computed(() => filterComplejosByUserAssignment(complejos.value, userScope.value));
+ 
+ const complejosFiltrados = computed(() => {
+-  return complejos.value
+-    .filter((item) => item.institucion_id === activeInstitutionId.value)
++  return assignedComplejos.value
++    .filter((item) => !activeInstitutionId.value || item.institucion_id === activeInstitutionId.value)
+     .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
+ });
+ 
++const nombreOptions = computed(() =>
++  [...new Set(complejosFiltrados.value.map((item) => item.nombre))]
++    .filter((option) => option !== nombre.value)
++    .sort((left, right) => left.localeCompare(right, 'es', { sensitivity: 'base' })),
++);
++
++async function loadOptionalScopeCatalogs() {
++  try {
++    const [torresData, pisosData, consultoriosData] = await Promise.all([listTorres(), listPisos(), listConsultorios()]);
++    return { torresData, pisosData, consultoriosData };
++  } catch {
++    return { torresData: [] as Torre[], pisosData: [] as Piso[], consultoriosData: [] as Consultorio[] };
++  }
++}
++
+ async function loadData() {
+   error.value = '';
+   try {
+-    const [institucionesData, complejosData] = await Promise.all([
++    const [scopeData, institucionesData, complejosData, optionalScopeData] = await Promise.all([
++      loadCurrentUserLocationAssignments(),
+       listInstituciones(),
+       listComplejos(),
++      loadOptionalScopeCatalogs(),
+     ]);
++    currentUser.value = scopeData.currentUser;
++    usuarioRoles.value = scopeData.usuarioRoles;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
++    torres.value = optionalScopeData.torresData;
++    pisos.value = optionalScopeData.pisosData;
++    consultorios.value = optionalScopeData.consultoriosData;
+     if (zonasHorarias.value.length === 0) {
+       zonasHorarias.value = await listZonasHorarias();
+     }
+@@ -162,7 +210,10 @@ onMounted(loadData);
+         </div>
+         <div class="form-row">
+           <label for="nombre">Nombre</label>
+-          <input id="nombre" v-model="nombre" required maxlength="180" />
++          <input id="nombre" v-model="nombre" list="campus-nombre-options" required maxlength="180" />
++          <datalist id="campus-nombre-options">
++            <option v-for="option in nombreOptions" :key="option" :value="option" />
++          </datalist>
+         </div>
+         <div class="form-row">
+           <label for="descripcion">Descripción</label>
+diff --git a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+index d4f953a..d172cf2 100644
+--- a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
++++ b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+@@ -4,23 +4,31 @@ import {
+   consultaClustersPorConsultorio,
+   consultaClustersPorPiso,
+   listComplejos,
++  listConsultorios,
+   listInstituciones,
+   listPisos,
+   listTorres,
+   type Complejo,
++  type Consultorio,
+   type ConsultorioClusterConsulta,
+   type Institucion,
+   type Piso,
+   type PisoClusterConsulta,
+   type Torre,
++  type Usuario,
++  type UsuarioRol,
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { buildUserLocationScope, filterInstitucionesByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
+ const torres = ref<Torre[]>([]);
+ const pisos = ref<Piso[]>([]);
++const consultorios = ref<Consultorio[]>([]);
++const currentUser = ref<Usuario | null>(null);
++const usuarioRoles = ref<UsuarioRol[]>([]);
+ const porConsultorio = ref<ConsultorioClusterConsulta[]>([]);
+ const porPiso = ref<PisoClusterConsulta[]>([]);
+ const loading = ref(false);
+@@ -46,6 +54,18 @@ const scopedTorres = computed(() =>
+ const scopedPisos = computed(() =>
+   filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : [],
+ );
++const userScope = computed(() =>
++  buildUserLocationScope({
++    currentUser: currentUser.value,
++    usuarioRoles: usuarioRoles.value,
++    instituciones: instituciones.value,
++    complejos: complejos.value,
++    torres: torres.value,
++    pisos: pisos.value,
++    consultorios: consultorios.value,
++  }),
++);
++const visibleInstituciones = computed(() => filterInstitucionesByUserAssignment(instituciones.value, userScope.value));
+ 
+ const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === filters.institucion_id) ?? null);
+ const selectedCampus = computed(() => complejos.value.find((item) => item.id === filters.complejo_id) ?? null);
+@@ -136,8 +156,8 @@ function syncPiso() {
+ }
+ 
+ function applyLocationDefaults() {
+-  const contextInstitution = instituciones.value.find((item) => item.id === locationContext.institucion?.id);
+-  filters.institucion_id = contextInstitution?.id ?? instituciones.value[0]?.id ?? '';
++  const contextInstitution = visibleInstituciones.value.find((item) => item.id === locationContext.institucion?.id);
++  filters.institucion_id = contextInstitution?.id ?? visibleInstituciones.value[0]?.id ?? '';
+   const contextCampus = scopedComplejos.value.find((item) => item.id === locationContext.campus?.id);
+   filters.complejo_id = contextCampus?.id ?? scopedComplejos.value[0]?.id ?? '';
+   const contextTower = scopedTorres.value.find((item) => item.id === locationContext.torre?.id);
+@@ -152,16 +172,21 @@ async function loadData() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    const [institucionesData, complejosData, torresData, pisosData] = await Promise.all([
++    const [scopeData, institucionesData, complejosData, torresData, pisosData, consultoriosData] = await Promise.all([
++      loadCurrentUserLocationAssignments(),
+       listInstituciones(),
+       listComplejos(),
+       listTorres(),
+       listPisos(),
++      listConsultorios(),
+     ]);
++    currentUser.value = scopeData.currentUser;
++    usuarioRoles.value = scopeData.usuarioRoles;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
+     torres.value = torresData;
+     pisos.value = pisosData;
++    consultorios.value = consultoriosData;
+     applyLocationDefaults();
+     await consultar();
+   } catch (err) {
+@@ -220,7 +245,7 @@ onMounted(loadData);
+           <label for="consulta-institucion">Institución</label>
+           <select id="consulta-institucion" v-model="filters.institucion_id" @change="syncInstitution(); consultar()">
+             <option value="">Seleccione institución</option>
+-            <option v-for="item in instituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
++            <option v-for="item in visibleInstituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+diff --git a/access-manager/frontend/src/views/InstitucionesView.vue b/access-manager/frontend/src/views/InstitucionesView.vue
+index cabf3a9..f38dd23 100644
+--- a/access-manager/frontend/src/views/InstitucionesView.vue
++++ b/access-manager/frontend/src/views/InstitucionesView.vue
+@@ -1,17 +1,34 @@
+ <script setup lang="ts">
+-import { onMounted, reactive, ref } from 'vue';
++import { computed, onMounted, reactive, ref } from 'vue';
+ import {
+   activateInstitucion,
+   createInstitucion,
+   deactivateInstitucion,
++  listComplejos,
++  listConsultorios,
+   listInstituciones,
++  listPisos,
++  listTorres,
+   updateInstitucion,
++  type Complejo,
++  type Consultorio,
+   type Institucion,
++  type Piso,
++  type Torre,
++  type Usuario,
++  type UsuarioRol,
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { buildUserLocationScope, filterInstitucionesByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ const instituciones = ref<Institucion[]>([]);
++const complejos = ref<Complejo[]>([]);
++const torres = ref<Torre[]>([]);
++const pisos = ref<Piso[]>([]);
++const consultorios = ref<Consultorio[]>([]);
++const currentUser = ref<Usuario | null>(null);
++const usuarioRoles = ref<UsuarioRol[]>([]);
+ const selected = ref<Institucion | null>(null);
+ const error = ref('');
+ const message = ref('');
+@@ -26,6 +43,26 @@ const form = reactive({
+ 
+ const { clearLocation, setInstitution } = useLocationContext();
+ 
++const userScope = computed(() =>
++  buildUserLocationScope({
++    currentUser: currentUser.value,
++    usuarioRoles: usuarioRoles.value,
++    instituciones: instituciones.value,
++    complejos: complejos.value,
++    torres: torres.value,
++    pisos: pisos.value,
++    consultorios: consultorios.value,
++  }),
++);
++
++const filteredInstituciones = computed(() => {
++  const term = filtro.value.trim().toLowerCase();
++  const matchesQuery = term
++    ? instituciones.value.filter((item) => `${item.nombre} ${item.razon_social ?? ''}`.toLowerCase().includes(term))
++    : instituciones.value;
++  return filterInstitucionesByUserAssignment(matchesQuery, userScope.value);
++});
++
+ function setForm(item?: Institucion | null, syncLocation = true) {
+   selected.value = item ?? null;
+   form.nombre = item?.nombre ?? '';
+@@ -39,11 +76,32 @@ function setForm(item?: Institucion | null, syncLocation = true) {
+   }
+ }
+ 
+-async function loadData(q = filtro.value) {
++async function loadOptionalScopeCatalogs() {
++  try {
++    const [torresData, pisosData, consultoriosData] = await Promise.all([listTorres(), listPisos(), listConsultorios()]);
++    return { torresData, pisosData, consultoriosData };
++  } catch {
++    return { torresData: [] as Torre[], pisosData: [] as Piso[], consultoriosData: [] as Consultorio[] };
++  }
++}
++
++async function loadData() {
+   loading.value = true;
+   error.value = '';
+   try {
+-    instituciones.value = await listInstituciones(q.trim() || undefined);
++    const [scopeData, institucionesData, complejosData, optionalScopeData] = await Promise.all([
++      loadCurrentUserLocationAssignments(),
++      listInstituciones(),
++      listComplejos(),
++      loadOptionalScopeCatalogs(),
++    ]);
++    currentUser.value = scopeData.currentUser;
++    usuarioRoles.value = scopeData.usuarioRoles;
++    instituciones.value = institucionesData;
++    complejos.value = complejosData;
++    torres.value = optionalScopeData.torresData;
++    pisos.value = optionalScopeData.pisosData;
++    consultorios.value = optionalScopeData.consultoriosData;
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones.';
+   } finally {
+@@ -93,7 +151,6 @@ async function setActive(active: boolean) {
+ 
+ async function clearFilter() {
+   filtro.value = '';
+-  await loadData('');
+ }
+ 
+ onMounted(() => loadData());
+@@ -154,7 +211,7 @@ onMounted(() => loadData());
+             </thead>
+             <tbody>
+               <tr
+-                v-for="item in instituciones"
++                v-for="item in filteredInstituciones"
+                 :key="item.id"
+                 class="selectable-row"
+                 :class="{ selected: selected?.id === item.id }"
+@@ -167,7 +224,7 @@ onMounted(() => loadData());
+             </tbody>
+           </table>
+         </div>
+-        <p v-if="instituciones.length === 0" class="message">No hay instituciones registradas.</p>
++        <p v-if="filteredInstituciones.length === 0" class="message">No hay instituciones registradas.</p>
+       </section>
+     </div>
+   </section>
+diff --git a/access-manager/frontend/src/views/PerfilView.vue b/access-manager/frontend/src/views/PerfilView.vue
+index dbfdbff..5cd237a 100644
+--- a/access-manager/frontend/src/views/PerfilView.vue
++++ b/access-manager/frontend/src/views/PerfilView.vue
+@@ -4,6 +4,7 @@ import { changeMyPassword, getCurrentUser, updateMyProfile, type Usuario } from
+ 
+ const profile = ref<Usuario | null>(null);
+ const correoAlterno = ref('');
++const telefono = ref('');
+ const currentPassword = ref('');
+ const newPassword = ref('');
+ const confirmPassword = ref('');
+@@ -21,6 +22,7 @@ async function loadProfile() {
+   try {
+     profile.value = await getCurrentUser();
+     correoAlterno.value = profile.value.correo_alterno ?? '';
++    telefono.value = profile.value.telefono ?? '';
+   } catch (err) {
+     profileError.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
+   }
+@@ -33,8 +35,10 @@ async function submitProfile() {
+   try {
+     profile.value = await updateMyProfile({
+       correo_alterno: correoAlterno.value.trim() || null,
++      telefono: telefono.value.trim() || null,
+     });
+     correoAlterno.value = profile.value.correo_alterno ?? '';
++    telefono.value = profile.value.telefono ?? '';
+     profileSuccess.value = 'Perfil actualizado correctamente.';
+     window.dispatchEvent(new CustomEvent('current-user-updated'));
+   } catch (err) {
+@@ -62,6 +66,7 @@ async function submitPasswordChange() {
+       new_password: newPassword.value,
+     });
+     correoAlterno.value = profile.value.correo_alterno ?? '';
++    telefono.value = profile.value.telefono ?? '';
+     currentPassword.value = '';
+     newPassword.value = '';
+     confirmPassword.value = '';
+@@ -90,6 +95,10 @@ onMounted(loadProfile);
+       <form class="panel form compact-form" autocomplete="off" @submit.prevent="submitProfile">
+         <h2>Datos de usuario</h2>
+         <dl v-if="profile" class="profile-list">
++          <div>
++            <dt>Apellido(s)</dt>
++            <dd>{{ profile.apellidos }}</dd>
++          </div>
+           <div>
+             <dt>Nombre</dt>
+             <dd>{{ profile.nombre }}</dd>
+@@ -102,15 +111,15 @@ onMounted(loadProfile);
+             <dt>Rol</dt>
+             <dd>{{ roleText }}</dd>
+           </div>
+-          <div>
+-            <dt>Teléfono</dt>
+-            <dd>{{ profile.telefono || 'Sin capturar' }}</dd>
+-          </div>
+           <div>
+             <dt>Estado</dt>
+             <dd>{{ profile.estado }}</dd>
+           </div>
+         </dl>
++        <div class="form-row">
++          <label for="telefono">Teléfono</label>
++          <input id="telefono" v-model="telefono" maxlength="64" autocomplete="tel" />
++        </div>
+         <div class="form-row">
+           <label for="correo-alterno">Correo alterno</label>
+           <input id="correo-alterno" v-model="correoAlterno" type="email" autocomplete="email" maxlength="255" />

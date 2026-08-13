@@ -4,18 +4,32 @@ import {
   activateComplejo,
   createComplejo,
   deactivateComplejo,
+  listConsultorios,
   listComplejos,
   listInstituciones,
+  listPisos,
+  listTorres,
   listZonasHorarias,
   updateComplejo,
   type Complejo,
+  type Consultorio,
   type Institucion,
+  type Piso,
+  type Torre,
+  type Usuario,
+  type UsuarioRol,
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { buildUserLocationScope, filterComplejosByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
 
 const complejos = ref<Complejo[]>([]);
 const instituciones = ref<Institucion[]>([]);
+const torres = ref<Torre[]>([]);
+const pisos = ref<Piso[]>([]);
+const consultorios = ref<Consultorio[]>([]);
+const currentUser = ref<Usuario | null>(null);
+const usuarioRoles = ref<UsuarioRol[]>([]);
 const selected = ref<Complejo | null>(null);
 const nombre = ref('');
 const descripcion = ref('');
@@ -36,22 +50,56 @@ const activeInstitutionId = computed(() => {
 });
 const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === activeInstitutionId.value) ?? null);
 const selectedInstitutionName = computed(() => selectedInstitution.value?.nombre ?? locationContext.institucion?.label ?? '');
+const userScope = computed(() =>
+  buildUserLocationScope({
+    currentUser: currentUser.value,
+    usuarioRoles: usuarioRoles.value,
+    instituciones: instituciones.value,
+    complejos: complejos.value,
+    torres: torres.value,
+    pisos: pisos.value,
+    consultorios: consultorios.value,
+  }),
+);
+const assignedComplejos = computed(() => filterComplejosByUserAssignment(complejos.value, userScope.value));
 
 const complejosFiltrados = computed(() => {
-  return complejos.value
-    .filter((item) => item.institucion_id === activeInstitutionId.value)
+  return assignedComplejos.value
+    .filter((item) => !activeInstitutionId.value || item.institucion_id === activeInstitutionId.value)
     .sort((left, right) => left.nombre.localeCompare(right.nombre, 'es', { sensitivity: 'base' }));
 });
+
+const nombreOptions = computed(() =>
+  [...new Set(complejosFiltrados.value.map((item) => item.nombre))]
+    .filter((option) => option !== nombre.value)
+    .sort((left, right) => left.localeCompare(right, 'es', { sensitivity: 'base' })),
+);
+
+async function loadOptionalScopeCatalogs() {
+  try {
+    const [torresData, pisosData, consultoriosData] = await Promise.all([listTorres(), listPisos(), listConsultorios()]);
+    return { torresData, pisosData, consultoriosData };
+  } catch {
+    return { torresData: [] as Torre[], pisosData: [] as Piso[], consultoriosData: [] as Consultorio[] };
+  }
+}
 
 async function loadData() {
   error.value = '';
   try {
-    const [institucionesData, complejosData] = await Promise.all([
+    const [scopeData, institucionesData, complejosData, optionalScopeData] = await Promise.all([
+      loadCurrentUserLocationAssignments(),
       listInstituciones(),
       listComplejos(),
+      loadOptionalScopeCatalogs(),
     ]);
+    currentUser.value = scopeData.currentUser;
+    usuarioRoles.value = scopeData.usuarioRoles;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = optionalScopeData.torresData;
+    pisos.value = optionalScopeData.pisosData;
+    consultorios.value = optionalScopeData.consultoriosData;
     if (zonasHorarias.value.length === 0) {
       zonasHorarias.value = await listZonasHorarias();
     }
@@ -162,7 +210,10 @@ onMounted(loadData);
         </div>
         <div class="form-row">
           <label for="nombre">Nombre</label>
-          <input id="nombre" v-model="nombre" required maxlength="180" />
+          <input id="nombre" v-model="nombre" list="campus-nombre-options" required maxlength="180" />
+          <datalist id="campus-nombre-options">
+            <option v-for="option in nombreOptions" :key="option" :value="option" />
+          </datalist>
         </div>
         <div class="form-row">
           <label for="descripcion">Descripción</label>

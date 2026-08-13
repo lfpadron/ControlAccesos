@@ -4,6 +4,7 @@ import { changeMyPassword, getCurrentUser, updateMyProfile, type Usuario } from 
 
 const profile = ref<Usuario | null>(null);
 const correoAlterno = ref('');
+const telefono = ref('');
 const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
@@ -21,6 +22,7 @@ async function loadProfile() {
   try {
     profile.value = await getCurrentUser();
     correoAlterno.value = profile.value.correo_alterno ?? '';
+    telefono.value = profile.value.telefono ?? '';
   } catch (err) {
     profileError.value = err instanceof Error ? err.message : 'No fue posible cargar su perfil.';
   }
@@ -33,8 +35,10 @@ async function submitProfile() {
   try {
     profile.value = await updateMyProfile({
       correo_alterno: correoAlterno.value.trim() || null,
+      telefono: telefono.value.trim() || null,
     });
     correoAlterno.value = profile.value.correo_alterno ?? '';
+    telefono.value = profile.value.telefono ?? '';
     profileSuccess.value = 'Perfil actualizado correctamente.';
     window.dispatchEvent(new CustomEvent('current-user-updated'));
   } catch (err) {
@@ -62,6 +66,7 @@ async function submitPasswordChange() {
       new_password: newPassword.value,
     });
     correoAlterno.value = profile.value.correo_alterno ?? '';
+    telefono.value = profile.value.telefono ?? '';
     currentPassword.value = '';
     newPassword.value = '';
     confirmPassword.value = '';
@@ -91,6 +96,10 @@ onMounted(loadProfile);
         <h2>Datos de usuario</h2>
         <dl v-if="profile" class="profile-list">
           <div>
+            <dt>Apellido(s)</dt>
+            <dd>{{ profile.apellidos }}</dd>
+          </div>
+          <div>
             <dt>Nombre</dt>
             <dd>{{ profile.nombre }}</dd>
           </div>
@@ -103,14 +112,14 @@ onMounted(loadProfile);
             <dd>{{ roleText }}</dd>
           </div>
           <div>
-            <dt>Teléfono</dt>
-            <dd>{{ profile.telefono || 'Sin capturar' }}</dd>
-          </div>
-          <div>
             <dt>Estado</dt>
             <dd>{{ profile.estado }}</dd>
           </div>
         </dl>
+        <div class="form-row">
+          <label for="telefono">Teléfono</label>
+          <input id="telefono" v-model="telefono" maxlength="64" autocomplete="tel" />
+        </div>
         <div class="form-row">
           <label for="correo-alterno">Correo alterno</label>
           <input id="correo-alterno" v-model="correoAlterno" type="email" autocomplete="email" maxlength="255" />

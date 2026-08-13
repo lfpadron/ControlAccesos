@@ -4,23 +4,31 @@ import {
   consultaClustersPorConsultorio,
   consultaClustersPorPiso,
   listComplejos,
+  listConsultorios,
   listInstituciones,
   listPisos,
   listTorres,
   type Complejo,
+  type Consultorio,
   type ConsultorioClusterConsulta,
   type Institucion,
   type Piso,
   type PisoClusterConsulta,
   type Torre,
+  type Usuario,
+  type UsuarioRol,
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { buildUserLocationScope, filterInstitucionesByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
 
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
 const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
+const consultorios = ref<Consultorio[]>([]);
+const currentUser = ref<Usuario | null>(null);
+const usuarioRoles = ref<UsuarioRol[]>([]);
 const porConsultorio = ref<ConsultorioClusterConsulta[]>([]);
 const porPiso = ref<PisoClusterConsulta[]>([]);
 const loading = ref(false);
@@ -46,6 +54,18 @@ const scopedTorres = computed(() =>
 const scopedPisos = computed(() =>
   filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : [],
 );
+const userScope = computed(() =>
+  buildUserLocationScope({
+    currentUser: currentUser.value,
+    usuarioRoles: usuarioRoles.value,
+    instituciones: instituciones.value,
+    complejos: complejos.value,
+    torres: torres.value,
+    pisos: pisos.value,
+    consultorios: consultorios.value,
+  }),
+);
+const visibleInstituciones = computed(() => filterInstitucionesByUserAssignment(instituciones.value, userScope.value));
 
 const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === filters.institucion_id) ?? null);
 const selectedCampus = computed(() => complejos.value.find((item) => item.id === filters.complejo_id) ?? null);
@@ -136,8 +156,8 @@ function syncPiso() {
 }
 
 function applyLocationDefaults() {
-  const contextInstitution = instituciones.value.find((item) => item.id === locationContext.institucion?.id);
-  filters.institucion_id = contextInstitution?.id ?? instituciones.value[0]?.id ?? '';
+  const contextInstitution = visibleInstituciones.value.find((item) => item.id === locationContext.institucion?.id);
+  filters.institucion_id = contextInstitution?.id ?? visibleInstituciones.value[0]?.id ?? '';
   const contextCampus = scopedComplejos.value.find((item) => item.id === locationContext.campus?.id);
   filters.complejo_id = contextCampus?.id ?? scopedComplejos.value[0]?.id ?? '';
   const contextTower = scopedTorres.value.find((item) => item.id === locationContext.torre?.id);
@@ -152,16 +172,21 @@ async function loadData() {
   loading.value = true;
   error.value = '';
   try {
-    const [institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+    const [scopeData, institucionesData, complejosData, torresData, pisosData, consultoriosData] = await Promise.all([
+      loadCurrentUserLocationAssignments(),
       listInstituciones(),
       listComplejos(),
       listTorres(),
       listPisos(),
+      listConsultorios(),
     ]);
+    currentUser.value = scopeData.currentUser;
+    usuarioRoles.value = scopeData.usuarioRoles;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
     torres.value = torresData;
     pisos.value = pisosData;
+    consultorios.value = consultoriosData;
     applyLocationDefaults();
     await consultar();
   } catch (err) {
@@ -220,7 +245,7 @@ onMounted(loadData);
           <label for="consulta-institucion">Institución</label>
           <select id="consulta-institucion" v-model="filters.institucion_id" @change="syncInstitution(); consultar()">
             <option value="">Seleccione institución</option>
-            <option v-for="item in instituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+            <option v-for="item in visibleInstituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
           </select>
         </div>
         <div class="form-row">

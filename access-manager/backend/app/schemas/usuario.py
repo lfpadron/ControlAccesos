@@ -89,11 +89,20 @@ class UsuarioUpdate(BaseModel):
 
 class UsuarioProfileUpdate(BaseModel):
     correo_alterno: EmailStr | None = Field(default=None, max_length=255)
+    telefono: str | None = Field(default=None, max_length=64)
 
     @field_validator("correo_alterno", mode="before")
     @classmethod
     def normalize_correo_alterno(cls, value: object) -> object:
         return normalize_optional_email(value)
+
+    @field_validator("telefono", mode="before")
+    @classmethod
+    def normalize_telefono(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
 
 
 class UsuarioRead(BaseModel):

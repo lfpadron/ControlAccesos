@@ -1,17 +1,34 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
   activateInstitucion,
   createInstitucion,
   deactivateInstitucion,
+  listComplejos,
+  listConsultorios,
   listInstituciones,
+  listPisos,
+  listTorres,
   updateInstitucion,
+  type Complejo,
+  type Consultorio,
   type Institucion,
+  type Piso,
+  type Torre,
+  type Usuario,
+  type UsuarioRol,
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { buildUserLocationScope, filterInstitucionesByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
 
 const instituciones = ref<Institucion[]>([]);
+const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
+const pisos = ref<Piso[]>([]);
+const consultorios = ref<Consultorio[]>([]);
+const currentUser = ref<Usuario | null>(null);
+const usuarioRoles = ref<UsuarioRol[]>([]);
 const selected = ref<Institucion | null>(null);
 const error = ref('');
 const message = ref('');
@@ -26,6 +43,26 @@ const form = reactive({
 
 const { clearLocation, setInstitution } = useLocationContext();
 
+const userScope = computed(() =>
+  buildUserLocationScope({
+    currentUser: currentUser.value,
+    usuarioRoles: usuarioRoles.value,
+    instituciones: instituciones.value,
+    complejos: complejos.value,
+    torres: torres.value,
+    pisos: pisos.value,
+    consultorios: consultorios.value,
+  }),
+);
+
+const filteredInstituciones = computed(() => {
+  const term = filtro.value.trim().toLowerCase();
+  const matchesQuery = term
+    ? instituciones.value.filter((item) => `${item.nombre} ${item.razon_social ?? ''}`.toLowerCase().includes(term))
+    : instituciones.value;
+  return filterInstitucionesByUserAssignment(matchesQuery, userScope.value);
+});
+
 function setForm(item?: Institucion | null, syncLocation = true) {
   selected.value = item ?? null;
   form.nombre = item?.nombre ?? '';
@@ -39,11 +76,32 @@ function setForm(item?: Institucion | null, syncLocation = true) {
   }
 }
 
-async function loadData(q = filtro.value) {
+async function loadOptionalScopeCatalogs() {
+  try {
+    const [torresData, pisosData, consultoriosData] = await Promise.all([listTorres(), listPisos(), listConsultorios()]);
+    return { torresData, pisosData, consultoriosData };
+  } catch {
+    return { torresData: [] as Torre[], pisosData: [] as Piso[], consultoriosData: [] as Consultorio[] };
+  }
+}
+
+async function loadData() {
   loading.value = true;
   error.value = '';
   try {
-    instituciones.value = await listInstituciones(q.trim() || undefined);
+    const [scopeData, institucionesData, complejosData, optionalScopeData] = await Promise.all([
+      loadCurrentUserLocationAssignments(),
+      listInstituciones(),
+      listComplejos(),
+      loadOptionalScopeCatalogs(),
+    ]);
+    currentUser.value = scopeData.currentUser;
+    usuarioRoles.value = scopeData.usuarioRoles;
+    instituciones.value = institucionesData;
+    complejos.value = complejosData;
+    torres.value = optionalScopeData.torresData;
+    pisos.value = optionalScopeData.pisosData;
+    consultorios.value = optionalScopeData.consultoriosData;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar instituciones.';
   } finally {
@@ -93,7 +151,6 @@ async function setActive(active: boolean) {
 
 async function clearFilter() {
   filtro.value = '';
-  await loadData('');
 }
 
 onMounted(() => loadData());
@@ -154,7 +211,7 @@ onMounted(() => loadData());
             </thead>
             <tbody>
               <tr
-                v-for="item in instituciones"
+                v-for="item in filteredInstituciones"
                 :key="item.id"
                 class="selectable-row"
                 :class="{ selected: selected?.id === item.id }"
@@ -167,7 +224,7 @@ onMounted(() => loadData());
             </tbody>
           </table>
         </div>
-        <p v-if="instituciones.length === 0" class="message">No hay instituciones registradas.</p>
+        <p v-if="filteredInstituciones.length === 0" class="message">No hay instituciones registradas.</p>
       </section>
     </div>
   </section>

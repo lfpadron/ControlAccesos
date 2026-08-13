@@ -14,6 +14,9 @@ const fullscreen = computed(() => Boolean(route.meta.fullscreen));
 const currentUser = ref<Usuario | null>(null);
 const { clearCampus, clearFloor, clearLocation, clearTower } = useLocationContext();
 const showUserBadge = computed(() => Boolean(getToken() && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
+const currentUserDisplayName = computed(() =>
+  [currentUser.value?.nombre, currentUser.value?.apellidos].filter(Boolean).join(' ') || currentUser.value?.email || '',
+);
 const footerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
 const footerClockFormatter = new Intl.DateTimeFormat('es-MX', {
   hour: '2-digit',
@@ -145,7 +148,7 @@ watch(
       <div v-if="showUserBadge" class="user-badge-row">
         <RouterLink class="user-badge" to="/perfil">
           <span>Usuario</span>
-          <strong>{{ currentUser?.nombre }}</strong>
+          <strong>{{ currentUserDisplayName }}</strong>
           <em v-if="currentUser?.force_password_change">Cambio de contraseña pendiente</em>
         </RouterLink>
       </div>

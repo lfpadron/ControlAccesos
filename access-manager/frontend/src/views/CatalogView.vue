@@ -17,10 +17,13 @@ import {
   listTorres,
   listUsuarios,
   updateResource,
+  type Usuario,
+  type UsuarioRol,
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext, type LocationSelection } from '../composables/useLocationContext';
 import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from '../catalogs';
+import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
 
 type Row = Record<string, unknown> & { id: string };
 type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
@@ -42,13 +45,17 @@ const loading = ref(false);
 const editingId = ref<string | null>(null);
 const form = reactive<Record<string, unknown>>({});
 const lookups = reactive<Record<string, LookupOption[]>>({});
+const currentUser = ref<Usuario | null>(null);
+const usuarioRoles = ref<UsuarioRol[]>([]);
 const institutionSearch = ref('');
 const complexSearch = ref('');
 
 const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)]);
 const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
-const lockedTowerKeys = new Set(['pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+const userAssignmentScopedKeys = new Set(['torres']);
+const lockedTowerKeys = new Set(['pisos']);
 const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
+const isUserAssignmentScoped = computed(() => userAssignmentScopedKeys.has(config.value.key));
 const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
 const {
   clearCampus,
@@ -133,7 +140,36 @@ const scopedClusters = computed(() => {
   return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId && item.piso_id === pisoId);
 });
 
-const displayedRows = computed(() => rows.value.filter(rowMatchesLocation));
+const userLocationScope = computed(() =>
+  buildUserLocationScope({
+    currentUser: currentUser.value,
+    usuarioRoles: usuarioRoles.value,
+    instituciones: (lookups.instituciones ?? []).map((item) => ({ id: item.id })),
+    complejos: (lookups.complejos ?? []).flatMap((item) =>
+      item.institucion_id ? [{ id: item.id, institucion_id: item.institucion_id }] : [],
+    ),
+    torres: rows.value.flatMap((item) =>
+      config.value.key === 'torres' && typeof item.complejo_id === 'string'
+        ? [{ id: item.id, complejo_id: item.complejo_id }]
+        : [],
+    ),
+    pisos: (lookups.pisos ?? []).flatMap((item) =>
+      item.complejo_id && item.torre_id ? [{ id: item.id, complejo_id: item.complejo_id, torre_id: item.torre_id }] : [],
+    ),
+    consultorios: (lookups.consultorios ?? []).flatMap((item) =>
+      item.complejo_id && item.piso_id ? [{ id: item.id, complejo_id: item.complejo_id, piso_id: item.piso_id }] : [],
+    ),
+  }),
+);
+
+const userScopedRows = computed(() => {
+  if (config.value.key === 'torres') {
+    return filterTorresByUserAssignment(rows.value, userLocationScope.value);
+  }
+  return rows.value;
+});
+
+const displayedRows = computed(() => userScopedRows.value.filter(rowMatchesLocation));
 
 const submitDisabled = computed(() => {
   if (loading.value) return true;
@@ -427,6 +463,13 @@ async function loadLookups() {
     keys.add('instituciones');
     keys.add('complejos');
   }
+  if (isUserAssignmentScoped.value) {
+    keys.add('instituciones');
+    keys.add('complejos');
+    keys.add('torres');
+    keys.add('pisos');
+    keys.add('consultorios');
+  }
   for (const field of config.value.fields) {
     if (field.lookup) {
       keys.add(field.lookup);
@@ -448,11 +491,22 @@ async function loadRows() {
   rows.value = await listResource<Row>(config.value.resource);
 }
 
+async function loadUserAssignments() {
+  if (!isUserAssignmentScoped.value) {
+    currentUser.value = null;
+    usuarioRoles.value = [];
+    return;
+  }
+  const scopeData = await loadCurrentUserLocationAssignments();
+  currentUser.value = scopeData.currentUser;
+  usuarioRoles.value = scopeData.usuarioRoles;
+}
+
 async function loadData() {
   loading.value = true;
   error.value = '';
   try {
-    await Promise.all([loadLookups(), loadRows()]);
+    await Promise.all([loadLookups(), loadRows(), loadUserAssignments()]);
     resetForm();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar el catálogo.';
@@ -484,6 +538,19 @@ function fieldAutocomplete(field: CatalogField) {
     return 'off';
   }
   return undefined;
+}
+
+function fieldDatalistId(field: CatalogField) {
+  return config.value.key === 'torres' && field.name === 'nombre' ? `${fieldId(field)}-options` : undefined;
+}
+
+function textAutocompleteOptions(field: CatalogField) {
+  if (config.value.key !== 'torres' || field.name !== 'nombre') {
+    return [];
+  }
+  return [...new Set(scopedTorres.value.map((item) => item.label))]
+    .filter((option) => option !== fieldValue(field.name))
+    .sort((left, right) => left.localeCompare(right, 'es', { sensitivity: 'base' }));
 }
 
 function selectOptions(field: CatalogField): SelectOption[] {
@@ -851,6 +918,7 @@ onMounted(loadData);
             v-else
             :id="fieldId(field)"
             :autocomplete="fieldAutocomplete(field)"
+            :list="fieldDatalistId(field)"
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
             :minlength="field.minLength"
@@ -861,6 +929,9 @@ onMounted(loadData);
             :type="fieldInputType(field)"
             @input="updateField(field.name, $event)"
           />
+          <datalist v-if="textAutocompleteOptions(field).length" :id="fieldDatalistId(field)">
+            <option v-for="option in textAutocompleteOptions(field)" :key="option" :value="option" />
+          </datalist>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
         <div class="actions-row">

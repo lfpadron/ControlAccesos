@@ -167,8 +167,12 @@ def update_profile(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user),
 ) -> UsuarioRead:
-    before = {"correo_alterno": current_user.correo_alterno}
-    current_user.correo_alterno = normalize_profile_email(payload.correo_alterno)
+    before = {"correo_alterno": current_user.correo_alterno, "telefono": current_user.telefono}
+    data = payload.model_dump(exclude_unset=True)
+    if "correo_alterno" in data:
+        current_user.correo_alterno = normalize_profile_email(data["correo_alterno"])
+    if "telefono" in data:
+        current_user.telefono = str(data["telefono"]).strip() if data["telefono"] is not None else None
     db.flush()
     record_audit_event(
         db,
@@ -179,7 +183,7 @@ def update_profile(
         canal="WEB",
         ip_origen=request.client.host if request.client else None,
         valor_antes=before,
-        valor_despues={"correo_alterno": current_user.correo_alterno},
+        valor_despues={"correo_alterno": current_user.correo_alterno, "telefono": current_user.telefono},
     )
     db.commit()
     db.refresh(current_user)

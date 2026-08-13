@@ -537,7 +537,7 @@ export function getCurrentUser() {
   return apiFetch<Usuario>('/auth/me');
 }
 
-export function updateMyProfile(payload: { correo_alterno?: string | null }) {
+export function updateMyProfile(payload: { correo_alterno?: string | null; telefono?: string | null }) {
   return apiFetch<Usuario>('/auth/me', {
     method: 'PATCH',
     body: JSON.stringify(payload),
