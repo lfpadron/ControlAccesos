@@ -51,6 +51,7 @@ from app.services.access_scope import (
     paciente_access_predicate,
     piso_catalog_access_predicate,
 )
+from app.services.medico_sync import sync_medicos_for_medico_users
 from app.services.checkin_service import checkin_window_status
 from app.services.folio_service import generate_patient_folio, generate_turn_folio
 from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, now_utc, token_digest, validate_qr
@@ -185,6 +186,8 @@ def list_medicos_operativos(
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Medico]:
+    if sync_medicos_for_medico_users(db, business_today()):
+        db.commit()
     query = (
         select(Medico)
         .where(Medico.activo.is_(True), medico_catalog_access_predicate(db, current_user, business_today()))

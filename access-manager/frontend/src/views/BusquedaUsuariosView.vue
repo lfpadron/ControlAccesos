@@ -10,6 +10,7 @@ import {
   listOperadores,
   listPisos,
   listRoles,
+  listTorres,
   listUsuarioRoles,
   listUsuarios,
   type AsignacionMedicoConsultorio,
@@ -21,6 +22,7 @@ import {
   type Operador,
   type Piso,
   type Role,
+  type Torre,
   type Usuario,
   type UsuarioRol,
 } from '../api/client';
@@ -29,12 +31,14 @@ import { exportRows, type ExportFormat } from '../exporters';
 type ActiveFilter = 'todos' | 'activos' | 'inactivos';
 type UserRow = Record<string, unknown> & {
   id: string;
+  apellidos: string;
   nombre: string;
   email: string;
   roles: string;
   estado: string;
   instituciones: string;
   complejos: string;
+  torres: string;
   pisos: string;
 };
 
@@ -43,6 +47,7 @@ const roles = ref<Role[]>([]);
 const usuarioRoles = ref<UsuarioRol[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const consultorios = ref<Consultorio[]>([]);
 const medicos = ref<Medico[]>([]);
@@ -128,15 +133,39 @@ function userScope(usuario: Usuario) {
   const roleIds = new Set(roleRows.map((item) => item.rol_id));
   const institucionIds = new Set(roleRows.map((item) => item.institucion_id).filter(Boolean) as string[]);
   const complejoIds = new Set(roleRows.map((item) => item.complejo_id).filter(Boolean) as string[]);
+  const torreIds = new Set(roleRows.map((item) => item.torre_id).filter(Boolean) as string[]);
   const pisoIds = new Set<string>();
+
+  for (const roleRow of roleRows) {
+    if (roleRow.torre_id) {
+      const torre = torres.value.find((item) => item.id === roleRow.torre_id);
+      if (torre) complejoIds.add(torre.complejo_id);
+    }
+    if (roleRow.piso_id) {
+      const piso = pisos.value.find((item) => item.id === roleRow.piso_id);
+      pisoIds.add(roleRow.piso_id);
+      if (piso) torreIds.add(piso.torre_id);
+    }
+    if (roleRow.consultorio_id) {
+      const consultorio = consultorios.value.find((item) => item.id === roleRow.consultorio_id);
+      const piso = consultorio ? pisos.value.find((item) => item.id === consultorio.piso_id) : null;
+      if (consultorio) {
+        complejoIds.add(consultorio.complejo_id);
+        pisoIds.add(consultorio.piso_id);
+      }
+      if (piso) torreIds.add(piso.torre_id);
+    }
+  }
 
   const medicoIds = medicos.value.filter((item) => item.usuario_id === usuario.id).map((item) => item.id);
   for (const asignacion of asignacionesMedico.value.filter((item) => medicoIds.includes(item.medico_id) && item.activo)) {
     const consultorio = consultorios.value.find((item) => item.id === asignacion.consultorio_id);
+    const piso = consultorio ? pisos.value.find((item) => item.id === consultorio.piso_id) : null;
     if (consultorio) {
       complejoIds.add(consultorio.complejo_id);
       pisoIds.add(consultorio.piso_id);
     }
+    if (piso) torreIds.add(piso.torre_id);
   }
 
   const operadorIds = operadores.value.filter((item) => item.usuario_id === usuario.id).map((item) => item.id);
@@ -144,8 +173,20 @@ function userScope(usuario: Usuario) {
     complejoIds.add(asignacion.complejo_id);
     if (asignacion.consultorio_id) {
       const consultorio = consultorios.value.find((item) => item.id === asignacion.consultorio_id);
+      const piso = consultorio ? pisos.value.find((item) => item.id === consultorio.piso_id) : null;
       if (consultorio) pisoIds.add(consultorio.piso_id);
+      if (piso) torreIds.add(piso.torre_id);
     }
+  }
+
+  for (const pisoId of pisoIds) {
+    const piso = pisos.value.find((item) => item.id === pisoId);
+    if (piso) torreIds.add(piso.torre_id);
+  }
+
+  for (const torreId of torreIds) {
+    const torre = torres.value.find((item) => item.id === torreId);
+    if (torre) complejoIds.add(torre.complejo_id);
   }
 
   for (const complejoId of complejoIds) {
@@ -153,7 +194,7 @@ function userScope(usuario: Usuario) {
     if (complejo) institucionIds.add(complejo.institucion_id);
   }
 
-  return { roleIds, institucionIds, complejoIds, pisoIds };
+  return { roleIds, institucionIds, complejoIds, torreIds, pisoIds };
 }
 
 function medicoText(usuario: Usuario) {
@@ -176,7 +217,7 @@ function passesFilters(usuario: Usuario) {
   }
   const terms = query.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
-  const haystack = `${usuario.nombre} ${usuario.email} ${medicoText(usuario)}`.toLowerCase();
+  const haystack = `${usuario.apellidos} ${usuario.nombre} ${usuario.email} ${medicoText(usuario)}`.toLowerCase();
   return terms.every((term) => haystack.includes(term));
 }
 
@@ -185,12 +226,14 @@ const filteredRows = computed<UserRow[]>(() =>
     const scope = userScope(usuario);
     return {
       id: usuario.id,
+      apellidos: usuario.apellidos,
       nombre: usuario.nombre,
       email: usuario.email,
       roles: [...scope.roleIds].map(roleName).sort().join(', ') || '-',
       estado: usuario.estado,
       instituciones: uniqueNames(scope.institucionIds, instituciones.value, (item: Institucion) => item.nombre).join(', ') || '-',
       complejos: uniqueNames(scope.complejoIds, complejos.value, (item: Complejo) => item.nombre).join(', ') || '-',
+      torres: uniqueNames(scope.torreIds, torres.value, (item: Torre) => item.nombre).join(', ') || '-',
       pisos: uniqueNames(scope.pisoIds, pisos.value, pisoLabel).join(', ') || '-',
     };
   }),
@@ -200,12 +243,14 @@ const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.lengt
 const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 
 const columns = [
+  { key: 'apellidos', label: 'Apellido' },
   { key: 'nombre', label: 'Nombre' },
   { key: 'email', label: 'Correo' },
   { key: 'roles', label: 'Roles' },
   { key: 'estado', label: 'Estado' },
   { key: 'instituciones', label: 'Instituciones' },
   { key: 'complejos', label: 'Campus' },
+  { key: 'torres', label: 'Torre' },
   { key: 'pisos', label: 'Pisos' },
 ];
 
@@ -219,6 +264,7 @@ async function loadData() {
       usuarioRolesData,
       institucionesData,
       complejosData,
+      torresData,
       pisosData,
       consultoriosData,
       medicosData,
@@ -231,6 +277,7 @@ async function loadData() {
       listUsuarioRoles(),
       listInstituciones(),
       listComplejos(),
+      listTorres(),
       listPisos(),
       listConsultorios(),
       listMedicos(),
@@ -243,6 +290,7 @@ async function loadData() {
     usuarioRoles.value = usuarioRolesData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = torresData;
     pisos.value = pisosData;
     consultorios.value = consultoriosData;
     medicos.value = medicosData;

@@ -76,6 +76,7 @@ from app.schemas.operational import (
 )
 from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
 from app.services.audit_service import audit_safe_dict, record_audit_event
+from app.services.medico_sync import sync_medicos_for_medico_users
 
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
 ACCESS_LEVELS = {"sin", "consultar", "editar"}
@@ -571,6 +572,16 @@ def prepare_usuario_update(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def post_save_usuario(db: Session, item: object) -> None:
+    if isinstance(item, Usuario):
+        sync_medicos_for_medico_users(db, user_id=item.id)
+
+
+def post_save_usuario_rol(db: Session, item: object) -> None:
+    if isinstance(item, UsuarioRol):
+        sync_medicos_for_medico_users(db, user_id=item.usuario_id)
+
+
 def create_crud_router(config: CrudConfig) -> APIRouter:
     router = APIRouter()
 
@@ -579,6 +590,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         db: Session = Depends(get_db),
         _current_user: Usuario = AdminUser,
     ) -> list:
+        if config.model is Medico and sync_medicos_for_medico_users(db):
+            db.commit()
         order_column = getattr(config.model, config.order_field)
         items = list(db.execute(select(config.model).order_by(order_column)).scalars())
         if config.response_factory:
@@ -756,10 +769,22 @@ usuarios_router = create_crud_router(
         validate_unique_email,
         prepare_usuario_create,
         prepare_usuario_update,
+        post_save=post_save_usuario,
     )
 )
 usuario_roles_router = create_crud_router(
-    CrudConfig(UsuarioRol, UsuarioRolCreate, UsuarioRolUpdate, UsuarioRolRead, "usuario_roles", "ROL_ASIGNADO", "ROL_ASIGNADO_EDITADO", "created_at", validator=validate_usuario_rol)
+    CrudConfig(
+        UsuarioRol,
+        UsuarioRolCreate,
+        UsuarioRolUpdate,
+        UsuarioRolRead,
+        "usuario_roles",
+        "ROL_ASIGNADO",
+        "ROL_ASIGNADO_EDITADO",
+        "created_at",
+        validator=validate_usuario_rol,
+        post_save=post_save_usuario_rol,
+    )
 )
 torres_router = create_crud_router(
     CrudConfig(
