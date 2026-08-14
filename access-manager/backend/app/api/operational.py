@@ -17,6 +17,7 @@ from app.core.security import hash_password, require_role
 from app.models.auditoria import Auditoria
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
+from app.models.flow import Cita
 from app.models.institucion import Institucion
 from app.models.operational import (
     AsignacionMedicoConsultorio,
@@ -76,7 +77,7 @@ from app.schemas.operational import (
 )
 from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
 from app.services.audit_service import audit_safe_dict, record_audit_event
-from app.services.medico_sync import sync_medicos_for_medico_users
+from app.services.medico_sync import refresh_turnos_for_citas, sync_medicos_for_medico_users
 
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
 ACCESS_LEVELS = {"sin", "consultar", "editar"}
@@ -582,6 +583,12 @@ def post_save_usuario_rol(db: Session, item: object) -> None:
         sync_medicos_for_medico_users(db, user_id=item.usuario_id)
 
 
+def post_save_medico(db: Session, item: object) -> None:
+    if isinstance(item, Medico):
+        cita_ids = set(db.execute(select(Cita.id).where(Cita.medico_id == item.id)).scalars())
+        refresh_turnos_for_citas(db, cita_ids)
+
+
 def create_crud_router(config: CrudConfig) -> APIRouter:
     router = APIRouter()
 
@@ -658,6 +665,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
         before = {**audit_safe_dict(item), **before_extra}
         payload = validate_payload(config.update_schema, payload_data)
         data = payload.model_dump(exclude_unset=True)
+        if isinstance(item, Usuario):
+            sync_medicos_for_medico_users(db, user_id=item.id)
         if config.prepare_update:
             data = config.prepare_update(data)
         if config.validator:
@@ -863,7 +872,18 @@ consultorios_router = create_crud_router(
     )
 )
 medicos_router = create_crud_router(
-    CrudConfig(Medico, MedicoCreate, MedicoUpdate, MedicoRead, "medicos", "MEDICO_CREADO", "MEDICO_EDITADO", "apellidos", validator=validate_medico)
+    CrudConfig(
+        Medico,
+        MedicoCreate,
+        MedicoUpdate,
+        MedicoRead,
+        "medicos",
+        "MEDICO_CREADO",
+        "MEDICO_EDITADO",
+        "apellidos",
+        validator=validate_medico,
+        post_save=post_save_medico,
+    )
 )
 operadores_router = create_crud_router(
     CrudConfig(Operador, OperadorCreate, OperadorUpdate, OperadorRead, "operadores", "OPERADOR_CREADO", "OPERADOR_EDITADO", "created_at", validator=validate_operador)

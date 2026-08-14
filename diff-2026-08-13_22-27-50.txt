@@ -1,0 +1,575 @@
+diff --git a/access-manager/backend/alembic/versions/202608130001_sync_medicos_from_medico_roles.py b/access-manager/backend/alembic/versions/202608130001_sync_medicos_from_medico_roles.py
+index afde492..6107f36 100644
+--- a/access-manager/backend/alembic/versions/202608130001_sync_medicos_from_medico_roles.py
++++ b/access-manager/backend/alembic/versions/202608130001_sync_medicos_from_medico_roles.py
+@@ -17,6 +17,84 @@ depends_on = None
+ 
+ def upgrade() -> None:
+     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
++    op.execute(
++        """
++        UPDATE medicos
++        SET
++            usuario_id = usuarios.id,
++            nombre = usuarios.nombre,
++            apellidos = usuarios.apellidos,
++            nombre_visible = NULL,
++            activo = true,
++            updated_at = now()
++        FROM usuario_roles
++        JOIN roles ON roles.id = usuario_roles.rol_id
++        JOIN usuarios ON usuarios.id = usuario_roles.usuario_id
++        WHERE medicos.id = usuario_roles.medico_id
++          AND roles.codigo = 'MEDICO'
++          AND roles.activo IS TRUE
++          AND usuario_roles.activo IS TRUE
++          AND usuario_roles.fecha_inicio <= CURRENT_DATE
++          AND (usuario_roles.fecha_fin IS NULL OR usuario_roles.fecha_fin >= CURRENT_DATE)
++          AND upper(usuarios.estado) = 'ACTIVO'
++        """
++    )
++    op.execute(
++        """
++        WITH medico_users AS (
++            SELECT DISTINCT usuarios.id, usuarios.nombre, usuarios.apellidos, usuarios.email
++            FROM usuarios
++            JOIN usuario_roles ON usuario_roles.usuario_id = usuarios.id
++            JOIN roles ON roles.id = usuario_roles.rol_id
++            WHERE roles.codigo = 'MEDICO'
++              AND roles.activo IS TRUE
++              AND usuario_roles.activo IS TRUE
++              AND usuario_roles.fecha_inicio <= CURRENT_DATE
++              AND (usuario_roles.fecha_fin IS NULL OR usuario_roles.fecha_fin >= CURRENT_DATE)
++              AND upper(usuarios.estado) = 'ACTIVO'
++        ),
++        matches AS (
++            SELECT DISTINCT ON (medicos.id)
++                medicos.id AS medico_id,
++                medico_users.id AS usuario_id,
++                medico_users.nombre,
++                medico_users.apellidos
++            FROM medicos
++            JOIN medico_users ON (
++                regexp_replace(
++                    lower(translate(coalesce(medicos.nombre, '') || ' ' || coalesce(medicos.apellidos, ''), 'áéíóúüñÁÉÍÓÚÜÑ', 'aeiouunAEIOUUN')),
++                    '[^a-z0-9]+',
++                    ' ',
++                    'g'
++                ) = regexp_replace(lower(split_part(medico_users.email, '@', 1)), '[^a-z0-9]+', ' ', 'g')
++                OR regexp_replace(
++                    lower(translate(coalesce(medico_users.nombre, '') || ' ' || coalesce(medico_users.apellidos, ''), 'áéíóúüñÁÉÍÓÚÜÑ', 'aeiouunAEIOUUN')),
++                    '[^a-z0-9]+',
++                    ' ',
++                    'g'
++                ) = regexp_replace(
++                    lower(translate(coalesce(medicos.nombre, '') || ' ' || coalesce(medicos.apellidos, ''), 'áéíóúüñÁÉÍÓÚÜÑ', 'aeiouunAEIOUUN')),
++                    '[^a-z0-9]+',
++                    ' ',
++                    'g'
++                )
++            )
++            WHERE medicos.usuario_id IS NULL
++              AND medicos.activo IS TRUE
++            ORDER BY medicos.id
++        )
++        UPDATE medicos
++        SET
++            usuario_id = matches.usuario_id,
++            nombre = matches.nombre,
++            apellidos = matches.apellidos,
++            nombre_visible = NULL,
++            activo = true,
++            updated_at = now()
++        FROM matches
++        WHERE medicos.id = matches.medico_id
++        """
++    )
+     op.execute(
+         """
+         INSERT INTO medicos (id, usuario_id, nombre, apellidos, nombre_visible, plantilla_turno, activo, created_at, updated_at)
+@@ -47,6 +125,181 @@ def upgrade() -> None:
+         GROUP BY usuarios.id, usuarios.nombre, usuarios.apellidos
+         """
+     )
++    op.execute(
++        """
++        CREATE TEMP TABLE tmp_medico_duplicates ON COMMIT DROP AS
++        WITH scored AS (
++            SELECT
++                medicos.id,
++                medicos.usuario_id,
++                (
++                    (SELECT count(*) FROM medico_pacientes WHERE medico_pacientes.medico_id = medicos.id) +
++                    (SELECT count(*) FROM citas WHERE citas.medico_id = medicos.id) +
++                    (SELECT count(*) FROM usuario_roles WHERE usuario_roles.medico_id = medicos.id) +
++                    (SELECT count(*) FROM asignaciones_medico_consultorio WHERE asignaciones_medico_consultorio.medico_id = medicos.id) +
++                    (SELECT count(*) FROM asignaciones_operador WHERE asignaciones_operador.medico_id = medicos.id)
++                ) AS refs,
++                row_number() OVER (
++                    PARTITION BY medicos.usuario_id
++                    ORDER BY
++                        (
++                            (SELECT count(*) FROM medico_pacientes WHERE medico_pacientes.medico_id = medicos.id) +
++                            (SELECT count(*) FROM citas WHERE citas.medico_id = medicos.id) +
++                            (SELECT count(*) FROM usuario_roles WHERE usuario_roles.medico_id = medicos.id) +
++                            (SELECT count(*) FROM asignaciones_medico_consultorio WHERE asignaciones_medico_consultorio.medico_id = medicos.id) +
++                            (SELECT count(*) FROM asignaciones_operador WHERE asignaciones_operador.medico_id = medicos.id)
++                        ) DESC,
++                        medicos.activo DESC,
++                        medicos.updated_at DESC,
++                        medicos.id
++                ) AS rn
++            FROM medicos
++            WHERE medicos.usuario_id IS NOT NULL
++        ),
++        canonical AS (
++            SELECT usuario_id, id AS target_id
++            FROM scored
++            WHERE rn = 1
++        )
++        SELECT scored.id AS source_id, canonical.target_id
++        FROM scored
++        JOIN canonical ON canonical.usuario_id = scored.usuario_id
++        WHERE scored.rn > 1
++        """
++    )
++    op.execute(
++        """
++        DELETE FROM medico_pacientes
++        USING tmp_medico_duplicates
++        WHERE medico_pacientes.medico_id = tmp_medico_duplicates.source_id
++          AND EXISTS (
++              SELECT 1
++              FROM medico_pacientes target
++              WHERE target.medico_id = tmp_medico_duplicates.target_id
++                AND target.paciente_id = medico_pacientes.paciente_id
++          )
++        """
++    )
++    op.execute(
++        """
++        UPDATE medico_pacientes
++        SET medico_id = tmp_medico_duplicates.target_id
++        FROM tmp_medico_duplicates
++        WHERE medico_pacientes.medico_id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE citas
++        SET medico_id = tmp_medico_duplicates.target_id
++        FROM tmp_medico_duplicates
++        WHERE citas.medico_id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE usuario_roles
++        SET medico_id = tmp_medico_duplicates.target_id
++        FROM tmp_medico_duplicates
++        WHERE usuario_roles.medico_id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE asignaciones_medico_consultorio
++        SET medico_id = tmp_medico_duplicates.target_id
++        FROM tmp_medico_duplicates
++        WHERE asignaciones_medico_consultorio.medico_id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE asignaciones_operador
++        SET medico_id = tmp_medico_duplicates.target_id
++        FROM tmp_medico_duplicates
++        WHERE asignaciones_operador.medico_id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE medicos AS target
++        SET plantilla_turno = source.plantilla_turno, updated_at = now()
++        FROM tmp_medico_duplicates
++        JOIN medicos AS source ON source.id = tmp_medico_duplicates.source_id
++        WHERE target.id = tmp_medico_duplicates.target_id
++          AND target.plantilla_turno = 'PACIENTE_CONSULTORIO'
++          AND source.plantilla_turno <> 'PACIENTE_CONSULTORIO'
++        """
++    )
++    op.execute(
++        """
++        UPDATE medicos
++        SET usuario_id = NULL, activo = false, updated_at = now()
++        FROM tmp_medico_duplicates
++        WHERE medicos.id = tmp_medico_duplicates.source_id
++        """
++    )
++    op.execute(
++        """
++        UPDATE medicos
++        SET nombre = usuarios.nombre, apellidos = usuarios.apellidos, nombre_visible = NULL, activo = true, updated_at = now()
++        FROM usuarios
++        WHERE medicos.usuario_id = usuarios.id
++        """
++    )
++    op.execute(
++        """
++        WITH rendered AS (
++            SELECT
++                turnos_display.id,
++                citas.folio_turno,
++                medicos.plantilla_turno,
++                coalesce(consultorios.nombre_visible, consultorios.codigo, 'Consultorio') AS consultorio_label,
++                btrim(
++                    concat(
++                        coalesce(nullif(pacientes.nombre_preferido, ''), nullif(pacientes.nombre, ''), 'Paciente'),
++                        ' ',
++                        upper(left(coalesce(pacientes.apellido_paterno, ''), 1)),
++                        '*'
++                    )
++                ) AS patient_text
++            FROM turnos_display
++            JOIN citas ON citas.id = turnos_display.cita_id
++            JOIN medicos ON medicos.id = citas.medico_id
++            LEFT JOIN pacientes ON pacientes.id = citas.paciente_id
++            LEFT JOIN consultorios ON consultorios.id = citas.consultorio_id
++        ),
++        destinations AS (
++            SELECT
++                id,
++                folio_turno,
++                plantilla_turno,
++                consultorio_label,
++                patient_text,
++                CASE
++                    WHEN lower(left(consultorio_label, 11)) = 'consultorio'
++                    THEN 'consultorio' || substring(consultorio_label FROM 12)
++                    ELSE 'consultorio ' || consultorio_label
++                END AS destination_text
++            FROM rendered
++        )
++        UPDATE turnos_display
++        SET
++            consultorio = destinations.consultorio_label,
++            texto_visible = CASE destinations.plantilla_turno
++                WHEN 'TURNO_PACIENTE_CONSULTORIO'
++                THEN 'Turno ' || destinations.folio_turno || ' del paciente ' || destinations.patient_text || ' a ' || destinations.destination_text
++                WHEN 'PACIENTE_TURNO_CONSULTORIO'
++                THEN 'Paciente ' || destinations.patient_text || ' con turno ' || destinations.folio_turno || ' a ' || destinations.destination_text
++                WHEN 'TURNO_CONSULTORIO'
++                THEN 'Turno ' || destinations.folio_turno || ' a ' || destinations.destination_text
++                ELSE 'Paciente ' || destinations.patient_text || ' a ' || destinations.destination_text
++            END,
++            updated_at = now()
++        FROM destinations
++        WHERE turnos_display.id = destinations.id
++        """
++    )
+ 
+ 
+ def downgrade() -> None:
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index e5c9f14..14592f0 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -17,6 +17,7 @@ from app.core.security import hash_password, require_role
+ from app.models.auditoria import Auditoria
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
++from app.models.flow import Cita
+ from app.models.institucion import Institucion
+ from app.models.operational import (
+     AsignacionMedicoConsultorio,
+@@ -76,7 +77,7 @@ from app.schemas.operational import (
+ )
+ from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+-from app.services.medico_sync import sync_medicos_for_medico_users
++from app.services.medico_sync import refresh_turnos_for_citas, sync_medicos_for_medico_users
+ 
+ AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
+ ACCESS_LEVELS = {"sin", "consultar", "editar"}
+@@ -582,6 +583,12 @@ def post_save_usuario_rol(db: Session, item: object) -> None:
+         sync_medicos_for_medico_users(db, user_id=item.usuario_id)
+ 
+ 
++def post_save_medico(db: Session, item: object) -> None:
++    if isinstance(item, Medico):
++        cita_ids = set(db.execute(select(Cita.id).where(Cita.medico_id == item.id)).scalars())
++        refresh_turnos_for_citas(db, cita_ids)
++
++
+ def create_crud_router(config: CrudConfig) -> APIRouter:
+     router = APIRouter()
+ 
+@@ -658,6 +665,8 @@ def create_crud_router(config: CrudConfig) -> APIRouter:
+         before = {**audit_safe_dict(item), **before_extra}
+         payload = validate_payload(config.update_schema, payload_data)
+         data = payload.model_dump(exclude_unset=True)
++        if isinstance(item, Usuario):
++            sync_medicos_for_medico_users(db, user_id=item.id)
+         if config.prepare_update:
+             data = config.prepare_update(data)
+         if config.validator:
+@@ -863,7 +872,18 @@ consultorios_router = create_crud_router(
+     )
+ )
+ medicos_router = create_crud_router(
+-    CrudConfig(Medico, MedicoCreate, MedicoUpdate, MedicoRead, "medicos", "MEDICO_CREADO", "MEDICO_EDITADO", "apellidos", validator=validate_medico)
++    CrudConfig(
++        Medico,
++        MedicoCreate,
++        MedicoUpdate,
++        MedicoRead,
++        "medicos",
++        "MEDICO_CREADO",
++        "MEDICO_EDITADO",
++        "apellidos",
++        validator=validate_medico,
++        post_save=post_save_medico,
++    )
+ )
+ operadores_router = create_crud_router(
+     CrudConfig(Operador, OperadorCreate, OperadorUpdate, OperadorRead, "operadores", "OPERADOR_CREADO", "OPERADOR_EDITADO", "created_at", validator=validate_operador)
+diff --git a/access-manager/backend/app/services/medico_sync.py b/access-manager/backend/app/services/medico_sync.py
+index d3b0025..952efe4 100644
+--- a/access-manager/backend/app/services/medico_sync.py
++++ b/access-manager/backend/app/services/medico_sync.py
+@@ -3,13 +3,189 @@ from __future__ import annotations
+ from datetime import date
+ from uuid import UUID
+ 
+-from sqlalchemy import func, or_, select
++from sqlalchemy import func, or_, select, update
+ from sqlalchemy.orm import Session
+ 
+-from app.models.operational import Medico, Role, UsuarioRol
++from app.constants import (
++    TURNO_TEMPLATE_DEFAULT,
++    TURNO_TEMPLATE_PATIENT_CONSULTORIO,
++    TURNO_TEMPLATE_PATIENT_TURNO_CONSULTORIO,
++    TURNO_TEMPLATE_TURNO_CONSULTORIO,
++    TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO,
++)
++from app.models.display import TurnoDisplay
++from app.models.flow import Cita, MedicoPaciente, Paciente
++from app.models.operational import AsignacionMedicoConsultorio, AsignacionOperador, Consultorio, Medico, Role, UsuarioRol
+ from app.models.usuario import Usuario
+ 
+ 
++def normalize_identity(value: str | None) -> str:
++    import re
++    import unicodedata
++
++    normalized = unicodedata.normalize("NFD", value or "")
++    without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
++    alphanumeric_words = re.sub(r"[^a-zA-Z0-9]+", " ", without_accents)
++    return " ".join(alphanumeric_words.lower().split())
++
++
++def medico_identity_values(medico: Medico) -> set[str]:
++    first_last = normalize_identity(f"{medico.nombre} {medico.apellidos}")
++    last_first = normalize_identity(f"{medico.apellidos} {medico.nombre}")
++    visible = normalize_identity(medico.nombre_visible)
++    return {value for value in (first_last, last_first, visible) if value}
++
++
++def user_identity_values(user: Usuario) -> set[str]:
++    email_local = str(user.email).split("@", 1)[0]
++    return {
++        value
++        for value in (
++            normalize_identity(f"{user.nombre} {user.apellidos}"),
++            normalize_identity(f"{user.apellidos} {user.nombre}"),
++            normalize_identity(email_local),
++        )
++        if value
++    }
++
++
++def consultorio_label(consultorio: Consultorio | None) -> str:
++    if consultorio is None:
++        return "Consultorio"
++    return consultorio.nombre_visible or consultorio.codigo
++
++
++def consultorio_destination_text(label: str) -> str:
++    text = label.strip()
++    if text.lower().startswith("consultorio"):
++        return f"consultorio{text[len('consultorio'):]}"
++    return f"consultorio {text}"
++
++
++def patient_turn_text(paciente: Paciente | None) -> str:
++    if paciente is None:
++        return "Paciente *"
++    name = (paciente.nombre_preferido or paciente.nombre or "Paciente").strip()
++    paternal_initial = (paciente.apellido_paterno or "").strip()[:1].upper()
++    return f"{name} {paternal_initial}*".strip()
++
++
++def render_turno_text(db: Session, cita: Cita) -> str:
++    medico = db.get(Medico, cita.medico_id)
++    paciente = db.get(Paciente, cita.paciente_id)
++    consultorio = db.get(Consultorio, cita.consultorio_id)
++    template = getattr(medico, "plantilla_turno", None) or TURNO_TEMPLATE_DEFAULT
++    patient = patient_turn_text(paciente)
++    destination = consultorio_destination_text(consultorio_label(consultorio))
++
++    if template == TURNO_TEMPLATE_TURNO_PATIENT_CONSULTORIO:
++        return f"Turno {cita.folio_turno} del paciente {patient} a {destination}"
++    if template == TURNO_TEMPLATE_PATIENT_TURNO_CONSULTORIO:
++        return f"Paciente {patient} con turno {cita.folio_turno} a {destination}"
++    if template == TURNO_TEMPLATE_TURNO_CONSULTORIO:
++        return f"Turno {cita.folio_turno} a {destination}"
++    if template == TURNO_TEMPLATE_PATIENT_CONSULTORIO:
++        return f"Paciente {patient} a {destination}"
++    return f"Paciente {patient} a {destination}"
++
++
++def refresh_turnos_for_citas(db: Session, cita_ids: set[UUID]) -> None:
++    if not cita_ids:
++        return
++    rows = db.execute(select(TurnoDisplay).where(TurnoDisplay.cita_id.in_(cita_ids))).scalars()
++    for row in rows:
++        if row.cita_id is None:
++            continue
++        cita = db.get(Cita, row.cita_id)
++        if cita is None:
++            continue
++        consultorio = db.get(Consultorio, cita.consultorio_id)
++        row.consultorio = consultorio_label(consultorio)
++        row.texto_visible = render_turno_text(db, cita)
++
++
++def medico_reference_count(db: Session, medico_id: UUID) -> int:
++    counts = [
++        select(func.count()).select_from(MedicoPaciente).where(MedicoPaciente.medico_id == medico_id),
++        select(func.count()).select_from(Cita).where(Cita.medico_id == medico_id),
++        select(func.count()).select_from(UsuarioRol).where(UsuarioRol.medico_id == medico_id),
++        select(func.count()).select_from(AsignacionMedicoConsultorio).where(AsignacionMedicoConsultorio.medico_id == medico_id),
++        select(func.count()).select_from(AsignacionOperador).where(AsignacionOperador.medico_id == medico_id),
++    ]
++    return sum(int(db.execute(query).scalar_one()) for query in counts)
++
++
++def candidate_medicos_for_user(db: Session, user: Usuario, today: date) -> list[Medico]:
++    role_medico_ids = set(
++        db.execute(
++            select(UsuarioRol.medico_id)
++            .join(Role, Role.id == UsuarioRol.rol_id)
++            .where(
++                UsuarioRol.usuario_id == user.id,
++                UsuarioRol.activo.is_(True),
++                UsuarioRol.fecha_inicio <= today,
++                or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++                UsuarioRol.medico_id.is_not(None),
++                Role.codigo == "MEDICO",
++                Role.activo.is_(True),
++            )
++        ).scalars()
++    )
++    candidates_by_id: dict[UUID, Medico] = {}
++    for medico in db.execute(select(Medico).where(Medico.usuario_id == user.id)).scalars():
++        candidates_by_id[medico.id] = medico
++    if role_medico_ids:
++        for medico in db.execute(select(Medico).where(Medico.id.in_(role_medico_ids))).scalars():
++            candidates_by_id[medico.id] = medico
++
++    user_identities = user_identity_values(user)
++    unlinked = db.execute(select(Medico).where(Medico.usuario_id.is_(None), Medico.activo.is_(True))).scalars()
++    for medico in unlinked:
++        if user_identities & medico_identity_values(medico):
++            candidates_by_id[medico.id] = medico
++
++    return list(candidates_by_id.values())
++
++
++def choose_canonical_medico(db: Session, candidates: list[Medico]) -> Medico | None:
++    if not candidates:
++        return None
++    return max(
++        candidates,
++        key=lambda medico: (
++            medico_reference_count(db, medico.id),
++            bool(medico.usuario_id),
++            bool(medico.activo),
++            medico.updated_at,
++        ),
++    )
++
++
++def merge_medico_into(db: Session, source: Medico, target: Medico) -> set[UUID]:
++    if source.id == target.id:
++        return set()
++    affected_cita_ids = set(db.execute(select(Cita.id).where(Cita.medico_id == source.id)).scalars())
++
++    paciente_rows = list(db.execute(select(MedicoPaciente).where(MedicoPaciente.medico_id == source.id)).scalars())
++    for row in paciente_rows:
++        target_row = db.get(MedicoPaciente, {"medico_id": target.id, "paciente_id": row.paciente_id})
++        if target_row is not None:
++            target_row.activo = target_row.activo or row.activo
++            db.delete(row)
++        else:
++            row.medico_id = target.id
++
++    db.execute(update(Cita).where(Cita.medico_id == source.id).values(medico_id=target.id))
++    db.execute(update(UsuarioRol).where(UsuarioRol.medico_id == source.id).values(medico_id=target.id))
++    db.execute(update(AsignacionMedicoConsultorio).where(AsignacionMedicoConsultorio.medico_id == source.id).values(medico_id=target.id))
++    db.execute(update(AsignacionOperador).where(AsignacionOperador.medico_id == source.id).values(medico_id=target.id))
++    if target.plantilla_turno == TURNO_TEMPLATE_DEFAULT and source.plantilla_turno != TURNO_TEMPLATE_DEFAULT:
++        target.plantilla_turno = source.plantilla_turno
++    source.usuario_id = None
++    source.activo = False
++    return affected_cita_ids
++
++
+ def sync_medicos_for_medico_users(db: Session, today: date | None = None, user_id: UUID | None = None) -> bool:
+     effective_today = today or date.today()
+     users_query = (
+@@ -31,25 +207,37 @@ def sync_medicos_for_medico_users(db: Session, today: date | None = None, user_i
+ 
+     changed = False
+     for user in db.execute(users_query).scalars().unique():
+-        medico = db.execute(
+-            select(Medico)
+-            .where(Medico.usuario_id == user.id)
+-            .order_by(Medico.activo.desc(), Medico.updated_at.desc(), Medico.id)
+-            .limit(1)
+-        ).scalar_one_or_none()
++        candidates = candidate_medicos_for_user(db, user, effective_today)
++        medico = choose_canonical_medico(db, candidates)
+         if medico is None:
+-            db.add(Medico(usuario_id=user.id, nombre=user.nombre, apellidos=user.apellidos, activo=True))
++            medico = Medico(usuario_id=user.id, nombre=user.nombre, apellidos=user.apellidos, activo=True)
++            db.add(medico)
+             changed = True
++            db.flush()
+             continue
++        affected_cita_ids = set(db.execute(select(Cita.id).where(Cita.medico_id == medico.id)).scalars())
++        for duplicate in candidates:
++            if duplicate.id == medico.id:
++                continue
++            affected_cita_ids.update(merge_medico_into(db, duplicate, medico))
++            changed = True
++        if medico.usuario_id != user.id:
++            medico.usuario_id = user.id
++            changed = True
+         if medico.nombre != user.nombre:
+             medico.nombre = user.nombre
+             changed = True
+         if medico.apellidos != user.apellidos:
+             medico.apellidos = user.apellidos
+             changed = True
++        if medico.nombre_visible is not None:
++            medico.nombre_visible = None
++            changed = True
+         if not medico.activo:
+             medico.activo = True
+             changed = True
++        if affected_cita_ids:
++            refresh_turnos_for_citas(db, affected_cita_ids)
+ 
+     if changed:
+         db.flush()
