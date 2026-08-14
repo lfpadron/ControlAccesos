@@ -1,0 +1,575 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 9a807f7..6df8ea9 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -24,9 +24,7 @@ MENU_SCREEN_KEYS = [
+     "torres",
+     "pisos",
+     "salas-espera",
+-    "clusters-turnos",
+     "consultorios",
+-    "consulta-clusters-consultorios",
+     "usuarios",
+     "busqueda-usuarios",
+     "roles",
+@@ -37,6 +35,8 @@ MENU_SCREEN_KEYS = [
+     "citas-hoy",
+     "contactos-institucionales",
+     "asignaciones",
++    "clusters-turnos",
++    "consulta-clusters-consultorios",
+     "pantallas-turnos",
+     "kioskos",
+     "turnos-llamados",
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 5908e13..5cae669 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -58,16 +58,35 @@ def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object
+     return item
+ 
+ 
++def unique_uuid_list(values: list[UUID]) -> list[UUID]:
++    unique: list[UUID] = []
++    seen: set[UUID] = set()
++    for value in values:
++        if value in seen:
++            continue
++        unique.append(value)
++        seen.add(value)
++    return unique
++
++
+ def cluster_ids_for_screen(db: Session, pantalla_id: UUID) -> list[UUID]:
+-    return list(
++    cluster_ids = list(
+         db.execute(select(PantallaTurnosCluster.cluster_id).where(PantallaTurnosCluster.pantalla_id == pantalla_id)).scalars()
+     )
++    screen = db.get(PantallaTurnos, pantalla_id)
++    if not cluster_ids and screen is not None and screen.cluster_espera_id is not None:
++        cluster_ids.append(screen.cluster_espera_id)
++    return unique_uuid_list(cluster_ids)
+ 
+ 
+ def replace_screen_clusters(db: Session, pantalla_id: UUID, cluster_ids: list[UUID]) -> None:
+-    db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == pantalla_id).delete()
++    cluster_ids = unique_uuid_list(cluster_ids)
++    db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == pantalla_id).delete(synchronize_session=False)
+     for cluster_id in cluster_ids:
+         db.add(PantallaTurnosCluster(pantalla_id=pantalla_id, cluster_id=cluster_id))
++    screen = db.get(PantallaTurnos, pantalla_id)
++    if screen is not None:
++        screen.cluster_espera_id = cluster_ids[0] if cluster_ids else None
+ 
+ 
+ def response_for_screen(db: Session, screen: PantallaTurnos) -> PantallaTurnosRead:
+@@ -124,18 +143,66 @@ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]
+ 
+ 
+ def screen_ids_by_cluster(db: Session, cluster_ids: list[UUID]) -> dict[UUID, UUID]:
+-    rows = db.execute(
+-        select(PantallaTurnosCluster.cluster_id, PantallaTurnosCluster.pantalla_id)
+-        .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+-        .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+-        .order_by(PantallaTurnos.codigo_dispositivo)
+-    ).all()
++    cluster_ids = unique_uuid_list(cluster_ids)
++    if not cluster_ids:
++        return {}
++    rows = list(
++        db.execute(
++            select(PantallaTurnosCluster.cluster_id, PantallaTurnosCluster.pantalla_id)
++            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
++            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
++            .order_by(PantallaTurnos.codigo_dispositivo)
++        ).all()
++    )
++    rows.extend(
++        db.execute(
++            select(PantallaTurnos.cluster_espera_id, PantallaTurnos.id)
++            .where(
++                PantallaTurnos.activa.is_(True),
++                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
++                ~select(PantallaTurnosCluster.pantalla_id)
++                .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++                .exists(),
++            )
++            .order_by(PantallaTurnos.codigo_dispositivo)
++        ).all()
++    )
+     mapping: dict[UUID, UUID] = {}
+     for cluster_id, pantalla_id in rows:
++        if cluster_id is None:
++            continue
+         mapping.setdefault(cluster_id, pantalla_id)
+     return mapping
+ 
+ 
++def active_screen_exists_for_clusters(db: Session, cluster_ids: list[UUID], exclude_screen_id: UUID | None = None) -> bool:
++    cluster_ids = unique_uuid_list(cluster_ids)
++    if not cluster_ids:
++        return False
++    bridge_query = (
++        select(PantallaTurnos.id)
++        .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++        .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
++    )
++    if exclude_screen_id is not None:
++        bridge_query = bridge_query.where(PantallaTurnos.id != exclude_screen_id)
++    if db.execute(bridge_query.limit(1)).first() is not None:
++        return True
++    screen_has_bridge = (
++        select(PantallaTurnosCluster.pantalla_id)
++        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++        .exists()
++    )
++    legacy_query = select(PantallaTurnos.id).where(
++        PantallaTurnos.activa.is_(True),
++        PantallaTurnos.cluster_espera_id.in_(cluster_ids),
++        ~screen_has_bridge,
++    )
++    if exclude_screen_id is not None:
++        legacy_query = legacy_query.where(PantallaTurnos.id != exclude_screen_id)
++    return db.execute(legacy_query.limit(1)).first() is not None
++
++
+ def consultorio_ids_for_clusters(db: Session, cluster_ids: list[UUID]) -> list[UUID]:
+     if not cluster_ids:
+         return []
+@@ -157,22 +224,10 @@ def screen_change_keeps_consultorio_coverage(
+     current_cluster_ids = cluster_ids_for_screen(db, screen.id)
+     affected_consultorio_ids = consultorio_ids_for_clusters(db, current_cluster_ids)
+     target_active = screen.activa if active is None else active
+-    target_cluster_ids = current_cluster_ids if new_cluster_ids is None else new_cluster_ids
++    target_cluster_ids = current_cluster_ids if new_cluster_ids is None else unique_uuid_list(new_cluster_ids)
+     for consultorio_id in affected_consultorio_ids:
+         consultorio_cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
+-        has_other_screen = (
+-            db.execute(
+-                select(PantallaTurnosCluster)
+-                .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+-                .where(
+-                    PantallaTurnos.activa.is_(True),
+-                    PantallaTurnos.id != screen.id,
+-                    PantallaTurnosCluster.cluster_id.in_(consultorio_cluster_ids),
+-                )
+-                .limit(1)
+-            ).first()
+-            is not None
+-        )
++        has_other_screen = active_screen_exists_for_clusters(db, consultorio_cluster_ids, exclude_screen_id=screen.id)
+         has_this_screen = target_active and any(cluster_id in consultorio_cluster_ids for cluster_id in target_cluster_ids)
+         if not has_other_screen and not has_this_screen:
+             return False
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 0b794dd..088ec13 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -406,21 +406,44 @@ def validate_patient_identity(paciente: Paciente) -> None:
+         )
+ 
+ 
+-def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
+-    cluster_ids = list(
+-        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
+-    )
++def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> bool:
++    cluster_ids = list(dict.fromkeys(cluster_ids))
+     if not cluster_ids:
+         return False
+-    return (
++    if (
+         db.execute(
+-            select(PantallaTurnosCluster)
+-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
++            select(PantallaTurnos.id)
++            .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+             .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+             .limit(1)
+         ).first()
+         is not None
++    ):
++        return True
++    screen_has_bridge = (
++        select(PantallaTurnosCluster.pantalla_id)
++        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++        .exists()
++    )
++    return (
++        db.execute(
++            select(PantallaTurnos.id)
++            .where(
++                PantallaTurnos.activa.is_(True),
++                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
++                ~screen_has_bridge,
++            )
++            .limit(1)
++        ).first()
++        is not None
++    )
++
++
++def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
++    cluster_ids = list(
++        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
+     )
++    return active_display_exists_for_clusters(db, cluster_ids)
+ 
+ 
+ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> None:
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 14592f0..4211166 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -398,11 +398,60 @@ def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | No
+ 
+ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
+     return list(
+-        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
++        db.execute(
++            select(ConsultorioCluster.cluster_id)
++            .where(ConsultorioCluster.consultorio_id == consultorio_id)
++            .order_by(ConsultorioCluster.cluster_id)
++        ).scalars()
++    )
++
++
++def unique_uuid_list(values: list[UUID]) -> list[UUID]:
++    unique: list[UUID] = []
++    seen: set[UUID] = set()
++    for value in values:
++        if value in seen:
++            continue
++        unique.append(value)
++        seen.add(value)
++    return unique
++
++
++def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> bool:
++    cluster_ids = unique_uuid_list(cluster_ids)
++    if not cluster_ids:
++        return False
++    if (
++        db.execute(
++            select(PantallaTurnos.id)
++            .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
++            .limit(1)
++        ).first()
++        is not None
++    ):
++        return True
++    screen_has_bridge = (
++        select(PantallaTurnosCluster.pantalla_id)
++        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++        .exists()
++    )
++    return (
++        db.execute(
++            select(PantallaTurnos.id)
++            .where(
++                PantallaTurnos.activa.is_(True),
++                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
++                ~screen_has_bridge,
++            )
++            .limit(1)
++        ).first()
++        is not None
+     )
+ 
+ 
+ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
++    cluster_ids = unique_uuid_list(cluster_ids)
+     if not cluster_ids:
+         return
+     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
+@@ -416,15 +465,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
+                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                 detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
+             )
+-    if (
+-        db.execute(
+-            select(PantallaTurnosCluster)
+-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+-            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+-            .limit(1)
+-        ).first()
+-        is None
+-    ):
++    if not active_display_exists_for_clusters(db, cluster_ids):
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+             detail="Debe seleccionar al menos un clúster con una pantalla de turnos activa.",
+@@ -433,20 +474,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
+ 
+ def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
+     cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
+-    if not cluster_ids:
+-        return False
+-    return (
+-        db.execute(
+-            select(PantallaTurnosCluster)
+-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+-            .where(
+-                PantallaTurnos.activa.is_(True),
+-                PantallaTurnosCluster.cluster_id.in_(cluster_ids),
+-            )
+-            .limit(1)
+-        ).first()
+-        is not None
+-    )
++    return active_display_exists_for_clusters(db, cluster_ids)
+ 
+ 
+ def ensure_consultorio_display_coverage(db: Session, consultorio_id: UUID) -> None:
+@@ -460,8 +488,9 @@ def ensure_consultorio_display_coverage(db: Session, consultorio_id: UUID) -> No
+ def replace_consultorio_clusters(db: Session, item: object, relation_data: dict[str, Any]) -> None:
+     if "cluster_ids" not in relation_data:
+         return
+-    db.query(ConsultorioCluster).filter(ConsultorioCluster.consultorio_id == item.id).delete()
+-    for cluster_id in relation_data["cluster_ids"] or []:
++    cluster_ids = unique_uuid_list(relation_data["cluster_ids"] or [])
++    db.query(ConsultorioCluster).filter(ConsultorioCluster.consultorio_id == item.id).delete(synchronize_session=False)
++    for cluster_id in cluster_ids:
+         db.add(ConsultorioCluster(consultorio_id=item.id, cluster_id=cluster_id))
+ 
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 5b1a47e..e8b0446 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
+ 
+ from app.core.database import SessionLocal
+ from app.main import app
++from app.models.display import PantallaTurnosCluster
+ from app.models.operational import UsuarioRol
+ from app.services.seed_admins import main as seed_admins
+ from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
+@@ -595,6 +596,16 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
+     assert consulta_sin_cluster.json()[0]["clusters"] == []
+ 
++    consulta_con_cluster = client.get(
++        "/api/consultas-clusters-consultorios/por-consultorio",
++        headers=auth_headers,
++        params={"torre_id": torre["id"], "q": "Consultorio Test"},
++    )
++    assert consulta_con_cluster.status_code == 200, consulta_con_cluster.text
++    consultorio_asignado = next(item for item in consulta_con_cluster.json() if item["id"] == consultorio["id"])
++    assert consultorio_asignado["cluster_ids"] == [cluster["id"]]
++    assert consultorio_asignado["clusters"][0]["id"] == cluster["id"]
++
+     consulta_por_piso = client.get(
+         "/api/consultas-clusters-consultorios/por-piso",
+         headers=auth_headers,
+@@ -790,6 +801,118 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     assert "TURNO_LLAMADO" in events
+ 
+ 
++def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++
++    institucion = assert_created(
++        client.post(
++            "/api/instituciones",
++            headers=auth_headers,
++            json={"nombre": f"Institución Legacy {suffix}", "razon_social": f"Institución Legacy {suffix} S.A."},
++        )
++    )
++    complejo = assert_created(
++        client.post(
++            "/api/complejos",
++            headers=auth_headers,
++            json={
++                "institucion_id": institucion["id"],
++                "nombre": f"Campus Legacy {suffix}",
++                "zona_horaria": "America/Mexico_City",
++            },
++        )
++    )
++    torre = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={"complejo_id": complejo["id"], "nombre": f"Torre Legacy {suffix}", "numero_pisos": 1},
++        )
++    )
++    pisos_response = client.get("/api/pisos", headers=auth_headers)
++    assert pisos_response.status_code == 200, pisos_response.text
++    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
++    cluster = assert_created(
++        client.post(
++            "/api/clusters-turnos",
++            headers=auth_headers,
++            json={"complejo_id": complejo["id"], "piso_id": piso["id"], "nombre": f"Cluster Legacy {suffix}"},
++        )
++    )
++    pantalla = assert_created(
++        client.post(
++            "/api/pantallas-turnos",
++            headers=auth_headers,
++            json={
++                "codigo_dispositivo": f"display-legacy-{suffix}",
++                "nombre": f"Pantalla Legacy {suffix}",
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++    assert pantalla["cluster_espera_id"] == cluster["id"]
++
++    with SessionLocal() as db:
++        db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == UUID(pantalla["id"])).delete(
++            synchronize_session=False
++        )
++        db.commit()
++
++    consultorio = assert_created(
++        client.post(
++            "/api/consultorios",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "codigo": f"LEG-{suffix}",
++                "nombre_visible": f"Consultorio Legacy {suffix}",
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++    medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={"nombre": "Médico", "apellidos": f"Legacy {suffix}", "nombre_visible": f"Dr. Legacy {suffix}"},
++        )
++    )
++    paciente = assert_created(
++        client.post(
++            "/api/pacientes",
++            headers=auth_headers,
++            json={"nombre": "Paciente", "apellido_paterno": f"Legacy {suffix}", "celular": f"5558{suffix[:6]}"},
++        )
++    )
++    appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=60)
++    cita = assert_created(
++        client.post(
++            "/api/citas",
++            headers=auth_headers,
++            json={
++                "tipo": "PROGRAMADA",
++                "paciente_id": paciente["id"],
++                "medico_id": medico["id"],
++                "consultorio_id": consultorio["id"],
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "fecha_cita": appointment_at.date().isoformat(),
++                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
++                "origen": "TEST",
++            },
++        )
++    )
++    llamado = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
++    assert llamado["consultorio"] == consultorio["nombre_visible"]
++
++    public_response = client.get(f"/api/public-display/display-legacy-{suffix}/turnos")
++    assert public_response.status_code == 200, public_response.text
++    assert public_response.json()["turnos"][0]["turno"] == llamado["turno"]
++
++
+ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 4a93153..1a09e46 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -119,9 +119,7 @@ watch(
+         <RouterLink to="/torres" :class="{ disabled: !canUse('/torres') }" :aria-disabled="!canUse('/torres')" @click="handleNav($event, '/torres', clearTower)">Torres</RouterLink>
+         <RouterLink to="/pisos" :class="{ disabled: !canUse('/pisos') }" :aria-disabled="!canUse('/pisos')" @click="handleNav($event, '/pisos', clearFloor)">Pisos</RouterLink>
+         <RouterLink to="/salas-espera" :class="{ disabled: !canUse('/salas-espera') }" :aria-disabled="!canUse('/salas-espera')" @click="handleNav($event, '/salas-espera')">Salas de espera</RouterLink>
+-        <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
+         <RouterLink to="/consultorios" :class="{ disabled: !canUse('/consultorios') }" :aria-disabled="!canUse('/consultorios')" @click="handleNav($event, '/consultorios')">Consultorios</RouterLink>
+-        <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+         <span class="nav-section">Personas y roles</span>
+         <RouterLink to="/usuarios" :class="{ disabled: !canUse('/usuarios') }" :aria-disabled="!canUse('/usuarios')" @click="handleNav($event, '/usuarios')">Usuarios</RouterLink>
+         <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
+@@ -134,6 +132,8 @@ watch(
+         <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
+         <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
+         <RouterLink to="/asignaciones" :class="{ disabled: !canUse('/asignaciones') }" :aria-disabled="!canUse('/asignaciones')" @click="handleNav($event, '/asignaciones')">Asignaciones</RouterLink>
++        <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
++        <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+         <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
+         <RouterLink to="/kioskos" :class="{ disabled: !canUse('/kioskos') }" :aria-disabled="!canUse('/kioskos')" @click="handleNav($event, '/kioskos')">Kioskos</RouterLink>
+         <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index b61b3ce..2a9b027 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -20,9 +20,7 @@ export const screens: ScreenDefinition[] = [
+   { key: 'torres', label: 'Torres', path: '/torres' },
+   { key: 'pisos', label: 'Pisos', path: '/pisos' },
+   { key: 'salas-espera', label: 'Salas de espera', path: '/salas-espera' },
+-  { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },
+   { key: 'consultorios', label: 'Consultorios', path: '/consultorios' },
+-  { key: 'consulta-clusters-consultorios', label: 'Consulta de clústers', path: '/consulta-clusters-consultorios' },
+   { key: 'usuarios', label: 'Usuarios', path: '/usuarios' },
+   { key: 'busqueda-usuarios', label: 'Búsqueda de usuarios', path: '/busqueda-usuarios' },
+   { key: 'roles', label: 'Roles', path: '/roles' },
+@@ -33,6 +31,8 @@ export const screens: ScreenDefinition[] = [
+   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
+   { key: 'contactos-institucionales', label: 'Contactos institucionales', path: '/contactos-institucionales' },
+   { key: 'asignaciones', label: 'Asignaciones', path: '/asignaciones' },
++  { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },
++  { key: 'consulta-clusters-consultorios', label: 'Consulta de clústers', path: '/consulta-clusters-consultorios' },
+   { key: 'pantallas-turnos', label: 'Pantallas de turnos', path: '/pantallas-turnos' },
+   { key: 'kioskos', label: 'Kioskos', path: '/kioskos' },
+   { key: 'turnos-llamados', label: 'Turnos llamados', path: '/turnos-llamados' },
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index aea1df1..9043e75 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -46,10 +46,7 @@ const router = createRouter({
+     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
+     { path: '/pisos', component: PisosView },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+-    { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+-    { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
+-    { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+     { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+     { path: '/pacientes', component: PacientesView },
+     { path: '/citas', component: CitasView },
+@@ -58,6 +55,9 @@ const router = createRouter({
+     { path: '/reportes', component: ReportesView },
+     { path: '/contactos-institucionales', component: ContactosInstitucionalesView },
+     { path: '/asignaciones', component: AsignacionesView },
++    { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
++    { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
++    { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+     { path: '/turnos-llamados', component: TurnosLlamadosView },
+     { path: '/auditoria', component: AuditoriaView },
+   ],
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 355fdc0..ee0b934 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -367,7 +367,14 @@ function resetScopedPiso() {
+ 
+ function pruneScopedClusters() {
+   if (!Array.isArray(form.cluster_ids)) return;
+-  form.cluster_ids = form.cluster_ids.filter((id) => scopedClusters.value.some((item) => item.id === id));
++  const clusters = lookups['clusters-turnos'] ?? [];
++  if (!clusters.length) return;
++  if (!form.complejo_id || !form.piso_id) {
++    form.cluster_ids = [];
++    return;
++  }
++  const allowedClusterIds = new Set(scopedClusters.value.map((item) => item.id));
++  form.cluster_ids = form.cluster_ids.filter((id) => typeof id === 'string' && allowedClusterIds.has(id));
+ }
+ 
+ function syncScopedInstitution() {

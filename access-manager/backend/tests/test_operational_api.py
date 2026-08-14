@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.models.display import PantallaTurnosCluster
 from app.models.operational import UsuarioRol
 from app.services.seed_admins import main as seed_admins
 from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
@@ -595,6 +596,16 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
     assert consulta_sin_cluster.json()[0]["clusters"] == []
 
+    consulta_con_cluster = client.get(
+        "/api/consultas-clusters-consultorios/por-consultorio",
+        headers=auth_headers,
+        params={"torre_id": torre["id"], "q": "Consultorio Test"},
+    )
+    assert consulta_con_cluster.status_code == 200, consulta_con_cluster.text
+    consultorio_asignado = next(item for item in consulta_con_cluster.json() if item["id"] == consultorio["id"])
+    assert consultorio_asignado["cluster_ids"] == [cluster["id"]]
+    assert consultorio_asignado["clusters"][0]["id"] == cluster["id"]
+
     consulta_por_piso = client.get(
         "/api/consultas-clusters-consultorios/por-piso",
         headers=auth_headers,
@@ -788,6 +799,118 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     assert "CONSULTORIO_CREADO" in events
     assert "ASIGNACION_OPERADOR_CREADA" in events
     assert "TURNO_LLAMADO" in events
+
+
+def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+
+    institucion = assert_created(
+        client.post(
+            "/api/instituciones",
+            headers=auth_headers,
+            json={"nombre": f"Institución Legacy {suffix}", "razon_social": f"Institución Legacy {suffix} S.A."},
+        )
+    )
+    complejo = assert_created(
+        client.post(
+            "/api/complejos",
+            headers=auth_headers,
+            json={
+                "institucion_id": institucion["id"],
+                "nombre": f"Campus Legacy {suffix}",
+                "zona_horaria": "America/Mexico_City",
+            },
+        )
+    )
+    torre = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={"complejo_id": complejo["id"], "nombre": f"Torre Legacy {suffix}", "numero_pisos": 1},
+        )
+    )
+    pisos_response = client.get("/api/pisos", headers=auth_headers)
+    assert pisos_response.status_code == 200, pisos_response.text
+    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
+    cluster = assert_created(
+        client.post(
+            "/api/clusters-turnos",
+            headers=auth_headers,
+            json={"complejo_id": complejo["id"], "piso_id": piso["id"], "nombre": f"Cluster Legacy {suffix}"},
+        )
+    )
+    pantalla = assert_created(
+        client.post(
+            "/api/pantallas-turnos",
+            headers=auth_headers,
+            json={
+                "codigo_dispositivo": f"display-legacy-{suffix}",
+                "nombre": f"Pantalla Legacy {suffix}",
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+    assert pantalla["cluster_espera_id"] == cluster["id"]
+
+    with SessionLocal() as db:
+        db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == UUID(pantalla["id"])).delete(
+            synchronize_session=False
+        )
+        db.commit()
+
+    consultorio = assert_created(
+        client.post(
+            "/api/consultorios",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "codigo": f"LEG-{suffix}",
+                "nombre_visible": f"Consultorio Legacy {suffix}",
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+    medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={"nombre": "Médico", "apellidos": f"Legacy {suffix}", "nombre_visible": f"Dr. Legacy {suffix}"},
+        )
+    )
+    paciente = assert_created(
+        client.post(
+            "/api/pacientes",
+            headers=auth_headers,
+            json={"nombre": "Paciente", "apellido_paterno": f"Legacy {suffix}", "celular": f"5558{suffix[:6]}"},
+        )
+    )
+    appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=60)
+    cita = assert_created(
+        client.post(
+            "/api/citas",
+            headers=auth_headers,
+            json={
+                "tipo": "PROGRAMADA",
+                "paciente_id": paciente["id"],
+                "medico_id": medico["id"],
+                "consultorio_id": consultorio["id"],
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "fecha_cita": appointment_at.date().isoformat(),
+                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
+                "origen": "TEST",
+            },
+        )
+    )
+    llamado = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
+    assert llamado["consultorio"] == consultorio["nombre_visible"]
+
+    public_response = client.get(f"/api/public-display/display-legacy-{suffix}/turnos")
+    assert public_response.status_code == 200, public_response.text
+    assert public_response.json()["turnos"][0]["turno"] == llamado["turno"]
 
 
 def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:

@@ -406,21 +406,44 @@ def validate_patient_identity(paciente: Paciente) -> None:
         )
 
 
-def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
-    cluster_ids = list(
-        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
-    )
+def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> bool:
+    cluster_ids = list(dict.fromkeys(cluster_ids))
     if not cluster_ids:
         return False
-    return (
+    if (
         db.execute(
-            select(PantallaTurnosCluster)
-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+            select(PantallaTurnos.id)
+            .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
             .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
             .limit(1)
         ).first()
         is not None
+    ):
+        return True
+    screen_has_bridge = (
+        select(PantallaTurnosCluster.pantalla_id)
+        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+        .exists()
     )
+    return (
+        db.execute(
+            select(PantallaTurnos.id)
+            .where(
+                PantallaTurnos.activa.is_(True),
+                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
+                ~screen_has_bridge,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
+    cluster_ids = list(
+        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
+    )
+    return active_display_exists_for_clusters(db, cluster_ids)
 
 
 def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> None:

@@ -367,7 +367,14 @@ function resetScopedPiso() {
 
 function pruneScopedClusters() {
   if (!Array.isArray(form.cluster_ids)) return;
-  form.cluster_ids = form.cluster_ids.filter((id) => scopedClusters.value.some((item) => item.id === id));
+  const clusters = lookups['clusters-turnos'] ?? [];
+  if (!clusters.length) return;
+  if (!form.complejo_id || !form.piso_id) {
+    form.cluster_ids = [];
+    return;
+  }
+  const allowedClusterIds = new Set(scopedClusters.value.map((item) => item.id));
+  form.cluster_ids = form.cluster_ids.filter((id) => typeof id === 'string' && allowedClusterIds.has(id));
 }
 
 function syncScopedInstitution() {

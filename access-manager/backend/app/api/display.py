@@ -58,16 +58,35 @@ def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object
     return item
 
 
+def unique_uuid_list(values: list[UUID]) -> list[UUID]:
+    unique: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        if value in seen:
+            continue
+        unique.append(value)
+        seen.add(value)
+    return unique
+
+
 def cluster_ids_for_screen(db: Session, pantalla_id: UUID) -> list[UUID]:
-    return list(
+    cluster_ids = list(
         db.execute(select(PantallaTurnosCluster.cluster_id).where(PantallaTurnosCluster.pantalla_id == pantalla_id)).scalars()
     )
+    screen = db.get(PantallaTurnos, pantalla_id)
+    if not cluster_ids and screen is not None and screen.cluster_espera_id is not None:
+        cluster_ids.append(screen.cluster_espera_id)
+    return unique_uuid_list(cluster_ids)
 
 
 def replace_screen_clusters(db: Session, pantalla_id: UUID, cluster_ids: list[UUID]) -> None:
-    db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == pantalla_id).delete()
+    cluster_ids = unique_uuid_list(cluster_ids)
+    db.query(PantallaTurnosCluster).filter(PantallaTurnosCluster.pantalla_id == pantalla_id).delete(synchronize_session=False)
     for cluster_id in cluster_ids:
         db.add(PantallaTurnosCluster(pantalla_id=pantalla_id, cluster_id=cluster_id))
+    screen = db.get(PantallaTurnos, pantalla_id)
+    if screen is not None:
+        screen.cluster_espera_id = cluster_ids[0] if cluster_ids else None
 
 
 def response_for_screen(db: Session, screen: PantallaTurnos) -> PantallaTurnosRead:
@@ -124,16 +143,64 @@ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]
 
 
 def screen_ids_by_cluster(db: Session, cluster_ids: list[UUID]) -> dict[UUID, UUID]:
-    rows = db.execute(
-        select(PantallaTurnosCluster.cluster_id, PantallaTurnosCluster.pantalla_id)
-        .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
-        .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
-        .order_by(PantallaTurnos.codigo_dispositivo)
-    ).all()
+    cluster_ids = unique_uuid_list(cluster_ids)
+    if not cluster_ids:
+        return {}
+    rows = list(
+        db.execute(
+            select(PantallaTurnosCluster.cluster_id, PantallaTurnosCluster.pantalla_id)
+            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
+            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+            .order_by(PantallaTurnos.codigo_dispositivo)
+        ).all()
+    )
+    rows.extend(
+        db.execute(
+            select(PantallaTurnos.cluster_espera_id, PantallaTurnos.id)
+            .where(
+                PantallaTurnos.activa.is_(True),
+                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
+                ~select(PantallaTurnosCluster.pantalla_id)
+                .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+                .exists(),
+            )
+            .order_by(PantallaTurnos.codigo_dispositivo)
+        ).all()
+    )
     mapping: dict[UUID, UUID] = {}
     for cluster_id, pantalla_id in rows:
+        if cluster_id is None:
+            continue
         mapping.setdefault(cluster_id, pantalla_id)
     return mapping
+
+
+def active_screen_exists_for_clusters(db: Session, cluster_ids: list[UUID], exclude_screen_id: UUID | None = None) -> bool:
+    cluster_ids = unique_uuid_list(cluster_ids)
+    if not cluster_ids:
+        return False
+    bridge_query = (
+        select(PantallaTurnos.id)
+        .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+        .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+    )
+    if exclude_screen_id is not None:
+        bridge_query = bridge_query.where(PantallaTurnos.id != exclude_screen_id)
+    if db.execute(bridge_query.limit(1)).first() is not None:
+        return True
+    screen_has_bridge = (
+        select(PantallaTurnosCluster.pantalla_id)
+        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+        .exists()
+    )
+    legacy_query = select(PantallaTurnos.id).where(
+        PantallaTurnos.activa.is_(True),
+        PantallaTurnos.cluster_espera_id.in_(cluster_ids),
+        ~screen_has_bridge,
+    )
+    if exclude_screen_id is not None:
+        legacy_query = legacy_query.where(PantallaTurnos.id != exclude_screen_id)
+    return db.execute(legacy_query.limit(1)).first() is not None
 
 
 def consultorio_ids_for_clusters(db: Session, cluster_ids: list[UUID]) -> list[UUID]:
@@ -157,22 +224,10 @@ def screen_change_keeps_consultorio_coverage(
     current_cluster_ids = cluster_ids_for_screen(db, screen.id)
     affected_consultorio_ids = consultorio_ids_for_clusters(db, current_cluster_ids)
     target_active = screen.activa if active is None else active
-    target_cluster_ids = current_cluster_ids if new_cluster_ids is None else new_cluster_ids
+    target_cluster_ids = current_cluster_ids if new_cluster_ids is None else unique_uuid_list(new_cluster_ids)
     for consultorio_id in affected_consultorio_ids:
         consultorio_cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
-        has_other_screen = (
-            db.execute(
-                select(PantallaTurnosCluster)
-                .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
-                .where(
-                    PantallaTurnos.activa.is_(True),
-                    PantallaTurnos.id != screen.id,
-                    PantallaTurnosCluster.cluster_id.in_(consultorio_cluster_ids),
-                )
-                .limit(1)
-            ).first()
-            is not None
-        )
+        has_other_screen = active_screen_exists_for_clusters(db, consultorio_cluster_ids, exclude_screen_id=screen.id)
         has_this_screen = target_active and any(cluster_id in consultorio_cluster_ids for cluster_id in target_cluster_ids)
         if not has_other_screen and not has_this_screen:
             return False

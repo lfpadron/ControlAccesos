@@ -398,11 +398,60 @@ def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | No
 
 def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
     return list(
-        db.execute(select(ConsultorioCluster.cluster_id).where(ConsultorioCluster.consultorio_id == consultorio_id)).scalars()
+        db.execute(
+            select(ConsultorioCluster.cluster_id)
+            .where(ConsultorioCluster.consultorio_id == consultorio_id)
+            .order_by(ConsultorioCluster.cluster_id)
+        ).scalars()
+    )
+
+
+def unique_uuid_list(values: list[UUID]) -> list[UUID]:
+    unique: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        if value in seen:
+            continue
+        unique.append(value)
+        seen.add(value)
+    return unique
+
+
+def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> bool:
+    cluster_ids = unique_uuid_list(cluster_ids)
+    if not cluster_ids:
+        return False
+    if (
+        db.execute(
+            select(PantallaTurnos.id)
+            .join(PantallaTurnosCluster, PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
+            .limit(1)
+        ).first()
+        is not None
+    ):
+        return True
+    screen_has_bridge = (
+        select(PantallaTurnosCluster.pantalla_id)
+        .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+        .exists()
+    )
+    return (
+        db.execute(
+            select(PantallaTurnos.id)
+            .where(
+                PantallaTurnos.activa.is_(True),
+                PantallaTurnos.cluster_espera_id.in_(cluster_ids),
+                ~screen_has_bridge,
+            )
+            .limit(1)
+        ).first()
+        is not None
     )
 
 
 def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
+    cluster_ids = unique_uuid_list(cluster_ids)
     if not cluster_ids:
         return
     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
@@ -416,15 +465,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
             )
-    if (
-        db.execute(
-            select(PantallaTurnosCluster)
-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
-            .where(PantallaTurnos.activa.is_(True), PantallaTurnosCluster.cluster_id.in_(cluster_ids))
-            .limit(1)
-        ).first()
-        is None
-    ):
+    if not active_display_exists_for_clusters(db, cluster_ids):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Debe seleccionar al menos un clúster con una pantalla de turnos activa.",
@@ -433,20 +474,7 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
 
 def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
     cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
-    if not cluster_ids:
-        return False
-    return (
-        db.execute(
-            select(PantallaTurnosCluster)
-            .join(PantallaTurnos, PantallaTurnos.id == PantallaTurnosCluster.pantalla_id)
-            .where(
-                PantallaTurnos.activa.is_(True),
-                PantallaTurnosCluster.cluster_id.in_(cluster_ids),
-            )
-            .limit(1)
-        ).first()
-        is not None
-    )
+    return active_display_exists_for_clusters(db, cluster_ids)
 
 
 def ensure_consultorio_display_coverage(db: Session, consultorio_id: UUID) -> None:
@@ -460,8 +488,9 @@ def ensure_consultorio_display_coverage(db: Session, consultorio_id: UUID) -> No
 def replace_consultorio_clusters(db: Session, item: object, relation_data: dict[str, Any]) -> None:
     if "cluster_ids" not in relation_data:
         return
-    db.query(ConsultorioCluster).filter(ConsultorioCluster.consultorio_id == item.id).delete()
-    for cluster_id in relation_data["cluster_ids"] or []:
+    cluster_ids = unique_uuid_list(relation_data["cluster_ids"] or [])
+    db.query(ConsultorioCluster).filter(ConsultorioCluster.consultorio_id == item.id).delete(synchronize_session=False)
+    for cluster_id in cluster_ids:
         db.add(ConsultorioCluster(consultorio_id=item.id, cluster_id=cluster_id))
 
 
