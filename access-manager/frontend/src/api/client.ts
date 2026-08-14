@@ -733,6 +733,7 @@ export type CitaFilters = {
   fecha?: string;
   fecha_inicio?: string;
   hora_inicio?: string;
+  hora_fin?: string;
   complejo_id?: string;
   piso_id?: string;
   consultorio_id?: string;

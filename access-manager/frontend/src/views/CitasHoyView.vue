@@ -26,7 +26,7 @@ import {
   type TicketResponse,
   type Usuario,
 } from '../api/client';
-import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
+import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
 import { exportRows, type ExportFormat } from '../exporters';
 
 const citas = ref<Cita[]>([]);
@@ -52,6 +52,7 @@ const consultorioSearch = ref('');
 const filters = reactive({
   fecha: todayLocalIso(),
   hora_inicio: localTimeMinusHours(1),
+  hora_fin: localTimePlusHours(1),
   estado: '',
   institucion_id: '',
   complejo_id: '',
@@ -139,6 +140,7 @@ function requestFilters(): CitaFilters {
   return {
     fecha: filters.fecha,
     hora_inicio: filters.hora_inicio,
+    hora_fin: filters.hora_fin,
     estado: filters.estado,
     complejo_id: filters.complejo_id,
     piso_id: filters.piso_id,
@@ -298,6 +300,7 @@ function nextSlot() {
 function clearFilters() {
   filters.fecha = todayLocalIso();
   filters.hora_inicio = localTimeMinusHours(1);
+  filters.hora_fin = localTimePlusHours(1);
   filters.estado = '';
   filters.institucion_id = '';
   filters.complejo_id = '';
@@ -363,6 +366,10 @@ onMounted(async () => {
         <div class="form-row">
           <label for="filtro-hora-inicio">Hora inicio</label>
           <input id="filtro-hora-inicio" v-model="filters.hora_inicio" type="time" />
+        </div>
+        <div class="form-row">
+          <label for="filtro-hora-fin">Hora fin</label>
+          <input id="filtro-hora-fin" v-model="filters.hora_fin" type="time" />
         </div>
         <div class="form-row">
           <label for="filtro-estado">Estado</label>

@@ -1,0 +1,173 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 088ec13..8d6aca2 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -527,6 +527,7 @@ def query_citas(
+     fecha: date | None = None,
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
++    hora_fin: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -584,6 +585,8 @@ def query_citas(
+         query = query.where(Cita.fecha_cita == fecha)
+         if hora_inicio is not None:
+             query = query.where(Cita.hora_cita >= hora_inicio)
++        if hora_fin is not None:
++            query = query.where(Cita.hora_cita <= hora_fin)
+     elif fecha_inicio is not None:
+         if hora_inicio is not None:
+             query = query.where(
+@@ -594,8 +597,14 @@ def query_citas(
+             )
+         else:
+             query = query.where(Cita.fecha_cita >= fecha_inicio)
++        if hora_fin is not None:
++            query = query.where(Cita.hora_cita <= hora_fin)
+     elif hora_inicio is not None:
+         query = query.where(Cita.hora_cita >= hora_inicio)
++        if hora_fin is not None:
++            query = query.where(Cita.hora_cita <= hora_fin)
++    elif hora_fin is not None:
++        query = query.where(Cita.hora_cita <= hora_fin)
+     if complejo_id is not None:
+         query = query.where(Cita.complejo_id == complejo_id)
+     if piso_id is not None:
+@@ -876,6 +885,7 @@ def marcar_paciente_borrado(
+ def citas_hoy(
+     fecha: date | None = None,
+     hora_inicio: time | None = None,
++    hora_fin: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -890,6 +900,7 @@ def citas_hoy(
+         db,
+         fecha=fecha or business_today(),
+         hora_inicio=hora_inicio,
++        hora_fin=hora_fin,
+         complejo_id=complejo_id,
+         piso_id=piso_id,
+         consultorio_id=consultorio_id,
+@@ -908,6 +919,7 @@ def buscar_citas(
+     fecha: date | None = None,
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
++    hora_fin: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -925,6 +937,7 @@ def buscar_citas(
+             fecha=fecha if fecha is not None else (None if fecha_inicio is not None else business_today()),
+             fecha_inicio=fecha_inicio,
+             hora_inicio=hora_inicio,
++            hora_fin=hora_fin,
+             complejo_id=complejo_id,
+             piso_id=piso_id,
+             consultorio_id=consultorio_id,
+@@ -946,6 +959,7 @@ def list_citas(
+     fecha: date | None = None,
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
++    hora_fin: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -961,6 +975,7 @@ def list_citas(
+         fecha=fecha,
+         fecha_inicio=fecha_inicio,
+         hora_inicio=hora_inicio,
++        hora_fin=hora_fin,
+         complejo_id=complejo_id,
+         piso_id=piso_id,
+         consultorio_id=consultorio_id,
+@@ -980,6 +995,7 @@ def registrar_exportacion_citas(
+     fecha: date | None = None,
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
++    hora_fin: time | None = None,
+     complejo_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -1002,6 +1018,7 @@ def registrar_exportacion_citas(
+             "fecha": str(fecha or business_today()),
+             "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
+             "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
++            "hora_fin": hora_fin.strftime("%H:%M") if hora_fin else None,
+             "complejo_id": str(complejo_id) if complejo_id else None,
+             "piso_id": str(piso_id) if piso_id else None,
+             "consultorio_id": str(consultorio_id) if consultorio_id else None,
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index e4bd289..db78a45 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -733,6 +733,7 @@ export type CitaFilters = {
+   fecha?: string;
+   fecha_inicio?: string;
+   hora_inicio?: string;
++  hora_fin?: string;
+   complejo_id?: string;
+   piso_id?: string;
+   consultorio_id?: string;
+diff --git a/access-manager/frontend/src/dateUtils.ts b/access-manager/frontend/src/dateUtils.ts
+index 581827d..b51b8e8 100644
+--- a/access-manager/frontend/src/dateUtils.ts
++++ b/access-manager/frontend/src/dateUtils.ts
+@@ -8,3 +8,8 @@ export function localTimeMinusHours(hours: number) {
+   const date = new Date(Date.now() - hours * 60 * 60 * 1000);
+   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+ }
++
++export function localTimePlusHours(hours: number) {
++  const date = new Date(Date.now() + hours * 60 * 60 * 1000);
++  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
++}
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index c507980..d650eed 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -26,7 +26,7 @@ import {
+   type TicketResponse,
+   type Usuario,
+ } from '../api/client';
+-import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
++import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
+ import { exportRows, type ExportFormat } from '../exporters';
+ 
+ const citas = ref<Cita[]>([]);
+@@ -52,6 +52,7 @@ const consultorioSearch = ref('');
+ const filters = reactive({
+   fecha: todayLocalIso(),
+   hora_inicio: localTimeMinusHours(1),
++  hora_fin: localTimePlusHours(1),
+   estado: '',
+   institucion_id: '',
+   complejo_id: '',
+@@ -139,6 +140,7 @@ function requestFilters(): CitaFilters {
+   return {
+     fecha: filters.fecha,
+     hora_inicio: filters.hora_inicio,
++    hora_fin: filters.hora_fin,
+     estado: filters.estado,
+     complejo_id: filters.complejo_id,
+     piso_id: filters.piso_id,
+@@ -298,6 +300,7 @@ function nextSlot() {
+ function clearFilters() {
+   filters.fecha = todayLocalIso();
+   filters.hora_inicio = localTimeMinusHours(1);
++  filters.hora_fin = localTimePlusHours(1);
+   filters.estado = '';
+   filters.institucion_id = '';
+   filters.complejo_id = '';
+@@ -364,6 +367,10 @@ onMounted(async () => {
+           <label for="filtro-hora-inicio">Hora inicio</label>
+           <input id="filtro-hora-inicio" v-model="filters.hora_inicio" type="time" />
+         </div>
++        <div class="form-row">
++          <label for="filtro-hora-fin">Hora fin</label>
++          <input id="filtro-hora-fin" v-model="filters.hora_fin" type="time" />
++        </div>
+         <div class="form-row">
+           <label for="filtro-estado">Estado</label>
+           <select id="filtro-estado" v-model="filters.estado">

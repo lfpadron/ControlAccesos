@@ -527,6 +527,7 @@ def query_citas(
     fecha: date | None = None,
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
+    hora_fin: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -584,6 +585,8 @@ def query_citas(
         query = query.where(Cita.fecha_cita == fecha)
         if hora_inicio is not None:
             query = query.where(Cita.hora_cita >= hora_inicio)
+        if hora_fin is not None:
+            query = query.where(Cita.hora_cita <= hora_fin)
     elif fecha_inicio is not None:
         if hora_inicio is not None:
             query = query.where(
@@ -594,8 +597,14 @@ def query_citas(
             )
         else:
             query = query.where(Cita.fecha_cita >= fecha_inicio)
+        if hora_fin is not None:
+            query = query.where(Cita.hora_cita <= hora_fin)
     elif hora_inicio is not None:
         query = query.where(Cita.hora_cita >= hora_inicio)
+        if hora_fin is not None:
+            query = query.where(Cita.hora_cita <= hora_fin)
+    elif hora_fin is not None:
+        query = query.where(Cita.hora_cita <= hora_fin)
     if complejo_id is not None:
         query = query.where(Cita.complejo_id == complejo_id)
     if piso_id is not None:
@@ -876,6 +885,7 @@ def marcar_paciente_borrado(
 def citas_hoy(
     fecha: date | None = None,
     hora_inicio: time | None = None,
+    hora_fin: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -890,6 +900,7 @@ def citas_hoy(
         db,
         fecha=fecha or business_today(),
         hora_inicio=hora_inicio,
+        hora_fin=hora_fin,
         complejo_id=complejo_id,
         piso_id=piso_id,
         consultorio_id=consultorio_id,
@@ -908,6 +919,7 @@ def buscar_citas(
     fecha: date | None = None,
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
+    hora_fin: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -925,6 +937,7 @@ def buscar_citas(
             fecha=fecha if fecha is not None else (None if fecha_inicio is not None else business_today()),
             fecha_inicio=fecha_inicio,
             hora_inicio=hora_inicio,
+            hora_fin=hora_fin,
             complejo_id=complejo_id,
             piso_id=piso_id,
             consultorio_id=consultorio_id,
@@ -946,6 +959,7 @@ def list_citas(
     fecha: date | None = None,
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
+    hora_fin: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -961,6 +975,7 @@ def list_citas(
         fecha=fecha,
         fecha_inicio=fecha_inicio,
         hora_inicio=hora_inicio,
+        hora_fin=hora_fin,
         complejo_id=complejo_id,
         piso_id=piso_id,
         consultorio_id=consultorio_id,
@@ -980,6 +995,7 @@ def registrar_exportacion_citas(
     fecha: date | None = None,
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
+    hora_fin: time | None = None,
     complejo_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -1002,6 +1018,7 @@ def registrar_exportacion_citas(
             "fecha": str(fecha or business_today()),
             "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
             "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
+            "hora_fin": hora_fin.strftime("%H:%M") if hora_fin else None,
             "complejo_id": str(complejo_id) if complejo_id else None,
             "piso_id": str(piso_id) if piso_id else None,
             "consultorio_id": str(consultorio_id) if consultorio_id else None,
