@@ -1,0 +1,628 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 3fb96a9..0b794dd 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -43,13 +43,16 @@ from app.services.audit_service import audit_safe_dict, record_audit_event
+ from app.services.access_scope import (
+     cita_access_predicate,
+     cita_payload_is_accessible,
++    complejo_catalog_access_predicate,
+     consultorio_catalog_access_predicate,
+     ensure_cita_access,
+     ensure_medico_patient_assignment_access,
+     ensure_paciente_access,
++    institucion_catalog_access_predicate,
+     medico_catalog_access_predicate,
+     paciente_access_predicate,
+     piso_catalog_access_predicate,
++    torre_catalog_access_predicate,
+ )
+ from app.services.medico_sync import sync_medicos_for_medico_users
+ from app.services.checkin_service import checkin_window_status
+@@ -209,16 +212,7 @@ def list_instituciones_operativas(
+         select(Institucion)
+         .where(
+             Institucion.activo.is_(True),
+-            select(Consultorio.id)
+-            .join(Complejo, Complejo.id == Consultorio.complejo_id)
+-            .where(
+-                Complejo.institucion_id == Institucion.id,
+-                Consultorio.activo.is_(True),
+-                Complejo.activo.is_(True),
+-                consultorio_catalog_access_predicate(db, current_user, business_today()),
+-            )
+-            .correlate(Institucion)
+-            .exists(),
++            institucion_catalog_access_predicate(db, current_user, business_today()),
+         )
+         .order_by(func.lower(Institucion.nombre), Institucion.id)
+     )
+@@ -234,14 +228,7 @@ def list_complejos_operativos(
+         select(Complejo)
+         .where(
+             Complejo.activo.is_(True),
+-            select(Consultorio.id)
+-            .where(
+-                Consultorio.complejo_id == Complejo.id,
+-                Consultorio.activo.is_(True),
+-                consultorio_catalog_access_predicate(db, current_user, business_today()),
+-            )
+-            .correlate(Complejo)
+-            .exists(),
++            complejo_catalog_access_predicate(db, current_user, business_today()),
+         )
+         .order_by(func.lower(Complejo.nombre), Complejo.id)
+     )
+@@ -257,16 +244,7 @@ def list_torres_operativas(
+         select(Torre)
+         .where(
+             Torre.activo.is_(True),
+-            select(Consultorio.id)
+-            .join(Piso, Piso.id == Consultorio.piso_id)
+-            .where(
+-                Piso.torre_id == Torre.id,
+-                Piso.activo.is_(True),
+-                Consultorio.activo.is_(True),
+-                consultorio_catalog_access_predicate(db, current_user, business_today()),
+-            )
+-            .correlate(Torre)
+-            .exists(),
++            torre_catalog_access_predicate(db, current_user, business_today()),
+         )
+         .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
+     )
+diff --git a/access-manager/backend/app/services/access_scope.py b/access-manager/backend/app/services/access_scope.py
+index 3c3fb5e..971942a 100644
+--- a/access-manager/backend/app/services/access_scope.py
++++ b/access-manager/backend/app/services/access_scope.py
+@@ -4,12 +4,13 @@ from datetime import date
+ from typing import Any
+ 
+ from fastapi import HTTPException, status
+-from sqlalchemy import and_, or_, select, true
++from sqlalchemy import and_, not_, or_, select, true
+ from sqlalchemy.orm import Session, aliased
+ 
+ from app.models.complejo import Complejo
+ from app.models.display import TurnoDisplay
+ from app.models.flow import Cita, MedicoPaciente, Paciente
++from app.models.institucion import Institucion
+ from app.models.operational import (
+     AsignacionMedicoConsultorio,
+     AsignacionOperador,
+@@ -18,6 +19,7 @@ from app.models.operational import (
+     Operador,
+     Piso,
+     Role,
++    Torre,
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+@@ -79,6 +81,34 @@ def _operator_scope_exists(user: Usuario, predicate: Any, today: date | None = N
+     )
+ 
+ 
++def _role_location_scope_condition() -> Any:
++    return or_(
++        UsuarioRol.institucion_id.is_not(None),
++        UsuarioRol.complejo_id.is_not(None),
++        UsuarioRol.torre_id.is_not(None),
++        UsuarioRol.piso_id.is_not(None),
++        UsuarioRol.consultorio_id.is_not(None),
++    )
++
++
++def _role_global_location_scope_condition() -> Any:
++    return and_(
++        UsuarioRol.institucion_id.is_(None),
++        UsuarioRol.complejo_id.is_(None),
++        UsuarioRol.torre_id.is_(None),
++        UsuarioRol.piso_id.is_(None),
++        UsuarioRol.consultorio_id.is_(None),
++        UsuarioRol.medico_id.is_(None),
++    )
++
++
++def _unrestricted_location_access_predicate(user: Usuario, today: date | None = None) -> Any:
++    active_role = _role_scope_exists(user, true(), today)
++    global_location = _role_scope_exists(user, _role_global_location_scope_condition(), today)
++    has_location_scope = _role_scope_exists(user, _role_location_scope_condition(), today)
++    return and_(active_role, or_(global_location, not_(has_location_scope)))
++
++
+ def _location_access_predicate(
+     user: Usuario,
+     consultorio_id_col: Any,
+@@ -117,6 +147,216 @@ def _location_access_predicate(
+     return or_(role_location, operator_location)
+ 
+ 
++def _piso_location_access_predicate(
++    user: Usuario,
++    piso_id_col: Any,
++    torre_id_col: Any,
++    complejo_id_col: Any,
++    today: date | None = None,
++) -> Any:
++    role_location = _role_scope_exists(
++        user,
++        or_(
++            UsuarioRol.piso_id == piso_id_col,
++            and_(
++                UsuarioRol.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .where(Consultorio.id == UsuarioRol.consultorio_id, Consultorio.piso_id == piso_id_col)
++                .correlate_except(Consultorio)
++                .exists(),
++            ),
++            UsuarioRol.torre_id == torre_id_col,
++            UsuarioRol.complejo_id == complejo_id_col,
++            and_(
++                UsuarioRol.institucion_id.is_not(None),
++                select(Complejo.id)
++                .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
++                .correlate_except(Complejo)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    operator_location = _operator_scope_exists(
++        user,
++        and_(
++            AsignacionOperador.consultorio_id.is_not(None),
++            select(Consultorio.id)
++            .where(Consultorio.id == AsignacionOperador.consultorio_id, Consultorio.piso_id == piso_id_col)
++            .correlate_except(Consultorio)
++            .exists(),
++        ),
++        today,
++    )
++    return or_(role_location, operator_location)
++
++
++def _torre_location_access_predicate(
++    user: Usuario,
++    torre_id_col: Any,
++    complejo_id_col: Any,
++    today: date | None = None,
++) -> Any:
++    role_location = _role_scope_exists(
++        user,
++        or_(
++            UsuarioRol.torre_id == torre_id_col,
++            and_(
++                UsuarioRol.piso_id.is_not(None),
++                select(Piso.id)
++                .where(Piso.id == UsuarioRol.piso_id, Piso.torre_id == torre_id_col)
++                .correlate_except(Piso)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .join(Piso, Piso.id == Consultorio.piso_id)
++                .where(Consultorio.id == UsuarioRol.consultorio_id, Piso.torre_id == torre_id_col)
++                .correlate_except(Consultorio, Piso)
++                .exists(),
++            ),
++            UsuarioRol.complejo_id == complejo_id_col,
++            and_(
++                UsuarioRol.institucion_id.is_not(None),
++                select(Complejo.id)
++                .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
++                .correlate_except(Complejo)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    operator_location = _operator_scope_exists(
++        user,
++        and_(
++            AsignacionOperador.consultorio_id.is_not(None),
++            select(Consultorio.id)
++            .join(Piso, Piso.id == Consultorio.piso_id)
++            .where(Consultorio.id == AsignacionOperador.consultorio_id, Piso.torre_id == torre_id_col)
++            .correlate_except(Consultorio, Piso)
++            .exists(),
++        ),
++        today,
++    )
++    return or_(role_location, operator_location)
++
++
++def _complejo_location_access_predicate(
++    user: Usuario,
++    complejo_id_col: Any,
++    institucion_id_col: Any,
++    today: date | None = None,
++) -> Any:
++    role_location = _role_scope_exists(
++        user,
++        or_(
++            UsuarioRol.complejo_id == complejo_id_col,
++            UsuarioRol.institucion_id == institucion_id_col,
++            and_(
++                UsuarioRol.torre_id.is_not(None),
++                select(Torre.id)
++                .where(Torre.id == UsuarioRol.torre_id, Torre.complejo_id == complejo_id_col)
++                .correlate_except(Torre)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.piso_id.is_not(None),
++                select(Piso.id)
++                .where(Piso.id == UsuarioRol.piso_id, Piso.complejo_id == complejo_id_col)
++                .correlate_except(Piso)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .where(Consultorio.id == UsuarioRol.consultorio_id, Consultorio.complejo_id == complejo_id_col)
++                .correlate_except(Consultorio)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    operator_location = _operator_scope_exists(
++        user,
++        or_(
++            AsignacionOperador.complejo_id == complejo_id_col,
++            and_(
++                AsignacionOperador.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .where(Consultorio.id == AsignacionOperador.consultorio_id, Consultorio.complejo_id == complejo_id_col)
++                .correlate_except(Consultorio)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    return or_(role_location, operator_location)
++
++
++def _institucion_location_access_predicate(user: Usuario, institucion_id_col: Any, today: date | None = None) -> Any:
++    role_location = _role_scope_exists(
++        user,
++        or_(
++            UsuarioRol.institucion_id == institucion_id_col,
++            and_(
++                UsuarioRol.complejo_id.is_not(None),
++                select(Complejo.id)
++                .where(Complejo.id == UsuarioRol.complejo_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Complejo)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.torre_id.is_not(None),
++                select(Torre.id)
++                .join(Complejo, Complejo.id == Torre.complejo_id)
++                .where(Torre.id == UsuarioRol.torre_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Torre, Complejo)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.piso_id.is_not(None),
++                select(Piso.id)
++                .join(Complejo, Complejo.id == Piso.complejo_id)
++                .where(Piso.id == UsuarioRol.piso_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Piso, Complejo)
++                .exists(),
++            ),
++            and_(
++                UsuarioRol.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .join(Complejo, Complejo.id == Consultorio.complejo_id)
++                .where(Consultorio.id == UsuarioRol.consultorio_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Consultorio, Complejo)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    operator_location = _operator_scope_exists(
++        user,
++        or_(
++            and_(
++                AsignacionOperador.complejo_id.is_not(None),
++                select(Complejo.id)
++                .where(Complejo.id == AsignacionOperador.complejo_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Complejo)
++                .exists(),
++            ),
++            and_(
++                AsignacionOperador.consultorio_id.is_not(None),
++                select(Consultorio.id)
++                .join(Complejo, Complejo.id == Consultorio.complejo_id)
++                .where(Consultorio.id == AsignacionOperador.consultorio_id, Complejo.institucion_id == institucion_id_col)
++                .correlate_except(Consultorio, Complejo)
++                .exists(),
++            ),
++        ),
++        today,
++    )
++    return or_(role_location, operator_location)
++
++
+ def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
+     own_medico = (
+         select(Medico.id)
+@@ -162,15 +402,45 @@ def medico_catalog_access_predicate(db: Session, user: Usuario, today: date | No
+     )
+ 
+ 
++def institucion_catalog_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
++    if user_has_global_access(db, user, today):
++        return true()
++    return or_(
++        _unrestricted_location_access_predicate(user, today),
++        _institucion_location_access_predicate(user, Institucion.id, today),
++    )
++
++
++def complejo_catalog_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
++    if user_has_global_access(db, user, today):
++        return true()
++    return or_(
++        _unrestricted_location_access_predicate(user, today),
++        _complejo_location_access_predicate(user, Complejo.id, Complejo.institucion_id, today),
++    )
++
++
++def torre_catalog_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
++    if user_has_global_access(db, user, today):
++        return true()
++    return or_(
++        _unrestricted_location_access_predicate(user, today),
++        _torre_location_access_predicate(user, Torre.id, Torre.complejo_id, today),
++    )
++
++
+ def consultorio_catalog_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+     if user_has_global_access(db, user, today):
+         return true()
+-    consultorio_by_location = _location_access_predicate(
+-        user,
+-        Consultorio.id,
+-        Consultorio.piso_id,
+-        Consultorio.complejo_id,
+-        today,
++    consultorio_by_location = or_(
++        _unrestricted_location_access_predicate(user, today),
++        _location_access_predicate(
++            user,
++            Consultorio.id,
++            Consultorio.piso_id,
++            Consultorio.complejo_id,
++            today,
++        ),
+     )
+     consultorio_by_medico = (
+         select(AsignacionMedicoConsultorio.id)
+@@ -187,14 +457,9 @@ def consultorio_catalog_access_predicate(db: Session, user: Usuario, today: date
+ def piso_catalog_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+     if user_has_global_access(db, user, today):
+         return true()
+-    return (
+-        select(Consultorio.id)
+-        .where(
+-            Consultorio.piso_id == Piso.id,
+-            Consultorio.activo.is_(True),
+-            consultorio_catalog_access_predicate(db, user, today),
+-        )
+-        .exists()
++    return or_(
++        _unrestricted_location_access_predicate(user, today),
++        _piso_location_access_predicate(user, Piso.id, Piso.torre_id, Piso.complejo_id, today),
+     )
+ 
+ 
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index a53793d..3f77949 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -1,14 +1,25 @@
+ from __future__ import annotations
+ 
++from datetime import date
+ from types import SimpleNamespace
+ from uuid import uuid4
+ 
+ from sqlalchemy import select
+ from sqlalchemy.dialects import postgresql
+ 
++from app.models.complejo import Complejo
+ from app.models.flow import MedicoPaciente, Paciente
++from app.models.institucion import Institucion
++from app.models.operational import Consultorio, Piso, Torre
+ from app.models.usuario import Usuario
+-from app.services.access_scope import paciente_access_predicate
++from app.services.access_scope import (
++    complejo_catalog_access_predicate,
++    consultorio_catalog_access_predicate,
++    institucion_catalog_access_predicate,
++    paciente_access_predicate,
++    piso_catalog_access_predicate,
++    torre_catalog_access_predicate,
++)
+ 
+ 
+ def test_patient_scope_compiles_with_medico_filter_join() -> None:
+@@ -33,3 +44,29 @@ def test_patient_scope_compiles_with_medico_filter_join() -> None:
+     assert "medico_pacientes AS medico_pacientes_1" in compiled
+     assert "FROM pisos, citas" not in compiled
+     assert "FROM complejos, citas" not in compiled
++
++
++def test_location_catalog_scope_predicates_compile() -> None:
++    db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
++    user = Usuario(
++        id=uuid4(),
++        apellidos="Scope",
++        nombre="Recepción",
++        email="recepcion@example.com",
++        password_hash="irrelevant",
++    )
++    today = date(2026, 8, 14)
++
++    queries = [
++        select(Institucion).where(institucion_catalog_access_predicate(db, user, today)),
++        select(Complejo).where(complejo_catalog_access_predicate(db, user, today)),
++        select(Torre).where(torre_catalog_access_predicate(db, user, today)),
++        select(Piso).where(piso_catalog_access_predicate(db, user, today)),
++        select(Consultorio).where(consultorio_catalog_access_predicate(db, user, today)),
++    ]
++
++    compiled = "\n".join(str(query.compile(dialect=postgresql.dialect())) for query in queries)
++
++    assert "usuario_roles" in compiled
++    assert "asignaciones_operador" in compiled
++    assert "medico_pacientes AS medico_pacientes_1" not in compiled
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 3b85a19..69d50ef 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -51,6 +51,7 @@ const torreSearch = ref('');
+ const pisoSearch = ref('');
+ const consultorioSearch = ref('');
+ const pacienteSearch = ref('');
++const medicoSearch = ref('');
+ 
+ const form = reactive({
+   tipo: 'PROGRAMADA',
+@@ -97,8 +98,17 @@ const filteredConsultorios = computed(() => {
+     .sort((a, b) => a.codigo.localeCompare(b.codigo));
+ });
+ 
++const filteredMedicos = computed(() => {
++  const q = normalizeAutocompleteText(medicoSearch.value);
++  const rows = [...medicos.value].sort((a, b) => medicoLabel(a).localeCompare(medicoLabel(b), 'es', { sensitivity: 'base' }));
++  if (!q) return rows;
++  return rows.filter((item) =>
++    normalizeAutocompleteText([item.nombre, item.apellidos, item.nombre_visible ?? '', medicoLabel(item)].join(' ')).includes(q),
++  );
++});
++
+ function institucionLabel(item: Institucion) {
+-  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
++  return item.nombre;
+ }
+ 
+ function pisoLabel(item: Piso) {
+@@ -133,15 +143,25 @@ function statusLabel(status: string) {
+   return status;
+ }
+ 
++function normalizeAutocompleteText(text: string) {
++  return text
++    .normalize('NFD')
++    .replace(/[\u0300-\u036f]/g, '')
++    .trim()
++    .toLowerCase();
++}
++
+ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+-  const normalized = text.trim().toLowerCase();
++  const normalized = normalizeAutocompleteText(text);
+   return rows.find((item) => {
+-    const label = labeler(item).toLowerCase();
+-    return label === normalized || label.split(' · ')[0] === normalized;
++    const label = normalizeAutocompleteText(labeler(item));
++    return label === normalized || normalizeAutocompleteText(label.split(' · ')[0] ?? '') === normalized;
+   });
+ }
+ 
+ function setAutocompleteLabels() {
++  const medico = medicos.value.find((item) => item.id === form.medico_id);
++  medicoSearch.value = medico ? medicoLabel(medico) : '';
+   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
+   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+   const torre = torres.value.find((item) => item.id === form.torre_id);
+@@ -213,6 +233,14 @@ function syncConsultorio() {
+   form.consultorio_id = match?.id ?? '';
+ }
+ 
++async function syncMedico() {
++  const match = matchByLabel(medicos.value, medicoSearch.value, medicoLabel);
++  const nextId = match?.id ?? '';
++  if (form.medico_id === nextId) return;
++  form.medico_id = nextId;
++  await onMedicoChange();
++}
++
+ function syncPaciente() {
+   const match = matchByLabel(pacientes.value, pacienteSearch.value, patientOptionLabel);
+   form.paciente_id = match?.id ?? '';
+@@ -398,12 +426,19 @@ onMounted(load);
+         </div>
+         <div class="form-row">
+           <label for="medico">Médico</label>
+-          <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
+-            <option value="">Seleccione médico</option>
+-            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
+-              {{ medicoLabel(medico) }}
+-            </option>
+-          </select>
++          <input
++            id="medico"
++            v-model="medicoSearch"
++            list="cita-medicos"
++            required
++            :disabled="medicos.length === 0"
++            placeholder="Nombre o apellido"
++            @input="syncMedico"
++            @change="syncMedico"
++          />
++          <datalist id="cita-medicos">
++            <option v-for="medico in filteredMedicos" :key="medico.id" :value="medicoLabel(medico)" />
++          </datalist>
+         </div>
+         <div class="form-row">
+           <label for="paciente">Paciente</label>
+@@ -450,21 +485,6 @@ onMounted(load);
+             <option v-for="complejo in filteredComplejos" :key="complejo.id" :value="complejo.nombre" />
+           </datalist>
+         </div>
+-        <div class="form-row">
+-          <label for="piso">Piso</label>
+-          <input
+-            id="piso"
+-            v-model="pisoSearch"
+-            list="cita-pisos"
+-            required
+-            :disabled="!form.complejo_id"
+-            @input="syncPiso"
+-            @change="syncPiso"
+-          />
+-          <datalist id="cita-pisos">
+-            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
+-          </datalist>
+-        </div>
+         <div class="form-row">
+           <label for="torre">Torre</label>
+           <input
+@@ -480,6 +500,21 @@ onMounted(load);
+             <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
+           </datalist>
+         </div>
++        <div class="form-row">
++          <label for="piso">Piso</label>
++          <input
++            id="piso"
++            v-model="pisoSearch"
++            list="cita-pisos"
++            required
++            :disabled="!form.complejo_id"
++            @input="syncPiso"
++            @change="syncPiso"
++          />
++          <datalist id="cita-pisos">
++            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
++          </datalist>
++        </div>
+         <div class="form-row">
+           <label for="consultorio">Consultorio</label>
+           <input

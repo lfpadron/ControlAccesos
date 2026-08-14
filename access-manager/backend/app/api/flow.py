@@ -43,13 +43,16 @@ from app.services.audit_service import audit_safe_dict, record_audit_event
 from app.services.access_scope import (
     cita_access_predicate,
     cita_payload_is_accessible,
+    complejo_catalog_access_predicate,
     consultorio_catalog_access_predicate,
     ensure_cita_access,
     ensure_medico_patient_assignment_access,
     ensure_paciente_access,
+    institucion_catalog_access_predicate,
     medico_catalog_access_predicate,
     paciente_access_predicate,
     piso_catalog_access_predicate,
+    torre_catalog_access_predicate,
 )
 from app.services.medico_sync import sync_medicos_for_medico_users
 from app.services.checkin_service import checkin_window_status
@@ -209,16 +212,7 @@ def list_instituciones_operativas(
         select(Institucion)
         .where(
             Institucion.activo.is_(True),
-            select(Consultorio.id)
-            .join(Complejo, Complejo.id == Consultorio.complejo_id)
-            .where(
-                Complejo.institucion_id == Institucion.id,
-                Consultorio.activo.is_(True),
-                Complejo.activo.is_(True),
-                consultorio_catalog_access_predicate(db, current_user, business_today()),
-            )
-            .correlate(Institucion)
-            .exists(),
+            institucion_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(func.lower(Institucion.nombre), Institucion.id)
     )
@@ -234,14 +228,7 @@ def list_complejos_operativos(
         select(Complejo)
         .where(
             Complejo.activo.is_(True),
-            select(Consultorio.id)
-            .where(
-                Consultorio.complejo_id == Complejo.id,
-                Consultorio.activo.is_(True),
-                consultorio_catalog_access_predicate(db, current_user, business_today()),
-            )
-            .correlate(Complejo)
-            .exists(),
+            complejo_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(func.lower(Complejo.nombre), Complejo.id)
     )
@@ -257,16 +244,7 @@ def list_torres_operativas(
         select(Torre)
         .where(
             Torre.activo.is_(True),
-            select(Consultorio.id)
-            .join(Piso, Piso.id == Consultorio.piso_id)
-            .where(
-                Piso.torre_id == Torre.id,
-                Piso.activo.is_(True),
-                Consultorio.activo.is_(True),
-                consultorio_catalog_access_predicate(db, current_user, business_today()),
-            )
-            .correlate(Torre)
-            .exists(),
+            torre_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
     )

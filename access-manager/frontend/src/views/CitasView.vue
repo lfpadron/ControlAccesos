@@ -51,6 +51,7 @@ const torreSearch = ref('');
 const pisoSearch = ref('');
 const consultorioSearch = ref('');
 const pacienteSearch = ref('');
+const medicoSearch = ref('');
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -97,8 +98,17 @@ const filteredConsultorios = computed(() => {
     .sort((a, b) => a.codigo.localeCompare(b.codigo));
 });
 
+const filteredMedicos = computed(() => {
+  const q = normalizeAutocompleteText(medicoSearch.value);
+  const rows = [...medicos.value].sort((a, b) => medicoLabel(a).localeCompare(medicoLabel(b), 'es', { sensitivity: 'base' }));
+  if (!q) return rows;
+  return rows.filter((item) =>
+    normalizeAutocompleteText([item.nombre, item.apellidos, item.nombre_visible ?? '', medicoLabel(item)].join(' ')).includes(q),
+  );
+});
+
 function institucionLabel(item: Institucion) {
-  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+  return item.nombre;
 }
 
 function pisoLabel(item: Piso) {
@@ -133,15 +143,25 @@ function statusLabel(status: string) {
   return status;
 }
 
+function normalizeAutocompleteText(text: string) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
-  const normalized = text.trim().toLowerCase();
+  const normalized = normalizeAutocompleteText(text);
   return rows.find((item) => {
-    const label = labeler(item).toLowerCase();
-    return label === normalized || label.split(' · ')[0] === normalized;
+    const label = normalizeAutocompleteText(labeler(item));
+    return label === normalized || normalizeAutocompleteText(label.split(' · ')[0] ?? '') === normalized;
   });
 }
 
 function setAutocompleteLabels() {
+  const medico = medicos.value.find((item) => item.id === form.medico_id);
+  medicoSearch.value = medico ? medicoLabel(medico) : '';
   institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
   complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
   const torre = torres.value.find((item) => item.id === form.torre_id);
@@ -211,6 +231,14 @@ function syncPiso() {
 function syncConsultorio() {
   const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, consultorioLabel);
   form.consultorio_id = match?.id ?? '';
+}
+
+async function syncMedico() {
+  const match = matchByLabel(medicos.value, medicoSearch.value, medicoLabel);
+  const nextId = match?.id ?? '';
+  if (form.medico_id === nextId) return;
+  form.medico_id = nextId;
+  await onMedicoChange();
 }
 
 function syncPaciente() {
@@ -398,12 +426,19 @@ onMounted(load);
         </div>
         <div class="form-row">
           <label for="medico">Médico</label>
-          <select id="medico" v-model="form.medico_id" required @change="onMedicoChange">
-            <option value="">Seleccione médico</option>
-            <option v-for="medico in medicos" :key="medico.id" :value="medico.id">
-              {{ medicoLabel(medico) }}
-            </option>
-          </select>
+          <input
+            id="medico"
+            v-model="medicoSearch"
+            list="cita-medicos"
+            required
+            :disabled="medicos.length === 0"
+            placeholder="Nombre o apellido"
+            @input="syncMedico"
+            @change="syncMedico"
+          />
+          <datalist id="cita-medicos">
+            <option v-for="medico in filteredMedicos" :key="medico.id" :value="medicoLabel(medico)" />
+          </datalist>
         </div>
         <div class="form-row">
           <label for="paciente">Paciente</label>
@@ -451,21 +486,6 @@ onMounted(load);
           </datalist>
         </div>
         <div class="form-row">
-          <label for="piso">Piso</label>
-          <input
-            id="piso"
-            v-model="pisoSearch"
-            list="cita-pisos"
-            required
-            :disabled="!form.complejo_id"
-            @input="syncPiso"
-            @change="syncPiso"
-          />
-          <datalist id="cita-pisos">
-            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
-          </datalist>
-        </div>
-        <div class="form-row">
           <label for="torre">Torre</label>
           <input
             id="torre"
@@ -478,6 +498,21 @@ onMounted(load);
           />
           <datalist id="cita-torres">
             <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
+          </datalist>
+        </div>
+        <div class="form-row">
+          <label for="piso">Piso</label>
+          <input
+            id="piso"
+            v-model="pisoSearch"
+            list="cita-pisos"
+            required
+            :disabled="!form.complejo_id"
+            @input="syncPiso"
+            @change="syncPiso"
+          />
+          <datalist id="cita-pisos">
+            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
           </datalist>
         </div>
         <div class="form-row">
