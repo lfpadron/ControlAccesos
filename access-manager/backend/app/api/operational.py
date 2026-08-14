@@ -255,7 +255,7 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
     if medico_id is not None:
         medico = exists_or_404(db, Medico, medico_id, "Médico")
-        if usuario is not None and medico_matches_usuario_identity(usuario, medico):
+        if activo and usuario is not None and medico_matches_usuario_identity(usuario, medico):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
         validate_unique_active_medico_assignment(db, usuario_id, medico_id, fecha_inicio, fecha_fin, activo, item)
 

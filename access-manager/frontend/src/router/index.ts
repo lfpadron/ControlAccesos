@@ -8,6 +8,7 @@ import CatalogView from '../views/CatalogView.vue';
 import RolesView from '../views/RolesView.vue';
 import UsuariosView from '../views/UsuariosView.vue';
 import UsuarioRolesView from '../views/UsuarioRolesView.vue';
+import PlantillaTurnosView from '../views/PlantillaTurnosView.vue';
 import PisosView from '../views/PisosView.vue';
 import PerfilView from '../views/PerfilView.vue';
 import AsignacionesView from '../views/AsignacionesView.vue';
@@ -41,14 +42,13 @@ const router = createRouter({
     { path: '/usuarios', component: UsuariosView },
     { path: '/roles', component: RolesView },
     { path: '/usuario-roles', component: UsuarioRolesView },
+    { path: '/plantilla-turnos', component: PlantillaTurnosView },
     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
     { path: '/pisos', component: PisosView },
     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
     { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
-    { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
-    { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
     { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
     { path: '/pacientes', component: PacientesView },

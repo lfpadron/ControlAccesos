@@ -31,8 +31,7 @@ MENU_SCREEN_KEYS = [
     "busqueda-usuarios",
     "roles",
     "usuario-roles",
-    "medicos",
-    "operadores",
+    "plantilla-turnos",
     "pacientes",
     "citas",
     "citas-hoy",
@@ -93,7 +92,9 @@ def role_labels_and_codes(roles: list[Role]) -> tuple[list[str], list[str]]:
 def merge_permissions(roles: list[Role]) -> dict[str, str]:
     merged: dict[str, str] = {}
     for role in roles:
-        permissions = role.permisos or default_permissions_for_role(role.codigo)
+        permissions = {**default_permissions_for_role(role.codigo), **(role.permisos or {})}
+        if "plantilla-turnos" not in permissions and "usuario-roles" in permissions:
+            permissions["plantilla-turnos"] = permissions["usuario-roles"]
         for screen, access in permissions.items():
             normalized = access if access in ACCESS_ORDER else "sin"
             current = merged.get(screen, "sin")

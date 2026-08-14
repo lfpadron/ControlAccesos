@@ -1,0 +1,157 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 9400a95..9a807f7 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -31,8 +31,7 @@ MENU_SCREEN_KEYS = [
+     "busqueda-usuarios",
+     "roles",
+     "usuario-roles",
+-    "medicos",
+-    "operadores",
++    "plantilla-turnos",
+     "pacientes",
+     "citas",
+     "citas-hoy",
+@@ -93,7 +92,9 @@ def role_labels_and_codes(roles: list[Role]) -> tuple[list[str], list[str]]:
+ def merge_permissions(roles: list[Role]) -> dict[str, str]:
+     merged: dict[str, str] = {}
+     for role in roles:
+-        permissions = role.permisos or default_permissions_for_role(role.codigo)
++        permissions = {**default_permissions_for_role(role.codigo), **(role.permisos or {})}
++        if "plantilla-turnos" not in permissions and "usuario-roles" in permissions:
++            permissions["plantilla-turnos"] = permissions["usuario-roles"]
+         for screen, access in permissions.items():
+             normalized = access if access in ACCESS_ORDER else "sin"
+             current = merged.get(screen, "sin")
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index b6f1ddd..a958e72 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -255,7 +255,7 @@ def validate_usuario_rol(db: Session, data: dict[str, Any], item: object | None
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+     if medico_id is not None:
+         medico = exists_or_404(db, Medico, medico_id, "Médico")
+-        if usuario is not None and medico_matches_usuario_identity(usuario, medico):
++        if activo and usuario is not None and medico_matches_usuario_identity(usuario, medico):
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no puede asignarse a sí mismo como médico.")
+         validate_unique_active_medico_assignment(db, usuario_id, medico_id, fecha_inicio, fecha_fin, activo, item)
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 446617f..5b1a47e 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -1,14 +1,16 @@
+ from __future__ import annotations
+ 
+ import os
+-from datetime import datetime, timedelta
+-from uuid import uuid4
++from datetime import date, datetime, timedelta
++from uuid import UUID, uuid4
+ from zoneinfo import ZoneInfo
+ 
+ import pytest
+ from fastapi.testclient import TestClient
+ 
++from app.core.database import SessionLocal
+ from app.main import app
++from app.models.operational import UsuarioRol
+ from app.services.seed_admins import main as seed_admins
+ from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
+ 
+@@ -350,6 +352,27 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
+     assert update_response.status_code == 422, update_response.text
+     assert "no puede asignarse a sí mismo" in update_response.text
+ 
++    with SessionLocal() as db:
++        historical_assignment = UsuarioRol(
++            usuario_id=UUID(user["id"]),
++            rol_id=UUID(medico_role["id"]),
++            medico_id=UUID(self_medico["id"]),
++            fecha_inicio=date(2026, 8, 12),
++            activo=True,
++        )
++        db.add(historical_assignment)
++        db.commit()
++        db.refresh(historical_assignment)
++        historical_assignment_id = str(historical_assignment.id)
++
++    deactivate_response = client.patch(
++        f"/api/usuario-roles/{historical_assignment_id}",
++        headers=auth_headers,
++        json={"activo": False},
++    )
++    assert deactivate_response.status_code == 200, deactivate_response.text
++    assert deactivate_response.json()["activo"] is False
++
+ 
+ def test_usuario_rol_rejects_overlapping_active_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 779a15b..4a93153 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -127,8 +127,7 @@ watch(
+         <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
+         <RouterLink to="/roles" :class="{ disabled: !canUse('/roles') }" :aria-disabled="!canUse('/roles')" @click="handleNav($event, '/roles')">Roles</RouterLink>
+         <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
+-        <RouterLink to="/medicos" :class="{ disabled: !canUse('/medicos') }" :aria-disabled="!canUse('/medicos')" @click="handleNav($event, '/medicos')">Médicos</RouterLink>
+-        <RouterLink to="/operadores" :class="{ disabled: !canUse('/operadores') }" :aria-disabled="!canUse('/operadores')" @click="handleNav($event, '/operadores')">Operadores</RouterLink>
++        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Plantilla de turnos</RouterLink>
+         <span class="nav-section">Operación</span>
+         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
+         <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index b33aa4c..b61b3ce 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -27,8 +27,7 @@ export const screens: ScreenDefinition[] = [
+   { key: 'busqueda-usuarios', label: 'Búsqueda de usuarios', path: '/busqueda-usuarios' },
+   { key: 'roles', label: 'Roles', path: '/roles' },
+   { key: 'usuario-roles', label: 'Asignación de usuarios', path: '/usuario-roles' },
+-  { key: 'medicos', label: 'Médicos', path: '/medicos' },
+-  { key: 'operadores', label: 'Operadores', path: '/operadores' },
++  { key: 'plantilla-turnos', label: 'Plantilla de turnos', path: '/plantilla-turnos' },
+   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
+   { key: 'citas', label: 'Citas', path: '/citas' },
+   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 62e56c1..617b990 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -667,6 +667,7 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
+ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
+ export const listConsultorios = () => listResource<Consultorio>('consultorios');
+ export const listMedicos = () => listResource<Medico>('medicos');
++export const updateMedico = (id: string, payload: Record<string, unknown>) => updateResource<Medico>('medicos', id, payload);
+ export const listAccessibleInstituciones = () => apiFetch<Institucion[]>('/catalogos-operativos/instituciones');
+ export const listAccessibleComplejos = () => apiFetch<Complejo[]>('/catalogos-operativos/complejos');
+ export const listAccessibleTorres = () => apiFetch<Torre[]>('/catalogos-operativos/torres');
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 0c9571e..aea1df1 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -8,6 +8,7 @@ import CatalogView from '../views/CatalogView.vue';
+ import RolesView from '../views/RolesView.vue';
+ import UsuariosView from '../views/UsuariosView.vue';
+ import UsuarioRolesView from '../views/UsuarioRolesView.vue';
++import PlantillaTurnosView from '../views/PlantillaTurnosView.vue';
+ import PisosView from '../views/PisosView.vue';
+ import PerfilView from '../views/PerfilView.vue';
+ import AsignacionesView from '../views/AsignacionesView.vue';
+@@ -41,14 +42,13 @@ const router = createRouter({
+     { path: '/usuarios', component: UsuariosView },
+     { path: '/roles', component: RolesView },
+     { path: '/usuario-roles', component: UsuarioRolesView },
++    { path: '/plantilla-turnos', component: PlantillaTurnosView },
+     { path: '/torres', component: CatalogView, meta: { catalog: 'torres' } },
+     { path: '/pisos', component: PisosView },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+     { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
+-    { path: '/medicos', component: CatalogView, meta: { catalog: 'medicos' } },
+-    { path: '/operadores', component: CatalogView, meta: { catalog: 'operadores' } },
+     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+     { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+     { path: '/pacientes', component: PacientesView },

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
-from uuid import uuid4
+from datetime import date, datetime, timedelta
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.database import SessionLocal
 from app.main import app
+from app.models.operational import UsuarioRol
 from app.services.seed_admins import main as seed_admins
 from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
 
@@ -349,6 +351,27 @@ def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_hea
     )
     assert update_response.status_code == 422, update_response.text
     assert "no puede asignarse a sí mismo" in update_response.text
+
+    with SessionLocal() as db:
+        historical_assignment = UsuarioRol(
+            usuario_id=UUID(user["id"]),
+            rol_id=UUID(medico_role["id"]),
+            medico_id=UUID(self_medico["id"]),
+            fecha_inicio=date(2026, 8, 12),
+            activo=True,
+        )
+        db.add(historical_assignment)
+        db.commit()
+        db.refresh(historical_assignment)
+        historical_assignment_id = str(historical_assignment.id)
+
+    deactivate_response = client.patch(
+        f"/api/usuario-roles/{historical_assignment_id}",
+        headers=auth_headers,
+        json={"activo": False},
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    assert deactivate_response.json()["activo"] is False
 
 
 def test_usuario_rol_rejects_overlapping_active_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:

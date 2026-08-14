@@ -667,6 +667,7 @@ export const listSalasEspera = () => listResource<SalaEspera>('salas-espera');
 export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-turnos');
 export const listConsultorios = () => listResource<Consultorio>('consultorios');
 export const listMedicos = () => listResource<Medico>('medicos');
+export const updateMedico = (id: string, payload: Record<string, unknown>) => updateResource<Medico>('medicos', id, payload);
 export const listAccessibleInstituciones = () => apiFetch<Institucion[]>('/catalogos-operativos/instituciones');
 export const listAccessibleComplejos = () => apiFetch<Complejo[]>('/catalogos-operativos/complejos');
 export const listAccessibleTorres = () => apiFetch<Torre[]>('/catalogos-operativos/torres');
