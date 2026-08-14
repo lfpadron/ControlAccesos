@@ -34,6 +34,7 @@ export const screens: ScreenDefinition[] = [
   { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },
   { key: 'consulta-clusters-consultorios', label: 'Consulta de clústers', path: '/consulta-clusters-consultorios' },
   { key: 'pantallas-turnos', label: 'Pantallas de turnos', path: '/pantallas-turnos' },
+  { key: 'consulta-clusters-pantallas', label: 'Consulta de clúster y pantallas', path: '/consulta-clusters-pantallas' },
   { key: 'kioskos', label: 'Kioskos', path: '/kioskos' },
   { key: 'turnos-llamados', label: 'Turnos llamados', path: '/turnos-llamados' },
   { key: 'reportes', label: 'Reportes', path: '/reportes' },

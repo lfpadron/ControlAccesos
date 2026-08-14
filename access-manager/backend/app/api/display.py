@@ -19,10 +19,13 @@ from app.core.security import hash_password, require_permission, require_role, v
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
 from app.models.flow import Cita, Paciente
-from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso
+from app.models.institucion import Institucion
+from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso, Torre
 from app.models.usuario import Usuario
 from app.schemas.display import (
     CitaLlamarResponse,
+    PantallaClusterConsultaClusterRead,
+    PantallaClusterConsultaRead,
     PantallaTurnosCreate,
     PantallaTurnosPublicConfig,
     PantallaTurnosRead,
@@ -31,11 +34,12 @@ from app.schemas.display import (
     PublicTurnoDisplay,
     TurnoDisplayRecienteRead,
 )
-from app.services.access_scope import ensure_cita_access, turno_display_access_predicate
+from app.services.access_scope import ensure_cita_access, pantalla_turnos_access_predicate, turno_display_access_predicate
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 router = APIRouter()
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
+PantallaClusterConsultaUser = Depends(require_permission("consulta-clusters-pantallas"))
 TurnosLlamadosReadUser = Depends(require_permission("turnos-llamados"))
 TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamados", minimum="editar"))
 CALL_INTERVAL = timedelta(minutes=5)
@@ -115,6 +119,30 @@ def response_for_screen(db: Session, screen: PantallaTurnos) -> PantallaTurnosRe
         created_at=screen.created_at,
         updated_at=screen.updated_at,
     )
+
+
+def cluster_read(cluster: ClusterTurnos) -> PantallaClusterConsultaClusterRead:
+    return PantallaClusterConsultaClusterRead(
+        id=cluster.id,
+        nombre=cluster.nombre,
+        descripcion=cluster.descripcion,
+        activo=cluster.activo,
+    )
+
+
+def clusters_for_screen(db: Session, screen_id: UUID) -> list[ClusterTurnos]:
+    cluster_ids = cluster_ids_for_screen(db, screen_id)
+    if not cluster_ids:
+        return []
+    return list(
+        db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids)).order_by(ClusterTurnos.nombre)).scalars()
+    )
+
+
+def piso_label(piso: Piso | None) -> str | None:
+    if piso is None:
+        return None
+    return piso.nombre_visible or f"Piso {piso.numero}"
 
 
 def screen_audit(db: Session, screen: PantallaTurnos) -> dict:
@@ -359,6 +387,77 @@ def render_turno_text(db: Session, cita: Cita, consultorio: str) -> str:
 
 def call_number_for_rows(rows: list[TurnoDisplay]) -> int:
     return max((row.llamado_numero or 1 for row in rows), default=0)
+
+
+@router.get("/consultas-clusters-pantallas", response_model=list[PantallaClusterConsultaRead])
+def consulta_clusters_pantallas(
+    institucion_id: UUID | None = Query(default=None),
+    complejo_id: UUID | None = Query(default=None),
+    torre_id: UUID | None = Query(default=None),
+    piso_id: UUID | None = Query(default=None),
+    estado: str = Query(default="todos"),
+    sin_cluster: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: Usuario = PantallaClusterConsultaUser,
+) -> list[PantallaClusterConsultaRead]:
+    if estado not in {"todos", "activa", "inactiva"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Estado inválido. Use todos, activa o inactiva.",
+        )
+    query = (
+        select(PantallaTurnos, Institucion, Complejo, Torre, Piso)
+        .join(Complejo, Complejo.id == PantallaTurnos.complejo_id)
+        .join(Institucion, Institucion.id == Complejo.institucion_id)
+        .outerjoin(Piso, Piso.id == PantallaTurnos.piso_id)
+        .outerjoin(Torre, Torre.id == Piso.torre_id)
+        .where(pantalla_turnos_access_predicate(db, current_user))
+    )
+    if institucion_id is not None:
+        query = query.where(Institucion.id == institucion_id)
+    if complejo_id is not None:
+        query = query.where(PantallaTurnos.complejo_id == complejo_id)
+    if torre_id is not None:
+        query = query.where(Piso.torre_id == torre_id)
+    if piso_id is not None:
+        query = query.where(PantallaTurnos.piso_id == piso_id)
+    if estado == "activa":
+        query = query.where(PantallaTurnos.activa.is_(True))
+    elif estado == "inactiva":
+        query = query.where(PantallaTurnos.activa.is_(False))
+    if sin_cluster:
+        screen_has_bridge = (
+            select(PantallaTurnosCluster.pantalla_id)
+            .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
+            .exists()
+        )
+        query = query.where(~screen_has_bridge, PantallaTurnos.cluster_espera_id.is_(None))
+
+    rows = db.execute(
+        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.numero, PantallaTurnos.codigo_dispositivo)
+    ).all()
+    response: list[PantallaClusterConsultaRead] = []
+    for screen, institucion, campus, torre, piso in rows:
+        clusters = clusters_for_screen(db, screen.id)
+        response.append(
+            PantallaClusterConsultaRead(
+                id=screen.id,
+                codigo_dispositivo=screen.codigo_dispositivo,
+                nombre=screen.nombre,
+                institucion_id=institucion.id,
+                institucion=institucion.nombre,
+                complejo_id=campus.id,
+                campus=campus.nombre,
+                torre_id=torre.id if torre else None,
+                torre=torre.nombre if torre else None,
+                piso_id=piso.id if piso else None,
+                piso=piso_label(piso),
+                activa=screen.activa,
+                cluster_ids=[cluster.id for cluster in clusters],
+                clusters=[cluster_read(cluster) for cluster in clusters],
+            )
+        )
+    return response
 
 
 @router.get("/pantallas-turnos", response_model=list[PantallaTurnosRead])

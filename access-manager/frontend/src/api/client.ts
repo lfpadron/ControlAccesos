@@ -455,6 +455,23 @@ export type PisoClusterConsulta = {
   consultorios_sin_cluster: ConsultorioConsulta[];
 };
 
+export type PantallaClusterConsulta = {
+  id: string;
+  codigo_dispositivo: string;
+  nombre?: string | null;
+  institucion_id: string;
+  institucion: string;
+  complejo_id: string;
+  campus: string;
+  torre_id?: string | null;
+  torre?: string | null;
+  piso_id?: string | null;
+  piso?: string | null;
+  activa: boolean;
+  cluster_ids: string[];
+  clusters: ClusterConsulta[];
+};
+
 export type CheckinResponse = {
   resultado: string;
   mensaje: string;
@@ -699,6 +716,17 @@ export function consultaClustersPorPiso(params: {
   piso_id?: string;
 }) {
   return apiFetch<PisoClusterConsulta[]>(`/consultas-clusters-consultorios/por-piso${queryString(params)}`);
+}
+
+export function consultaClustersPantallas(params: {
+  institucion_id?: string;
+  complejo_id?: string;
+  torre_id?: string;
+  piso_id?: string;
+  estado?: string;
+  sin_cluster?: boolean;
+}) {
+  return apiFetch<PantallaClusterConsulta[]>(`/consultas-clusters-pantallas${queryString(params)}`);
 }
 
 export type CitaFilters = {

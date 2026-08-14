@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from app.models.complejo import Complejo
+from app.models.display import PantallaTurnos
 from app.models.flow import MedicoPaciente, Paciente
 from app.models.institucion import Institucion
 from app.models.operational import Consultorio, Piso, Torre
@@ -17,6 +18,7 @@ from app.services.access_scope import (
     consultorio_catalog_access_predicate,
     institucion_catalog_access_predicate,
     paciente_access_predicate,
+    pantalla_turnos_access_predicate,
     piso_catalog_access_predicate,
     torre_catalog_access_predicate,
 )
@@ -63,6 +65,9 @@ def test_location_catalog_scope_predicates_compile() -> None:
         select(Torre).where(torre_catalog_access_predicate(db, user, today)),
         select(Piso).where(piso_catalog_access_predicate(db, user, today)),
         select(Consultorio).where(consultorio_catalog_access_predicate(db, user, today)),
+        select(PantallaTurnos)
+        .outerjoin(Piso, Piso.id == PantallaTurnos.piso_id)
+        .where(pantalla_turnos_access_predicate(db, user, today)),
     ]
 
     compiled = "\n".join(str(query.compile(dialect=postgresql.dialect())) for query in queries)

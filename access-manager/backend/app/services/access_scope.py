@@ -8,7 +8,7 @@ from sqlalchemy import and_, not_, or_, select, true
 from sqlalchemy.orm import Session, aliased
 
 from app.models.complejo import Complejo
-from app.models.display import TurnoDisplay
+from app.models.display import PantallaTurnos, TurnoDisplay
 from app.models.flow import Cita, MedicoPaciente, Paciente
 from app.models.institucion import Institucion
 from app.models.operational import (
@@ -460,6 +460,15 @@ def piso_catalog_access_predicate(db: Session, user: Usuario, today: date | None
     return or_(
         _unrestricted_location_access_predicate(user, today),
         _piso_location_access_predicate(user, Piso.id, Piso.torre_id, Piso.complejo_id, today),
+    )
+
+
+def pantalla_turnos_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+    if user_has_global_access(db, user, today):
+        return true()
+    return or_(
+        _unrestricted_location_access_predicate(user, today),
+        _piso_location_access_predicate(user, PantallaTurnos.piso_id, Piso.torre_id, PantallaTurnos.complejo_id, today),
     )
 
 

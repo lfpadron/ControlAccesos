@@ -38,6 +38,7 @@ MENU_SCREEN_KEYS = [
     "clusters-turnos",
     "consulta-clusters-consultorios",
     "pantallas-turnos",
+    "consulta-clusters-pantallas",
     "kioskos",
     "turnos-llamados",
     "reportes",

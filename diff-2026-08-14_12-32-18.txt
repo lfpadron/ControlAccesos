@@ -1,0 +1,416 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 6df8ea9..169e928 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -38,6 +38,7 @@ MENU_SCREEN_KEYS = [
+     "clusters-turnos",
+     "consulta-clusters-consultorios",
+     "pantallas-turnos",
++    "consulta-clusters-pantallas",
+     "kioskos",
+     "turnos-llamados",
+     "reportes",
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 5cae669..bd3ddbb 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -19,10 +19,13 @@ from app.core.security import hash_password, require_permission, require_role, v
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
+ from app.models.flow import Cita, Paciente
+-from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso
++from app.models.institucion import Institucion
++from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso, Torre
+ from app.models.usuario import Usuario
+ from app.schemas.display import (
+     CitaLlamarResponse,
++    PantallaClusterConsultaClusterRead,
++    PantallaClusterConsultaRead,
+     PantallaTurnosCreate,
+     PantallaTurnosPublicConfig,
+     PantallaTurnosRead,
+@@ -31,11 +34,12 @@ from app.schemas.display import (
+     PublicTurnoDisplay,
+     TurnoDisplayRecienteRead,
+ )
+-from app.services.access_scope import ensure_cita_access, turno_display_access_predicate
++from app.services.access_scope import ensure_cita_access, pantalla_turnos_access_predicate, turno_display_access_predicate
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ router = APIRouter()
+ AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
++PantallaClusterConsultaUser = Depends(require_permission("consulta-clusters-pantallas"))
+ TurnosLlamadosReadUser = Depends(require_permission("turnos-llamados"))
+ TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamados", minimum="editar"))
+ CALL_INTERVAL = timedelta(minutes=5)
+@@ -117,6 +121,30 @@ def response_for_screen(db: Session, screen: PantallaTurnos) -> PantallaTurnosRe
+     )
+ 
+ 
++def cluster_read(cluster: ClusterTurnos) -> PantallaClusterConsultaClusterRead:
++    return PantallaClusterConsultaClusterRead(
++        id=cluster.id,
++        nombre=cluster.nombre,
++        descripcion=cluster.descripcion,
++        activo=cluster.activo,
++    )
++
++
++def clusters_for_screen(db: Session, screen_id: UUID) -> list[ClusterTurnos]:
++    cluster_ids = cluster_ids_for_screen(db, screen_id)
++    if not cluster_ids:
++        return []
++    return list(
++        db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids)).order_by(ClusterTurnos.nombre)).scalars()
++    )
++
++
++def piso_label(piso: Piso | None) -> str | None:
++    if piso is None:
++        return None
++    return piso.nombre_visible or f"Piso {piso.numero}"
++
++
+ def screen_audit(db: Session, screen: PantallaTurnos) -> dict:
+     return {**audit_safe_dict(screen), "cluster_ids": [str(cluster_id) for cluster_id in cluster_ids_for_screen(db, screen.id)]}
+ 
+@@ -361,6 +389,77 @@ def call_number_for_rows(rows: list[TurnoDisplay]) -> int:
+     return max((row.llamado_numero or 1 for row in rows), default=0)
+ 
+ 
++@router.get("/consultas-clusters-pantallas", response_model=list[PantallaClusterConsultaRead])
++def consulta_clusters_pantallas(
++    institucion_id: UUID | None = Query(default=None),
++    complejo_id: UUID | None = Query(default=None),
++    torre_id: UUID | None = Query(default=None),
++    piso_id: UUID | None = Query(default=None),
++    estado: str = Query(default="todos"),
++    sin_cluster: bool = Query(default=False),
++    db: Session = Depends(get_db),
++    current_user: Usuario = PantallaClusterConsultaUser,
++) -> list[PantallaClusterConsultaRead]:
++    if estado not in {"todos", "activa", "inactiva"}:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Estado inválido. Use todos, activa o inactiva.",
++        )
++    query = (
++        select(PantallaTurnos, Institucion, Complejo, Torre, Piso)
++        .join(Complejo, Complejo.id == PantallaTurnos.complejo_id)
++        .join(Institucion, Institucion.id == Complejo.institucion_id)
++        .outerjoin(Piso, Piso.id == PantallaTurnos.piso_id)
++        .outerjoin(Torre, Torre.id == Piso.torre_id)
++        .where(pantalla_turnos_access_predicate(db, current_user))
++    )
++    if institucion_id is not None:
++        query = query.where(Institucion.id == institucion_id)
++    if complejo_id is not None:
++        query = query.where(PantallaTurnos.complejo_id == complejo_id)
++    if torre_id is not None:
++        query = query.where(Piso.torre_id == torre_id)
++    if piso_id is not None:
++        query = query.where(PantallaTurnos.piso_id == piso_id)
++    if estado == "activa":
++        query = query.where(PantallaTurnos.activa.is_(True))
++    elif estado == "inactiva":
++        query = query.where(PantallaTurnos.activa.is_(False))
++    if sin_cluster:
++        screen_has_bridge = (
++            select(PantallaTurnosCluster.pantalla_id)
++            .where(PantallaTurnosCluster.pantalla_id == PantallaTurnos.id)
++            .exists()
++        )
++        query = query.where(~screen_has_bridge, PantallaTurnos.cluster_espera_id.is_(None))
++
++    rows = db.execute(
++        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.numero, PantallaTurnos.codigo_dispositivo)
++    ).all()
++    response: list[PantallaClusterConsultaRead] = []
++    for screen, institucion, campus, torre, piso in rows:
++        clusters = clusters_for_screen(db, screen.id)
++        response.append(
++            PantallaClusterConsultaRead(
++                id=screen.id,
++                codigo_dispositivo=screen.codigo_dispositivo,
++                nombre=screen.nombre,
++                institucion_id=institucion.id,
++                institucion=institucion.nombre,
++                complejo_id=campus.id,
++                campus=campus.nombre,
++                torre_id=torre.id if torre else None,
++                torre=torre.nombre if torre else None,
++                piso_id=piso.id if piso else None,
++                piso=piso_label(piso),
++                activa=screen.activa,
++                cluster_ids=[cluster.id for cluster in clusters],
++                clusters=[cluster_read(cluster) for cluster in clusters],
++            )
++        )
++    return response
++
++
+ @router.get("/pantallas-turnos", response_model=list[PantallaTurnosRead])
+ def list_pantallas_turnos(
+     db: Session = Depends(get_db),
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index 79a1960..16d3f1c 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -73,6 +73,30 @@ class PantallaTurnosRead(PantallaTurnosConfigMixin):
+     model_config = ConfigDict(from_attributes=True)
+ 
+ 
++class PantallaClusterConsultaClusterRead(BaseModel):
++    id: UUID
++    nombre: str
++    descripcion: str | None = None
++    activo: bool
++
++
++class PantallaClusterConsultaRead(BaseModel):
++    id: UUID
++    codigo_dispositivo: str
++    nombre: str | None = None
++    institucion_id: UUID
++    institucion: str
++    complejo_id: UUID
++    campus: str
++    torre_id: UUID | None = None
++    torre: str | None = None
++    piso_id: UUID | None = None
++    piso: str | None = None
++    activa: bool
++    cluster_ids: list[UUID]
++    clusters: list[PantallaClusterConsultaClusterRead]
++
++
+ class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
+     pass
+ 
+diff --git a/access-manager/backend/app/services/access_scope.py b/access-manager/backend/app/services/access_scope.py
+index 971942a..a57abc3 100644
+--- a/access-manager/backend/app/services/access_scope.py
++++ b/access-manager/backend/app/services/access_scope.py
+@@ -8,7 +8,7 @@ from sqlalchemy import and_, not_, or_, select, true
+ from sqlalchemy.orm import Session, aliased
+ 
+ from app.models.complejo import Complejo
+-from app.models.display import TurnoDisplay
++from app.models.display import PantallaTurnos, TurnoDisplay
+ from app.models.flow import Cita, MedicoPaciente, Paciente
+ from app.models.institucion import Institucion
+ from app.models.operational import (
+@@ -463,6 +463,15 @@ def piso_catalog_access_predicate(db: Session, user: Usuario, today: date | None
+     )
+ 
+ 
++def pantalla_turnos_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
++    if user_has_global_access(db, user, today):
++        return true()
++    return or_(
++        _unrestricted_location_access_predicate(user, today),
++        _piso_location_access_predicate(user, PantallaTurnos.piso_id, Piso.torre_id, PantallaTurnos.complejo_id, today),
++    )
++
++
+ def _cita_access_predicate_for(
+     db: Session,
+     user: Usuario,
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index 3f77949..499251c 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -8,6 +8,7 @@ from sqlalchemy import select
+ from sqlalchemy.dialects import postgresql
+ 
+ from app.models.complejo import Complejo
++from app.models.display import PantallaTurnos
+ from app.models.flow import MedicoPaciente, Paciente
+ from app.models.institucion import Institucion
+ from app.models.operational import Consultorio, Piso, Torre
+@@ -17,6 +18,7 @@ from app.services.access_scope import (
+     consultorio_catalog_access_predicate,
+     institucion_catalog_access_predicate,
+     paciente_access_predicate,
++    pantalla_turnos_access_predicate,
+     piso_catalog_access_predicate,
+     torre_catalog_access_predicate,
+ )
+@@ -63,6 +65,9 @@ def test_location_catalog_scope_predicates_compile() -> None:
+         select(Torre).where(torre_catalog_access_predicate(db, user, today)),
+         select(Piso).where(piso_catalog_access_predicate(db, user, today)),
+         select(Consultorio).where(consultorio_catalog_access_predicate(db, user, today)),
++        select(PantallaTurnos)
++        .outerjoin(Piso, Piso.id == PantallaTurnos.piso_id)
++        .where(pantalla_turnos_access_predicate(db, user, today)),
+     ]
+ 
+     compiled = "\n".join(str(query.compile(dialect=postgresql.dialect())) for query in queries)
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index e8b0446..305a8fc 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
+ 
+ from app.core.database import SessionLocal
+ from app.main import app
+-from app.models.display import PantallaTurnosCluster
++from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.operational import UsuarioRol
+ from app.services.seed_admins import main as seed_admins
+ from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
+@@ -560,6 +560,55 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     )
+     assert pantalla["polling_interval_seconds"] == 2
+ 
++    consulta_pantallas = client.get(
++        "/api/consultas-clusters-pantallas",
++        headers=auth_headers,
++        params={
++            "institucion_id": institucion["id"],
++            "complejo_id": complejo["id"],
++            "torre_id": torre["id"],
++            "piso_id": piso["id"],
++            "estado": "activa",
++        },
++    )
++    assert consulta_pantallas.status_code == 200, consulta_pantallas.text
++    pantalla_asignada = next(item for item in consulta_pantallas.json() if item["id"] == pantalla["id"])
++    assert pantalla_asignada["cluster_ids"] == [cluster["id"]]
++    assert pantalla_asignada["clusters"][0]["id"] == cluster["id"]
++    assert pantalla_asignada["institucion"] == institucion["nombre"]
++    assert pantalla_asignada["campus"] == complejo["nombre"]
++    assert pantalla_asignada["torre"] == torre["nombre"]
++    assert pantalla_asignada["piso"] == piso["nombre_visible"]
++
++    pantalla_sin_cluster = assert_created(
++        client.post(
++            "/api/pantallas-turnos",
++            headers=auth_headers,
++            json={
++                "codigo_dispositivo": f"display-sin-cluster-{suffix}",
++                "nombre": f"Pantalla Sin Cluster {suffix}",
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++    with SessionLocal() as db:
++        db.query(PantallaTurnosCluster).filter(
++            PantallaTurnosCluster.pantalla_id == UUID(pantalla_sin_cluster["id"])
++        ).delete(synchronize_session=False)
++        pantalla_row = db.get(PantallaTurnos, UUID(pantalla_sin_cluster["id"]))
++        pantalla_row.cluster_espera_id = None
++        db.commit()
++
++    consulta_pantallas_sin_cluster = client.get(
++        "/api/consultas-clusters-pantallas",
++        headers=auth_headers,
++        params={"complejo_id": complejo["id"], "sin_cluster": True},
++    )
++    assert consulta_pantallas_sin_cluster.status_code == 200, consulta_pantallas_sin_cluster.text
++    assert any(item["id"] == pantalla_sin_cluster["id"] and item["clusters"] == [] for item in consulta_pantallas_sin_cluster.json())
++
+     consultorio = assert_created(
+         client.post(
+             "/api/consultorios",
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 1a09e46..cfa055b 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -135,6 +135,7 @@ watch(
+         <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
+         <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+         <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
++        <RouterLink to="/consulta-clusters-pantallas" :class="{ disabled: !canUse('/consulta-clusters-pantallas') }" :aria-disabled="!canUse('/consulta-clusters-pantallas')" @click="handleNav($event, '/consulta-clusters-pantallas')">Consulta de clúster y pantallas</RouterLink>
+         <RouterLink to="/kioskos" :class="{ disabled: !canUse('/kioskos') }" :aria-disabled="!canUse('/kioskos')" @click="handleNav($event, '/kioskos')">Kioskos</RouterLink>
+         <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
+         <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index 2a9b027..1cb2779 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -34,6 +34,7 @@ export const screens: ScreenDefinition[] = [
+   { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },
+   { key: 'consulta-clusters-consultorios', label: 'Consulta de clústers', path: '/consulta-clusters-consultorios' },
+   { key: 'pantallas-turnos', label: 'Pantallas de turnos', path: '/pantallas-turnos' },
++  { key: 'consulta-clusters-pantallas', label: 'Consulta de clúster y pantallas', path: '/consulta-clusters-pantallas' },
+   { key: 'kioskos', label: 'Kioskos', path: '/kioskos' },
+   { key: 'turnos-llamados', label: 'Turnos llamados', path: '/turnos-llamados' },
+   { key: 'reportes', label: 'Reportes', path: '/reportes' },
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 617b990..e4bd289 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -455,6 +455,23 @@ export type PisoClusterConsulta = {
+   consultorios_sin_cluster: ConsultorioConsulta[];
+ };
+ 
++export type PantallaClusterConsulta = {
++  id: string;
++  codigo_dispositivo: string;
++  nombre?: string | null;
++  institucion_id: string;
++  institucion: string;
++  complejo_id: string;
++  campus: string;
++  torre_id?: string | null;
++  torre?: string | null;
++  piso_id?: string | null;
++  piso?: string | null;
++  activa: boolean;
++  cluster_ids: string[];
++  clusters: ClusterConsulta[];
++};
++
+ export type CheckinResponse = {
+   resultado: string;
+   mensaje: string;
+@@ -701,6 +718,17 @@ export function consultaClustersPorPiso(params: {
+   return apiFetch<PisoClusterConsulta[]>(`/consultas-clusters-consultorios/por-piso${queryString(params)}`);
+ }
+ 
++export function consultaClustersPantallas(params: {
++  institucion_id?: string;
++  complejo_id?: string;
++  torre_id?: string;
++  piso_id?: string;
++  estado?: string;
++  sin_cluster?: boolean;
++}) {
++  return apiFetch<PantallaClusterConsulta[]>(`/consultas-clusters-pantallas${queryString(params)}`);
++}
++
+ export type CitaFilters = {
+   fecha?: string;
+   fecha_inicio?: string;
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 9043e75..3252695 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -24,6 +24,7 @@ import ReportesView from '../views/ReportesView.vue';
+ import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
+ import KioskosView from '../views/KioskosView.vue';
+ import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
++import ConsultaClustersPantallasView from '../views/ConsultaClustersPantallasView.vue';
+ 
+ const router = createRouter({
+   history: createWebHistory(),
+@@ -47,7 +48,6 @@ const router = createRouter({
+     { path: '/pisos', component: PisosView },
+     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
+     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
+-    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+     { path: '/pacientes', component: PacientesView },
+     { path: '/citas', component: CitasView },
+     { path: '/citas/hoy', component: CitasHoyView },
+@@ -58,6 +58,8 @@ const router = createRouter({
+     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+     { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
+     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
++    { path: '/consulta-clusters-pantallas', component: ConsultaClustersPantallasView },
++    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+     { path: '/turnos-llamados', component: TurnosLlamadosView },
+     { path: '/auditoria', component: AuditoriaView },
+   ],

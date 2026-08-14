@@ -24,6 +24,7 @@ import ReportesView from '../views/ReportesView.vue';
 import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
 import KioskosView from '../views/KioskosView.vue';
 import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
+import ConsultaClustersPantallasView from '../views/ConsultaClustersPantallasView.vue';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -47,7 +48,6 @@ const router = createRouter({
     { path: '/pisos', component: PisosView },
     { path: '/salas-espera', component: CatalogView, meta: { catalog: 'salas-espera' } },
     { path: '/consultorios', component: CatalogView, meta: { catalog: 'consultorios' } },
-    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
     { path: '/pacientes', component: PacientesView },
     { path: '/citas', component: CitasView },
     { path: '/citas/hoy', component: CitasHoyView },
@@ -58,6 +58,8 @@ const router = createRouter({
     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
     { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
+    { path: '/consulta-clusters-pantallas', component: ConsultaClustersPantallasView },
+    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
     { path: '/turnos-llamados', component: TurnosLlamadosView },
     { path: '/auditoria', component: AuditoriaView },
   ],

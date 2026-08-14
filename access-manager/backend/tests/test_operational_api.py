@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
 from app.main import app
-from app.models.display import PantallaTurnosCluster
+from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.operational import UsuarioRol
 from app.services.seed_admins import main as seed_admins
 from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
@@ -559,6 +559,55 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
         )
     )
     assert pantalla["polling_interval_seconds"] == 2
+
+    consulta_pantallas = client.get(
+        "/api/consultas-clusters-pantallas",
+        headers=auth_headers,
+        params={
+            "institucion_id": institucion["id"],
+            "complejo_id": complejo["id"],
+            "torre_id": torre["id"],
+            "piso_id": piso["id"],
+            "estado": "activa",
+        },
+    )
+    assert consulta_pantallas.status_code == 200, consulta_pantallas.text
+    pantalla_asignada = next(item for item in consulta_pantallas.json() if item["id"] == pantalla["id"])
+    assert pantalla_asignada["cluster_ids"] == [cluster["id"]]
+    assert pantalla_asignada["clusters"][0]["id"] == cluster["id"]
+    assert pantalla_asignada["institucion"] == institucion["nombre"]
+    assert pantalla_asignada["campus"] == complejo["nombre"]
+    assert pantalla_asignada["torre"] == torre["nombre"]
+    assert pantalla_asignada["piso"] == piso["nombre_visible"]
+
+    pantalla_sin_cluster = assert_created(
+        client.post(
+            "/api/pantallas-turnos",
+            headers=auth_headers,
+            json={
+                "codigo_dispositivo": f"display-sin-cluster-{suffix}",
+                "nombre": f"Pantalla Sin Cluster {suffix}",
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+    with SessionLocal() as db:
+        db.query(PantallaTurnosCluster).filter(
+            PantallaTurnosCluster.pantalla_id == UUID(pantalla_sin_cluster["id"])
+        ).delete(synchronize_session=False)
+        pantalla_row = db.get(PantallaTurnos, UUID(pantalla_sin_cluster["id"]))
+        pantalla_row.cluster_espera_id = None
+        db.commit()
+
+    consulta_pantallas_sin_cluster = client.get(
+        "/api/consultas-clusters-pantallas",
+        headers=auth_headers,
+        params={"complejo_id": complejo["id"], "sin_cluster": True},
+    )
+    assert consulta_pantallas_sin_cluster.status_code == 200, consulta_pantallas_sin_cluster.text
+    assert any(item["id"] == pantalla_sin_cluster["id"] and item["clusters"] == [] for item in consulta_pantallas_sin_cluster.json())
 
     consultorio = assert_created(
         client.post(

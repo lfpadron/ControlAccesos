@@ -135,6 +135,7 @@ watch(
         <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
         <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
         <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
+        <RouterLink to="/consulta-clusters-pantallas" :class="{ disabled: !canUse('/consulta-clusters-pantallas') }" :aria-disabled="!canUse('/consulta-clusters-pantallas')" @click="handleNav($event, '/consulta-clusters-pantallas')">Consulta de clúster y pantallas</RouterLink>
         <RouterLink to="/kioskos" :class="{ disabled: !canUse('/kioskos') }" :aria-disabled="!canUse('/kioskos')" @click="handleNav($event, '/kioskos')">Kioskos</RouterLink>
         <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
         <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>

@@ -73,6 +73,30 @@ class PantallaTurnosRead(PantallaTurnosConfigMixin):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PantallaClusterConsultaClusterRead(BaseModel):
+    id: UUID
+    nombre: str
+    descripcion: str | None = None
+    activo: bool
+
+
+class PantallaClusterConsultaRead(BaseModel):
+    id: UUID
+    codigo_dispositivo: str
+    nombre: str | None = None
+    institucion_id: UUID
+    institucion: str
+    complejo_id: UUID
+    campus: str
+    torre_id: UUID | None = None
+    torre: str | None = None
+    piso_id: UUID | None = None
+    piso: str | None = None
+    activa: bool
+    cluster_ids: list[UUID]
+    clusters: list[PantallaClusterConsultaClusterRead]
+
+
 class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
     pass
 
