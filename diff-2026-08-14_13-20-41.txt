@@ -1,0 +1,91 @@
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index d650eed..5794808 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -42,7 +42,6 @@ const qrPayload = ref('');
+ const qrDataUrl = ref('');
+ const ticket = ref<TicketResponse | null>(null);
+ const selectedCita = ref<Cita | null>(null);
+-const selectedSlot = ref('');
+ const loading = ref(false);
+ const institucionSearch = ref('');
+ const complejoSearch = ref('');
+@@ -150,32 +149,18 @@ function requestFilters(): CitaFilters {
+   };
+ }
+ 
+-function slotKey(hora: string) {
+-  const [hourText, minuteText] = hora.split(':');
+-  const hour = Number(hourText);
+-  const minute = Number(minuteText);
+-  const slotMinute = minute < 30 ? 0 : 30;
+-  return `${String(hour).padStart(2, '0')}:${String(slotMinute).padStart(2, '0')}`;
+-}
+-
+-function slotEnd(slot: string) {
+-  const [hourText, minuteText] = slot.split(':');
+-  const date = new Date(2000, 0, 1, Number(hourText), Number(minuteText) + 30);
+-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+-}
+-
+-const slots = computed(() => [...new Set(citas.value.map((cita) => slotKey(cita.hora_cita)))].sort());
+-const slotRows = computed(() => citas.value.filter((cita) => slotKey(cita.hora_cita) === selectedSlot.value));
+-const currentSlotIndex = computed(() => slots.value.findIndex((slot) => slot === selectedSlot.value));
++const timeRangeLabel = computed(() => {
++  if (filters.hora_inicio && filters.hora_fin) return `${filters.hora_inicio} - ${filters.hora_fin}`;
++  if (filters.hora_inicio) return `Desde ${filters.hora_inicio}`;
++  if (filters.hora_fin) return `Hasta ${filters.hora_fin}`;
++  return 'Todo el día';
++});
+ 
+ async function load() {
+   loading.value = true;
+   error.value = '';
+   try {
+     citas.value = await listCitasHoy(requestFilters());
+-    if (!slots.value.includes(selectedSlot.value)) {
+-      selectedSlot.value = slots.value[0] ?? '';
+-    }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar las citas.';
+   } finally {
+@@ -287,16 +272,6 @@ async function showTicket(cita: Cita) {
+   }
+ }
+ 
+-function previousSlot() {
+-  const index = currentSlotIndex.value;
+-  if (index > 0) selectedSlot.value = slots.value[index - 1];
+-}
+-
+-function nextSlot() {
+-  const index = currentSlotIndex.value;
+-  if (index >= 0 && index < slots.value.length - 1) selectedSlot.value = slots.value[index + 1];
+-}
+-
+ function clearFilters() {
+   filters.fecha = todayLocalIso();
+   filters.hora_inicio = localTimeMinusHours(1);
+@@ -441,12 +416,7 @@ onMounted(async () => {
+       <div class="page-header compact">
+         <div>
+           <h2>{{ citas.length }} citas</h2>
+-          <p v-if="selectedSlot">{{ selectedSlot }} - {{ slotEnd(selectedSlot) }} · {{ slotRows.length }} registros</p>
+-          <p v-else>Sin intervalos para mostrar</p>
+-        </div>
+-        <div class="inline-actions">
+-          <button class="secondary" type="button" :disabled="currentSlotIndex <= 0" @click="previousSlot">Anterior</button>
+-          <button class="secondary" type="button" :disabled="currentSlotIndex < 0 || currentSlotIndex >= slots.length - 1" @click="nextSlot">Siguiente</button>
++          <p>{{ timeRangeLabel }} · {{ citas.length }} registros</p>
+         </div>
+       </div>
+       <p v-if="message" class="message">{{ message }}</p>
+@@ -466,7 +436,7 @@ onMounted(async () => {
+             </tr>
+           </thead>
+           <tbody>
+-            <tr v-for="cita in slotRows" :key="cita.id">
++            <tr v-for="cita in citas" :key="cita.id">
+               <td>{{ cita.hora_cita.slice(0, 5) }}</td>
+               <td><strong>{{ cita.folio_turno }}</strong></td>
+               <td>{{ patientMedicalDisplay(cita) }}</td>
