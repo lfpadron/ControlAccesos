@@ -24,6 +24,7 @@ import {
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
 import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
 
 const instituciones = ref<Institucion[]>([]);
@@ -107,9 +108,7 @@ const puntoComplejos = computed(() =>
 const puntoTorres = computed(() => (puntoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === puntoForm.complejo_id) : []));
 const puntoPisos = computed(() =>
   puntoForm.complejo_id && puntoForm.torre_id
-    ? pisos.value
-        .filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id)
-        .sort((a, b) => a.numero - b.numero)
+    ? sortPisosByCodigo(pisos.value.filter((item) => item.complejo_id === puntoForm.complejo_id && item.torre_id === puntoForm.torre_id))
     : [],
 );
 const kioskoComplejos = computed(() =>
@@ -118,9 +117,7 @@ const kioskoComplejos = computed(() =>
 const kioskoTorres = computed(() => (kioskoForm.complejo_id ? torres.value.filter((item) => item.complejo_id === kioskoForm.complejo_id) : []));
 const kioskoPisos = computed(() =>
   kioskoForm.complejo_id && kioskoForm.torre_id
-    ? pisos.value
-        .filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id)
-        .sort((a, b) => a.numero - b.numero)
+    ? sortPisosByCodigo(pisos.value.filter((item) => item.complejo_id === kioskoForm.complejo_id && item.torre_id === kioskoForm.torre_id))
     : [],
 );
 const kioskoPuntos = computed(() =>
@@ -152,8 +149,7 @@ function institucionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoTorreLabel(item, torres.value);
 }
 
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
@@ -220,7 +216,7 @@ function applyLocationDefaults(form: { institucion_id: string; complejo_id: stri
   form.torre_id = contextTower?.id ?? scopedTower[0]?.id ?? '';
   const scopedFloor =
     form.complejo_id && form.torre_id
-      ? pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id)
+      ? sortPisosByCodigo(pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id))
       : [];
   const contextFloor = scopedFloor.find((item) => item.id === locationContext.piso?.id);
   form.piso_id = contextFloor?.id ?? scopedFloor[0]?.id ?? '';
