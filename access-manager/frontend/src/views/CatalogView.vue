@@ -28,14 +28,27 @@ import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLo
 type Row = Record<string, unknown> & { id: string };
 type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
 type SelectOption = { value: string; label: string };
+type PisoLookupSource = { [key: string]: unknown; numero?: unknown; codigo?: unknown; nombre_visible?: unknown };
 
-function pisoLookupLabel(item: Row | { numero?: unknown; codigo?: unknown; nombre_visible?: unknown }) {
+function pisoLookupLabel(item: PisoLookupSource) {
   const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? item.numero : '';
-  const codigo = typeof item.codigo === 'string' ? item.codigo : '';
-  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible : '';
-  const numberLabel = numero ? `Piso ${numero}` : 'Piso';
-  const detail = codigo || nombreVisible;
-  return detail ? `${numberLabel} · ${detail}` : numberLabel;
+  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible.trim() : '';
+  return nombreVisible || (numero ? `Piso ${numero}` : 'Piso');
+}
+
+function pisoCodigoSortValue(item: PisoLookupSource) {
+  const codigo = typeof item.codigo === 'string' ? item.codigo.trim() : '';
+  const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? String(item.numero) : '';
+  return codigo || numero;
+}
+
+function comparePisosByCodigo(left: PisoLookupSource, right: PisoLookupSource) {
+  const byCodigo = pisoCodigoSortValue(left).localeCompare(pisoCodigoSortValue(right), 'es', {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  if (byCodigo !== 0) return byCodigo;
+  return pisoLookupLabel(left).localeCompare(pisoLookupLabel(right), 'es', { numeric: true, sensitivity: 'base' });
 }
 
 const route = useRoute();
@@ -85,7 +98,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
   roles: async () => (await listRoles()).map((item) => ({ id: item.id, label: item.codigo })),
   pisos: async () => {
     const [pisos, torres] = await Promise.all([listPisos(), listTorres()]);
-    return pisos.map((item) => {
+    return [...pisos].sort(comparePisosByCodigo).map((item) => {
       const torre = torres.find((row) => row.id === item.torre_id);
       return {
         id: item.id,

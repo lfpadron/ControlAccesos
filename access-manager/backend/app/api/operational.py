@@ -861,11 +861,11 @@ def generar_pisos_torre(
             valor_despues={"pisos_generados": [floor.numero for floor in created]},
         )
     db.commit()
-    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.numero)).scalars())
+    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.codigo, Piso.numero)).scalars())
 
 
 pisos_router = create_crud_router(
-    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
+    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "codigo", validator=validate_piso)
 )
 clusters_turnos_router = create_crud_router(
     CrudConfig(

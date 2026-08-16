@@ -1,0 +1,65 @@
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index 4211166..f808e49 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -861,11 +861,11 @@ def generar_pisos_torre(
+             valor_despues={"pisos_generados": [floor.numero for floor in created]},
+         )
+     db.commit()
+-    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.numero)).scalars())
++    return list(db.execute(select(Piso).where(Piso.torre_id == torre.id).order_by(Piso.codigo, Piso.numero)).scalars())
+ 
+ 
+ pisos_router = create_crud_router(
+-    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "numero", validator=validate_piso)
++    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "codigo", validator=validate_piso)
+ )
+ clusters_turnos_router = create_crud_router(
+     CrudConfig(
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index ee0b934..b3ef8f9 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -28,14 +28,27 @@ import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLo
+ type Row = Record<string, unknown> & { id: string };
+ type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
+ type SelectOption = { value: string; label: string };
++type PisoLookupSource = { [key: string]: unknown; numero?: unknown; codigo?: unknown; nombre_visible?: unknown };
+ 
+-function pisoLookupLabel(item: Row | { numero?: unknown; codigo?: unknown; nombre_visible?: unknown }) {
++function pisoLookupLabel(item: PisoLookupSource) {
+   const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? item.numero : '';
+-  const codigo = typeof item.codigo === 'string' ? item.codigo : '';
+-  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible : '';
+-  const numberLabel = numero ? `Piso ${numero}` : 'Piso';
+-  const detail = codigo || nombreVisible;
+-  return detail ? `${numberLabel} · ${detail}` : numberLabel;
++  const nombreVisible = typeof item.nombre_visible === 'string' ? item.nombre_visible.trim() : '';
++  return nombreVisible || (numero ? `Piso ${numero}` : 'Piso');
++}
++
++function pisoCodigoSortValue(item: PisoLookupSource) {
++  const codigo = typeof item.codigo === 'string' ? item.codigo.trim() : '';
++  const numero = typeof item.numero === 'number' || typeof item.numero === 'string' ? String(item.numero) : '';
++  return codigo || numero;
++}
++
++function comparePisosByCodigo(left: PisoLookupSource, right: PisoLookupSource) {
++  const byCodigo = pisoCodigoSortValue(left).localeCompare(pisoCodigoSortValue(right), 'es', {
++    numeric: true,
++    sensitivity: 'base',
++  });
++  if (byCodigo !== 0) return byCodigo;
++  return pisoLookupLabel(left).localeCompare(pisoLookupLabel(right), 'es', { numeric: true, sensitivity: 'base' });
+ }
+ 
+ const route = useRoute();
+@@ -85,7 +98,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
+   roles: async () => (await listRoles()).map((item) => ({ id: item.id, label: item.codigo })),
+   pisos: async () => {
+     const [pisos, torres] = await Promise.all([listPisos(), listTorres()]);
+-    return pisos.map((item) => {
++    return [...pisos].sort(comparePisosByCodigo).map((item) => {
+       const torre = torres.find((row) => row.id === item.torre_id);
+       return {
+         id: item.id,
