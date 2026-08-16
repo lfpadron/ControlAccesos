@@ -618,32 +618,24 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
                 "piso_id": piso["id"],
                 "codigo": f"C-{suffix}",
                 "nombre_visible": f"Consultorio Test {suffix}",
+                "notas": f"Nota consultorio {suffix}",
                 "cluster_ids": [cluster["id"]],
             },
         )
     )
-    consultorio_sin_cluster = assert_created(
-        client.post(
-            "/api/consultorios",
-            headers=auth_headers,
-            json={
-                "complejo_id": complejo["id"],
-                "piso_id": piso["id"],
-                "codigo": f"SC-{suffix}",
-                "nombre_visible": f"Sin Cluster {suffix}",
-            },
-        )
-    )
-    assert consultorio_sin_cluster["cluster_ids"] == []
-
-    consulta_sin_cluster = client.get(
-        "/api/consultas-clusters-consultorios/por-consultorio",
+    assert consultorio["notas"] == f"Nota consultorio {suffix}"
+    consultorio_sin_cluster_response = client.post(
+        "/api/consultorios",
         headers=auth_headers,
-        params={"torre_id": torre["id"], "q": "Sin Cluster", "sin_cluster": True},
+        json={
+            "complejo_id": complejo["id"],
+            "piso_id": piso["id"],
+            "codigo": f"SC-{suffix}",
+            "nombre_visible": f"Sin Cluster {suffix}",
+            "cluster_ids": [],
+        },
     )
-    assert consulta_sin_cluster.status_code == 200, consulta_sin_cluster.text
-    assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
-    assert consulta_sin_cluster.json()[0]["clusters"] == []
+    assert consultorio_sin_cluster_response.status_code == 422, consultorio_sin_cluster_response.text
 
     consulta_con_cluster = client.get(
         "/api/consultas-clusters-consultorios/por-consultorio",
@@ -665,7 +657,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     assert piso_consulta["piso"] == piso["nombre_visible"]
     assert piso_consulta["clusters"][0]["activo"] is True
     assert piso_consulta["clusters"][0]["consultorios"][0]["consultorio"] == consultorio["nombre_visible"]
-    assert piso_consulta["consultorios_sin_cluster"][0]["consultorio"] == consultorio_sin_cluster["nombre_visible"]
+    assert piso_consulta["consultorios_sin_cluster"] == []
 
     medico_user = assert_created(
         client.post(

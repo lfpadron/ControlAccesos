@@ -245,7 +245,8 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
-      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos' },
+      { name: 'notas', label: 'Notas', type: 'textarea', maxLength: 1000 },
+      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
     columns: [

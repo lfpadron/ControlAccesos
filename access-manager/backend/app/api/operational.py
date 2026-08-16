@@ -453,7 +453,10 @@ def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> 
 def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
     cluster_ids = unique_uuid_list(cluster_ids)
     if not cluster_ids:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Debe seleccionar al menos un clúster con una pantalla de turnos activa.",
+        )
     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
     found = {cluster.id for cluster in clusters}
     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
@@ -502,6 +505,7 @@ def consultorio_response(db: Session, item: object) -> ConsultorioRead:
         codigo=item.codigo,
         nombre_visible=item.nombre_visible,
         instrucciones_acceso=item.instrucciones_acceso,
+        notas=item.notas,
         cluster_ids=cluster_ids_for_consultorio(db, item.id),
         activo=item.activo,
         created_at=item.created_at,
@@ -511,6 +515,12 @@ def consultorio_response(db: Session, item: object) -> ConsultorioRead:
 
 def consultorio_audit_extra(db: Session, item: object) -> dict[str, Any]:
     return {"cluster_ids": [str(cluster_id) for cluster_id in cluster_ids_for_consultorio(db, item.id)]}
+
+
+def prepare_consultorio_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "notas" in data and data["notas"] is not None:
+        data["notas"] = str(data["notas"]).strip() or None
+    return data
 
 
 def validate_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
@@ -894,6 +904,8 @@ consultorios_router = create_crud_router(
         "CONSULTORIO_EDITADO",
         "codigo",
         validator=validate_consultorio,
+        prepare_create=prepare_consultorio_payload,
+        prepare_update=prepare_consultorio_payload,
         relation_fields=("cluster_ids",),
         relation_handler=replace_consultorio_clusters,
         response_factory=consultorio_response,

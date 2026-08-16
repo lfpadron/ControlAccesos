@@ -1,0 +1,211 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index e9f964d..14c3e64 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -177,6 +177,7 @@ def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> Consultor
+         codigo=consultorio.codigo,
+         nombre_visible=consultorio.nombre_visible,
+         instrucciones_acceso=consultorio.instrucciones_acceso,
++        notas=consultorio.notas,
+         cluster_ids=cluster_ids,
+         activo=consultorio.activo,
+         created_at=consultorio.created_at,
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index b12d38b..bbbcd53 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -453,7 +453,10 @@ def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) ->
+ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
+     cluster_ids = unique_uuid_list(cluster_ids)
+     if not cluster_ids:
+-        return
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Debe seleccionar al menos un clúster con una pantalla de turnos activa.",
++        )
+     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
+     found = {cluster.id for cluster in clusters}
+     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
+@@ -502,6 +505,7 @@ def consultorio_response(db: Session, item: object) -> ConsultorioRead:
+         codigo=item.codigo,
+         nombre_visible=item.nombre_visible,
+         instrucciones_acceso=item.instrucciones_acceso,
++        notas=item.notas,
+         cluster_ids=cluster_ids_for_consultorio(db, item.id),
+         activo=item.activo,
+         created_at=item.created_at,
+@@ -513,6 +517,12 @@ def consultorio_audit_extra(db: Session, item: object) -> dict[str, Any]:
+     return {"cluster_ids": [str(cluster_id) for cluster_id in cluster_ids_for_consultorio(db, item.id)]}
+ 
+ 
++def prepare_consultorio_payload(data: dict[str, Any]) -> dict[str, Any]:
++    if "notas" in data and data["notas"] is not None:
++        data["notas"] = str(data["notas"]).strip() or None
++    return data
++
++
+ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     validate_sala_or_consultorio(db, data, item)
+     codigo = data.get("codigo", getattr(item, "codigo", None))
+@@ -894,6 +904,8 @@ consultorios_router = create_crud_router(
+         "CONSULTORIO_EDITADO",
+         "codigo",
+         validator=validate_consultorio,
++        prepare_create=prepare_consultorio_payload,
++        prepare_update=prepare_consultorio_payload,
+         relation_fields=("cluster_ids",),
+         relation_handler=replace_consultorio_clusters,
+         response_factory=consultorio_response,
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index c9de82f..10fff50 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -92,6 +92,7 @@ class Consultorio(TimestampMixin, Base):
+     codigo: Mapped[str] = mapped_column(String(80), nullable=False)
+     nombre_visible: Mapped[str | None] = mapped_column(String(180))
+     instrucciones_acceso: Mapped[str | None] = mapped_column(Text)
++    notas: Mapped[str | None] = mapped_column(Text)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 47d3946..9f5056f 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -158,6 +158,7 @@ class ConsultorioCreate(BaseModel):
+     codigo: str = Field(min_length=1, max_length=80)
+     nombre_visible: str | None = Field(default=None, max_length=180)
+     instrucciones_acceso: str | None = None
++    notas: str | None = Field(default=None, max_length=1000)
+     cluster_ids: list[UUID] = Field(default_factory=list)
+     activo: bool = True
+ 
+@@ -168,6 +169,7 @@ class ConsultorioUpdate(BaseModel):
+     codigo: str | None = Field(default=None, min_length=1, max_length=80)
+     nombre_visible: str | None = Field(default=None, max_length=180)
+     instrucciones_acceso: str | None = None
++    notas: str | None = Field(default=None, max_length=1000)
+     cluster_ids: list[UUID] | None = None
+     activo: bool | None = None
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 305a8fc..0407702 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -618,32 +618,24 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+                 "piso_id": piso["id"],
+                 "codigo": f"C-{suffix}",
+                 "nombre_visible": f"Consultorio Test {suffix}",
++                "notas": f"Nota consultorio {suffix}",
+                 "cluster_ids": [cluster["id"]],
+             },
+         )
+     )
+-    consultorio_sin_cluster = assert_created(
+-        client.post(
+-            "/api/consultorios",
+-            headers=auth_headers,
+-            json={
+-                "complejo_id": complejo["id"],
+-                "piso_id": piso["id"],
+-                "codigo": f"SC-{suffix}",
+-                "nombre_visible": f"Sin Cluster {suffix}",
+-            },
+-        )
+-    )
+-    assert consultorio_sin_cluster["cluster_ids"] == []
+-
+-    consulta_sin_cluster = client.get(
+-        "/api/consultas-clusters-consultorios/por-consultorio",
++    assert consultorio["notas"] == f"Nota consultorio {suffix}"
++    consultorio_sin_cluster_response = client.post(
++        "/api/consultorios",
+         headers=auth_headers,
+-        params={"torre_id": torre["id"], "q": "Sin Cluster", "sin_cluster": True},
++        json={
++            "complejo_id": complejo["id"],
++            "piso_id": piso["id"],
++            "codigo": f"SC-{suffix}",
++            "nombre_visible": f"Sin Cluster {suffix}",
++            "cluster_ids": [],
++        },
+     )
+-    assert consulta_sin_cluster.status_code == 200, consulta_sin_cluster.text
+-    assert consulta_sin_cluster.json()[0]["id"] == consultorio_sin_cluster["id"]
+-    assert consulta_sin_cluster.json()[0]["clusters"] == []
++    assert consultorio_sin_cluster_response.status_code == 422, consultorio_sin_cluster_response.text
+ 
+     consulta_con_cluster = client.get(
+         "/api/consultas-clusters-consultorios/por-consultorio",
+@@ -665,7 +657,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     assert piso_consulta["piso"] == piso["nombre_visible"]
+     assert piso_consulta["clusters"][0]["activo"] is True
+     assert piso_consulta["clusters"][0]["consultorios"][0]["consultorio"] == consultorio["nombre_visible"]
+-    assert piso_consulta["consultorios_sin_cluster"][0]["consultorio"] == consultorio_sin_cluster["nombre_visible"]
++    assert piso_consulta["consultorios_sin_cluster"] == []
+ 
+     medico_user = assert_created(
+         client.post(
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index db78a45..d010965 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -172,6 +172,7 @@ export type Consultorio = {
+   codigo: string;
+   nombre_visible?: string | null;
+   instrucciones_acceso?: string | null;
++  notas?: string | null;
+   cluster_ids: string[];
+   activo: boolean;
+   created_at: string;
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index b863821..4a24139 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -245,7 +245,8 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
+       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
+       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
+-      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos' },
++      { name: 'notas', label: 'Notas', type: 'textarea', maxLength: 1000 },
++      { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index b3ef8f9..0c9ab32 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -752,11 +752,24 @@ function optionLabel(key: LookupKey | undefined, value: unknown) {
+   return lookups[key]?.find((item) => item.id === value)?.label ?? String(value);
+ }
+ 
++function firstClusterLabel(value: unknown) {
++  const clusterIds = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
++  const firstClusterId = clusterIds[0];
++  if (!firstClusterId) {
++    return 'Sin clúster';
++  }
++  const label = lookups['clusters-turnos']?.find((item) => item.id === firstClusterId)?.label ?? firstClusterId;
++  return clusterIds.length > 1 ? `+ ${label}` : label;
++}
++
+ function cellValue(row: Row, column: CatalogColumn) {
+   const value = row[column.name];
+   if (column.boolean) {
+     return value ? 'Activo' : 'Inactivo';
+   }
++  if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
++    return firstClusterLabel(value);
++  }
+   if (column.options) {
+     return staticOptionLabel(column.options, value);
+   }
+@@ -894,6 +907,7 @@ onMounted(loadData);
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
++            :maxlength="field.maxLength"
+             :required="field.required"
+             rows="3"
+             @input="updateField(field.name, $event)"

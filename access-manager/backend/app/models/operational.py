@@ -92,6 +92,7 @@ class Consultorio(TimestampMixin, Base):
     codigo: Mapped[str] = mapped_column(String(80), nullable=False)
     nombre_visible: Mapped[str | None] = mapped_column(String(180))
     instrucciones_acceso: Mapped[str | None] = mapped_column(Text)
+    notas: Mapped[str | None] = mapped_column(Text)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

@@ -177,6 +177,7 @@ def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> Consultor
         codigo=consultorio.codigo,
         nombre_visible=consultorio.nombre_visible,
         instrucciones_acceso=consultorio.instrucciones_acceso,
+        notas=consultorio.notas,
         cluster_ids=cluster_ids,
         activo=consultorio.activo,
         created_at=consultorio.created_at,

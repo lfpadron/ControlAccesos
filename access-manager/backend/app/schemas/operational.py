@@ -158,6 +158,7 @@ class ConsultorioCreate(BaseModel):
     codigo: str = Field(min_length=1, max_length=80)
     nombre_visible: str | None = Field(default=None, max_length=180)
     instrucciones_acceso: str | None = None
+    notas: str | None = Field(default=None, max_length=1000)
     cluster_ids: list[UUID] = Field(default_factory=list)
     activo: bool = True
 
@@ -168,6 +169,7 @@ class ConsultorioUpdate(BaseModel):
     codigo: str | None = Field(default=None, min_length=1, max_length=80)
     nombre_visible: str | None = Field(default=None, max_length=180)
     instrucciones_acceso: str | None = None
+    notas: str | None = Field(default=None, max_length=1000)
     cluster_ids: list[UUID] | None = None
     activo: bool | None = None
 

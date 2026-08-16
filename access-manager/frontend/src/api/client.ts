@@ -172,6 +172,7 @@ export type Consultorio = {
   codigo: string;
   nombre_visible?: string | null;
   instrucciones_acceso?: string | null;
+  notas?: string | null;
   cluster_ids: string[];
   activo: boolean;
   created_at: string;

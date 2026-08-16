@@ -752,10 +752,23 @@ function optionLabel(key: LookupKey | undefined, value: unknown) {
   return lookups[key]?.find((item) => item.id === value)?.label ?? String(value);
 }
 
+function firstClusterLabel(value: unknown) {
+  const clusterIds = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  const firstClusterId = clusterIds[0];
+  if (!firstClusterId) {
+    return 'Sin clúster';
+  }
+  const label = lookups['clusters-turnos']?.find((item) => item.id === firstClusterId)?.label ?? firstClusterId;
+  return clusterIds.length > 1 ? `+ ${label}` : label;
+}
+
 function cellValue(row: Row, column: CatalogColumn) {
   const value = row[column.name];
   if (column.boolean) {
     return value ? 'Activo' : 'Inactivo';
+  }
+  if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
+    return firstClusterLabel(value);
   }
   if (column.options) {
     return staticOptionLabel(column.options, value);
@@ -894,6 +907,7 @@ onMounted(loadData);
             :id="fieldId(field)"
             :name="fieldName(field)"
             :value="fieldValue(field.name)"
+            :maxlength="field.maxLength"
             :required="field.required"
             rows="3"
             @input="updateField(field.name, $event)"
