@@ -1010,7 +1010,7 @@ def consulta_clusters_por_consultorio(
     has_cluster = select(ConsultorioCluster.consultorio_id).where(ConsultorioCluster.consultorio_id == Consultorio.id).exists()
     query = query.where(~has_cluster if sin_cluster else has_cluster)
     response: list[ConsultorioClusterConsultaRead] = []
-    for consultorio, piso in db.execute(query.order_by(Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
+    for consultorio, piso in db.execute(query.order_by(Piso.codigo, Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
         clusters = clusters_for_consultorio(db, consultorio.id)
         response.append(
             ConsultorioClusterConsultaRead(
@@ -1035,7 +1035,7 @@ def consulta_clusters_por_piso(
     pisos_query = select(Piso).where(Piso.torre_id == torre_id)
     if piso_id is not None:
         pisos_query = pisos_query.where(Piso.id == piso_id)
-    pisos = list(db.execute(pisos_query.order_by(Piso.numero, Piso.nombre_visible)).scalars())
+    pisos = list(db.execute(pisos_query.order_by(Piso.codigo, Piso.numero, Piso.nombre_visible)).scalars())
     if piso_id is not None and not pisos:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Piso no encontrado en la torre indicada.")
 

@@ -22,6 +22,7 @@ import {
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
 import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
 
 type NumericInput = number | '';
@@ -126,7 +127,7 @@ const filteredTorres = computed(() => {
 
 const filteredPisos = computed(() => {
   if (!form.complejo_id || !form.torre_id) return [];
-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id);
+  return sortPisosByCodigo(pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id));
 });
 
 const filteredClusters = computed(() => {
@@ -170,8 +171,7 @@ function torreLabel(item: Torre) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoTorreLabel(item, torres.value);
 }
 
 function clusterLabel(item: ClusterTurnos) {

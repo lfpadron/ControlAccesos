@@ -281,7 +281,7 @@ def list_pisos_operativos(
     query = (
         select(Piso)
         .where(Piso.activo.is_(True), piso_catalog_access_predicate(db, current_user, business_today()))
-        .order_by(Piso.complejo_id, Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
+        .order_by(Piso.complejo_id, func.lower(func.coalesce(Piso.codigo, "")), Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
     )
     return list(db.execute(query).scalars())
 

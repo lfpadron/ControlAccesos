@@ -9,17 +9,21 @@ import {
   listAccessibleConsultorios,
   listAccessibleMedicos,
   listAccessiblePisos,
+  listAccessibleTorres,
   listComplejos,
   listInstituciones,
   listTurnosDisplayRecientes,
   Medico,
   Piso,
+  Torre,
   TurnoDisplayReciente,
   Usuario,
 } from '../api/client';
+import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
 
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const consultorios = ref<Consultorio[]>([]);
 const medicos = ref<Medico[]>([]);
@@ -42,7 +46,7 @@ const filteredComplejos = computed(() =>
 );
 
 const filteredPisos = computed(() =>
-  (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value).sort((a, b) => a.numero - b.numero),
+  sortPisosByCodigo(complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value),
 );
 
 const filteredConsultorios = computed(() =>
@@ -54,8 +58,7 @@ const filteredConsultorios = computed(() =>
 );
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoTorreLabel(item, torres.value);
 }
 
 function medicoLabel(item: Medico) {
@@ -75,10 +78,11 @@ function formatMinuteOption(value: number) {
 }
 
 async function loadCatalogs() {
-  const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+  const [userData, institucionesData, complejosData, torresData, pisosData, consultoriosData, medicosData] = await Promise.all([
     getCurrentUser(),
     listInstituciones(),
     listComplejos(),
+    listAccessibleTorres(),
     listAccessiblePisos(),
     listAccessibleConsultorios(),
     listAccessibleMedicos(),
@@ -86,6 +90,7 @@ async function loadCatalogs() {
   currentUser.value = userData;
   instituciones.value = institucionesData;
   complejos.value = complejosData;
+  torres.value = torresData;
   pisos.value = pisosData;
   consultorios.value = consultoriosData;
   medicos.value = medicosData;

@@ -15,6 +15,7 @@ import {
   listAccessibleInstituciones,
   listAccessibleMedicos,
   listAccessiblePisos,
+  listAccessibleTorres,
   listCitasHoy,
   type Cita,
   type CitaFilters,
@@ -24,14 +25,17 @@ import {
   type Medico,
   type Piso,
   type TicketResponse,
+  type Torre,
   type Usuario,
 } from '../api/client';
 import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
 import { exportRows, type ExportFormat } from '../exporters';
+import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
 
 const citas = ref<Cita[]>([]);
 const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const consultorios = ref<Consultorio[]>([]);
 const medicos = ref<Medico[]>([]);
@@ -65,7 +69,7 @@ const filteredComplejos = computed(() =>
   filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
 );
 const filteredPisos = computed(() =>
-  (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value).sort((a, b) => a.numero - b.numero),
+  sortPisosByCodigo(filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value),
 );
 const filteredConsultorios = computed(() =>
   consultorios.value.filter((item) => {
@@ -80,8 +84,7 @@ function institucionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoTorreLabel(item, torres.value);
 }
 
 function medicoLabel(item: Medico) {
@@ -170,10 +173,11 @@ async function load() {
 
 async function loadCatalogs() {
   try {
-    const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
+    const [userData, institucionesData, complejosData, torresData, pisosData, consultoriosData, medicosData] = await Promise.all([
       getCurrentUser(),
       listAccessibleInstituciones(),
       listAccessibleComplejos(),
+      listAccessibleTorres(),
       listAccessiblePisos(),
       listAccessibleConsultorios(),
       listAccessibleMedicos(),
@@ -181,6 +185,7 @@ async function loadCatalogs() {
     currentUser.value = userData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;
+    torres.value = torresData;
     pisos.value = pisosData;
     consultorios.value = consultoriosData;
     medicos.value = medicosData;

@@ -18,6 +18,7 @@ import {
 } from '../api/client';
 import LocationContextField from '../components/LocationContextField.vue';
 import { useLocationContext } from '../composables/useLocationContext';
+import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
 import {
   buildUserLocationScope,
   filterComplejosByUserAssignment,
@@ -70,7 +71,7 @@ const scopedTorres = computed(() => {
   const base = filters.complejo_id ? torres.value.filter((item) => item.complejo_id === filters.complejo_id) : [];
   return filterTorresByUserAssignment(base, userScope.value);
 });
-const scopedPisos = computed(() => (filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : []));
+const scopedPisos = computed(() => (filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : []));
 
 const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === filters.institucion_id) ?? null);
 const selectedCampus = computed(() => complejos.value.find((item) => item.id === filters.complejo_id) ?? null);
@@ -78,8 +79,7 @@ const selectedTower = computed(() => torres.value.find((item) => item.id === fil
 const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoTorreLabel(item, torres.value);
 }
 
 function syncInstitution() {

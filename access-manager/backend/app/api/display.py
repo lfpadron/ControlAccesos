@@ -434,7 +434,7 @@ def consulta_clusters_pantallas(
         query = query.where(~screen_has_bridge, PantallaTurnos.cluster_espera_id.is_(None))
 
     rows = db.execute(
-        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.numero, PantallaTurnos.codigo_dispositivo)
+        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.codigo, Piso.numero, PantallaTurnos.codigo_dispositivo)
     ).all()
     response: list[PantallaClusterConsultaRead] = []
     for screen, institucion, campus, torre, piso in rows:

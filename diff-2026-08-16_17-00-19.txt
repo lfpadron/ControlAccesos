@@ -1,0 +1,277 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index bd3ddbb..bace004 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -434,7 +434,7 @@ def consulta_clusters_pantallas(
+         query = query.where(~screen_has_bridge, PantallaTurnos.cluster_espera_id.is_(None))
+ 
+     rows = db.execute(
+-        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.numero, PantallaTurnos.codigo_dispositivo)
++        query.order_by(Institucion.nombre, Complejo.nombre, Torre.nombre, Piso.codigo, Piso.numero, PantallaTurnos.codigo_dispositivo)
+     ).all()
+     response: list[PantallaClusterConsultaRead] = []
+     for screen, institucion, campus, torre, piso in rows:
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 8d6aca2..e9f964d 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -281,7 +281,7 @@ def list_pisos_operativos(
+     query = (
+         select(Piso)
+         .where(Piso.activo.is_(True), piso_catalog_access_predicate(db, current_user, business_today()))
+-        .order_by(Piso.complejo_id, Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
++        .order_by(Piso.complejo_id, func.lower(func.coalesce(Piso.codigo, "")), Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
+     )
+     return list(db.execute(query).scalars())
+ 
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index f808e49..b12d38b 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -1010,7 +1010,7 @@ def consulta_clusters_por_consultorio(
+     has_cluster = select(ConsultorioCluster.consultorio_id).where(ConsultorioCluster.consultorio_id == Consultorio.id).exists()
+     query = query.where(~has_cluster if sin_cluster else has_cluster)
+     response: list[ConsultorioClusterConsultaRead] = []
+-    for consultorio, piso in db.execute(query.order_by(Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
++    for consultorio, piso in db.execute(query.order_by(Piso.codigo, Piso.numero, Consultorio.nombre_visible, Consultorio.codigo)).all():
+         clusters = clusters_for_consultorio(db, consultorio.id)
+         response.append(
+             ConsultorioClusterConsultaRead(
+@@ -1035,7 +1035,7 @@ def consulta_clusters_por_piso(
+     pisos_query = select(Piso).where(Piso.torre_id == torre_id)
+     if piso_id is not None:
+         pisos_query = pisos_query.where(Piso.id == piso_id)
+-    pisos = list(db.execute(pisos_query.order_by(Piso.numero, Piso.nombre_visible)).scalars())
++    pisos = list(db.execute(pisos_query.order_by(Piso.codigo, Piso.numero, Piso.nombre_visible)).scalars())
+     if piso_id is not None and not pisos:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Piso no encontrado en la torre indicada.")
+ 
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 5794808..36dedbe 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -15,6 +15,7 @@ import {
+   listAccessibleInstituciones,
+   listAccessibleMedicos,
+   listAccessiblePisos,
++  listAccessibleTorres,
+   listCitasHoy,
+   type Cita,
+   type CitaFilters,
+@@ -24,14 +25,17 @@ import {
+   type Medico,
+   type Piso,
+   type TicketResponse,
++  type Torre,
+   type Usuario,
+ } from '../api/client';
+ import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
+ import { exportRows, type ExportFormat } from '../exporters';
++import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ const citas = ref<Cita[]>([]);
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
++const torres = ref<Torre[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const consultorios = ref<Consultorio[]>([]);
+ const medicos = ref<Medico[]>([]);
+@@ -65,7 +69,7 @@ const filteredComplejos = computed(() =>
+   filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
+ );
+ const filteredPisos = computed(() =>
+-  (filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value).sort((a, b) => a.numero - b.numero),
++  sortPisosByCodigo(filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value),
+ );
+ const filteredConsultorios = computed(() =>
+   consultorios.value.filter((item) => {
+@@ -80,8 +84,7 @@ function institucionLabel(item: Institucion) {
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return pisoTorreLabel(item, torres.value);
+ }
+ 
+ function medicoLabel(item: Medico) {
+@@ -170,10 +173,11 @@ async function load() {
+ 
+ async function loadCatalogs() {
+   try {
+-    const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
++    const [userData, institucionesData, complejosData, torresData, pisosData, consultoriosData, medicosData] = await Promise.all([
+       getCurrentUser(),
+       listAccessibleInstituciones(),
+       listAccessibleComplejos(),
++      listAccessibleTorres(),
+       listAccessiblePisos(),
+       listAccessibleConsultorios(),
+       listAccessibleMedicos(),
+@@ -181,6 +185,7 @@ async function loadCatalogs() {
+     currentUser.value = userData;
+     instituciones.value = institucionesData;
+     complejos.value = complejosData;
++    torres.value = torresData;
+     pisos.value = pisosData;
+     consultorios.value = consultoriosData;
+     medicos.value = medicosData;
+diff --git a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+index d172cf2..8e94326 100644
+--- a/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
++++ b/access-manager/frontend/src/views/ConsultaClustersConsultoriosView.vue
+@@ -20,6 +20,7 @@ import {
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+ import { buildUserLocationScope, filterInstitucionesByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ const instituciones = ref<Institucion[]>([]);
+@@ -52,7 +53,7 @@ const scopedTorres = computed(() =>
+   filters.complejo_id ? torres.value.filter((item) => item.complejo_id === filters.complejo_id) : [],
+ );
+ const scopedPisos = computed(() =>
+-  filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : [],
++  filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : [],
+ );
+ const userScope = computed(() =>
+   buildUserLocationScope({
+@@ -73,8 +74,7 @@ const selectedTower = computed(() => torres.value.find((item) => item.id === fil
+ const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return pisoTorreLabel(item, torres.value);
+ }
+ 
+ function clusterNames(item: ConsultorioClusterConsulta) {
+diff --git a/access-manager/frontend/src/views/ConsultaClustersPantallasView.vue b/access-manager/frontend/src/views/ConsultaClustersPantallasView.vue
+index 0b95fb8..f547b45 100644
+--- a/access-manager/frontend/src/views/ConsultaClustersPantallasView.vue
++++ b/access-manager/frontend/src/views/ConsultaClustersPantallasView.vue
+@@ -18,6 +18,7 @@ import {
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+ import {
+   buildUserLocationScope,
+   filterComplejosByUserAssignment,
+@@ -70,7 +71,7 @@ const scopedTorres = computed(() => {
+   const base = filters.complejo_id ? torres.value.filter((item) => item.complejo_id === filters.complejo_id) : [];
+   return filterTorresByUserAssignment(base, userScope.value);
+ });
+-const scopedPisos = computed(() => (filters.torre_id ? pisos.value.filter((item) => item.torre_id === filters.torre_id) : []));
++const scopedPisos = computed(() => (filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : []));
+ 
+ const selectedInstitution = computed(() => instituciones.value.find((item) => item.id === filters.institucion_id) ?? null);
+ const selectedCampus = computed(() => complejos.value.find((item) => item.id === filters.complejo_id) ?? null);
+@@ -78,8 +79,7 @@ const selectedTower = computed(() => torres.value.find((item) => item.id === fil
+ const selectedFloor = computed(() => pisos.value.find((item) => item.id === filters.piso_id) ?? null);
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return pisoTorreLabel(item, torres.value);
+ }
+ 
+ function syncInstitution() {
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index 2fa1f31..d130964 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -22,6 +22,7 @@ import {
+ } from '../api/client';
+ import LocationContextField from '../components/LocationContextField.vue';
+ import { useLocationContext } from '../composables/useLocationContext';
++import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+ import { HTML_NAMED_COLORS, type HtmlNamedColorOption } from '../htmlNamedColors';
+ 
+ type NumericInput = number | '';
+@@ -126,7 +127,7 @@ const filteredTorres = computed(() => {
+ 
+ const filteredPisos = computed(() => {
+   if (!form.complejo_id || !form.torre_id) return [];
+-  return pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id);
++  return sortPisosByCodigo(pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id));
+ });
+ 
+ const filteredClusters = computed(() => {
+@@ -170,8 +171,7 @@ function torreLabel(item: Torre) {
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return pisoTorreLabel(item, torres.value);
+ }
+ 
+ function clusterLabel(item: ClusterTurnos) {
+diff --git a/access-manager/frontend/src/views/TurnosLlamadosView.vue b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+index 53afc71..ad2d0f1 100644
+--- a/access-manager/frontend/src/views/TurnosLlamadosView.vue
++++ b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+@@ -9,17 +9,21 @@ import {
+   listAccessibleConsultorios,
+   listAccessibleMedicos,
+   listAccessiblePisos,
++  listAccessibleTorres,
+   listComplejos,
+   listInstituciones,
+   listTurnosDisplayRecientes,
+   Medico,
+   Piso,
++  Torre,
+   TurnoDisplayReciente,
+   Usuario,
+ } from '../api/client';
++import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
++const torres = ref<Torre[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const consultorios = ref<Consultorio[]>([]);
+ const medicos = ref<Medico[]>([]);
+@@ -42,7 +46,7 @@ const filteredComplejos = computed(() =>
+ );
+ 
+ const filteredPisos = computed(() =>
+-  (complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value).sort((a, b) => a.numero - b.numero),
++  sortPisosByCodigo(complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value),
+ );
+ 
+ const filteredConsultorios = computed(() =>
+@@ -54,8 +58,7 @@ const filteredConsultorios = computed(() =>
+ );
+ 
+ function pisoLabel(item: Piso) {
+-  const detail = item.codigo || item.nombre_visible;
+-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
++  return pisoTorreLabel(item, torres.value);
+ }
+ 
+ function medicoLabel(item: Medico) {
+@@ -75,10 +78,11 @@ function formatMinuteOption(value: number) {
+ }
+ 
+ async function loadCatalogs() {
+-  const [userData, institucionesData, complejosData, pisosData, consultoriosData, medicosData] = await Promise.all([
++  const [userData, institucionesData, complejosData, torresData, pisosData, consultoriosData, medicosData] = await Promise.all([
+     getCurrentUser(),
+     listInstituciones(),
+     listComplejos(),
++    listAccessibleTorres(),
+     listAccessiblePisos(),
+     listAccessibleConsultorios(),
+     listAccessibleMedicos(),
+@@ -86,6 +90,7 @@ async function loadCatalogs() {
+   currentUser.value = userData;
+   instituciones.value = institucionesData;
+   complejos.value = complejosData;
++  torres.value = torresData;
+   pisos.value = pisosData;
+   consultorios.value = consultoriosData;
+   medicos.value = medicosData;
