@@ -104,6 +104,41 @@ def _role_global_location_scope_condition() -> Any:
     )
 
 
+def _role_consultorio_scope_condition() -> Any:
+    return UsuarioRol.consultorio_id.is_not(None)
+
+
+def _role_piso_scope_condition() -> Any:
+    return and_(UsuarioRol.consultorio_id.is_(None), UsuarioRol.piso_id.is_not(None))
+
+
+def _role_torre_scope_condition() -> Any:
+    return and_(
+        UsuarioRol.consultorio_id.is_(None),
+        UsuarioRol.piso_id.is_(None),
+        UsuarioRol.torre_id.is_not(None),
+    )
+
+
+def _role_complejo_scope_condition() -> Any:
+    return and_(
+        UsuarioRol.consultorio_id.is_(None),
+        UsuarioRol.piso_id.is_(None),
+        UsuarioRol.torre_id.is_(None),
+        UsuarioRol.complejo_id.is_not(None),
+    )
+
+
+def _role_institucion_scope_condition() -> Any:
+    return and_(
+        UsuarioRol.consultorio_id.is_(None),
+        UsuarioRol.piso_id.is_(None),
+        UsuarioRol.torre_id.is_(None),
+        UsuarioRol.complejo_id.is_(None),
+        UsuarioRol.institucion_id.is_not(None),
+    )
+
+
 def _unrestricted_location_access_predicate(user: Usuario, today: date | None = None) -> Any:
     active_role = _role_scope_exists(user, true(), today)
     global_location = _role_scope_exists(user, _role_global_location_scope_condition(), today)
@@ -121,18 +156,18 @@ def _location_access_predicate(
     role_location = _role_scope_exists(
         user,
         or_(
-            UsuarioRol.consultorio_id == consultorio_id_col,
-            UsuarioRol.piso_id == piso_id_col,
+            and_(_role_consultorio_scope_condition(), UsuarioRol.consultorio_id == consultorio_id_col),
+            and_(_role_piso_scope_condition(), UsuarioRol.piso_id == piso_id_col),
             and_(
-                UsuarioRol.torre_id.is_not(None),
+                _role_torre_scope_condition(),
                 select(Piso.id)
                 .where(Piso.id == piso_id_col, Piso.torre_id == UsuarioRol.torre_id)
                 .correlate_except(Piso)
                 .exists(),
             ),
-            UsuarioRol.complejo_id == complejo_id_col,
+            and_(_role_complejo_scope_condition(), UsuarioRol.complejo_id == complejo_id_col),
             and_(
-                UsuarioRol.institucion_id.is_not(None),
+                _role_institucion_scope_condition(),
                 select(Complejo.id)
                 .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
                 .correlate_except(Complejo)
@@ -159,18 +194,18 @@ def _piso_location_access_predicate(
     role_location = _role_scope_exists(
         user,
         or_(
-            UsuarioRol.piso_id == piso_id_col,
             and_(
-                UsuarioRol.consultorio_id.is_not(None),
+                _role_consultorio_scope_condition(),
                 select(Consultorio.id)
                 .where(Consultorio.id == UsuarioRol.consultorio_id, Consultorio.piso_id == piso_id_col)
                 .correlate_except(Consultorio)
                 .exists(),
             ),
-            UsuarioRol.torre_id == torre_id_col,
-            UsuarioRol.complejo_id == complejo_id_col,
+            and_(_role_piso_scope_condition(), UsuarioRol.piso_id == piso_id_col),
+            and_(_role_torre_scope_condition(), UsuarioRol.torre_id == torre_id_col),
+            and_(_role_complejo_scope_condition(), UsuarioRol.complejo_id == complejo_id_col),
             and_(
-                UsuarioRol.institucion_id.is_not(None),
+                _role_institucion_scope_condition(),
                 select(Complejo.id)
                 .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
                 .correlate_except(Complejo)
@@ -202,25 +237,31 @@ def _torre_location_access_predicate(
     role_location = _role_scope_exists(
         user,
         or_(
-            UsuarioRol.torre_id == torre_id_col,
             and_(
-                UsuarioRol.piso_id.is_not(None),
-                select(Piso.id)
-                .where(Piso.id == UsuarioRol.piso_id, Piso.torre_id == torre_id_col)
-                .correlate_except(Piso)
-                .exists(),
-            ),
-            and_(
-                UsuarioRol.consultorio_id.is_not(None),
+                _role_consultorio_scope_condition(),
                 select(Consultorio.id)
                 .join(Piso, Piso.id == Consultorio.piso_id)
                 .where(Consultorio.id == UsuarioRol.consultorio_id, Piso.torre_id == torre_id_col)
                 .correlate_except(Consultorio, Piso)
                 .exists(),
             ),
-            UsuarioRol.complejo_id == complejo_id_col,
             and_(
-                UsuarioRol.institucion_id.is_not(None),
+                _role_piso_scope_condition(),
+                select(Piso.id)
+                .where(Piso.id == UsuarioRol.piso_id, Piso.torre_id == torre_id_col)
+                .correlate_except(Piso)
+                .exists(),
+            ),
+            and_(_role_torre_scope_condition(), UsuarioRol.torre_id == torre_id_col),
+            and_(
+                _role_complejo_scope_condition(),
+                select(Torre.id)
+                .where(Torre.id == torre_id_col, Torre.complejo_id == UsuarioRol.complejo_id)
+                .correlate_except(Torre)
+                .exists(),
+            ),
+            and_(
+                _role_institucion_scope_condition(),
                 select(Complejo.id)
                 .where(Complejo.id == complejo_id_col, Complejo.institucion_id == UsuarioRol.institucion_id)
                 .correlate_except(Complejo)
@@ -253,29 +294,29 @@ def _complejo_location_access_predicate(
     role_location = _role_scope_exists(
         user,
         or_(
-            UsuarioRol.complejo_id == complejo_id_col,
-            UsuarioRol.institucion_id == institucion_id_col,
             and_(
-                UsuarioRol.torre_id.is_not(None),
-                select(Torre.id)
-                .where(Torre.id == UsuarioRol.torre_id, Torre.complejo_id == complejo_id_col)
-                .correlate_except(Torre)
+                _role_consultorio_scope_condition(),
+                select(Consultorio.id)
+                .where(Consultorio.id == UsuarioRol.consultorio_id, Consultorio.complejo_id == complejo_id_col)
+                .correlate_except(Consultorio)
                 .exists(),
             ),
             and_(
-                UsuarioRol.piso_id.is_not(None),
+                _role_piso_scope_condition(),
                 select(Piso.id)
                 .where(Piso.id == UsuarioRol.piso_id, Piso.complejo_id == complejo_id_col)
                 .correlate_except(Piso)
                 .exists(),
             ),
             and_(
-                UsuarioRol.consultorio_id.is_not(None),
-                select(Consultorio.id)
-                .where(Consultorio.id == UsuarioRol.consultorio_id, Consultorio.complejo_id == complejo_id_col)
-                .correlate_except(Consultorio)
+                _role_torre_scope_condition(),
+                select(Torre.id)
+                .where(Torre.id == UsuarioRol.torre_id, Torre.complejo_id == complejo_id_col)
+                .correlate_except(Torre)
                 .exists(),
             ),
+            and_(_role_complejo_scope_condition(), UsuarioRol.complejo_id == complejo_id_col),
+            and_(_role_institucion_scope_condition(), UsuarioRol.institucion_id == institucion_id_col),
         ),
         today,
     )
@@ -300,24 +341,16 @@ def _institucion_location_access_predicate(user: Usuario, institucion_id_col: An
     role_location = _role_scope_exists(
         user,
         or_(
-            UsuarioRol.institucion_id == institucion_id_col,
             and_(
-                UsuarioRol.complejo_id.is_not(None),
-                select(Complejo.id)
-                .where(Complejo.id == UsuarioRol.complejo_id, Complejo.institucion_id == institucion_id_col)
-                .correlate_except(Complejo)
+                _role_consultorio_scope_condition(),
+                select(Consultorio.id)
+                .join(Complejo, Complejo.id == Consultorio.complejo_id)
+                .where(Consultorio.id == UsuarioRol.consultorio_id, Complejo.institucion_id == institucion_id_col)
+                .correlate_except(Consultorio, Complejo)
                 .exists(),
             ),
             and_(
-                UsuarioRol.torre_id.is_not(None),
-                select(Torre.id)
-                .join(Complejo, Complejo.id == Torre.complejo_id)
-                .where(Torre.id == UsuarioRol.torre_id, Complejo.institucion_id == institucion_id_col)
-                .correlate_except(Torre, Complejo)
-                .exists(),
-            ),
-            and_(
-                UsuarioRol.piso_id.is_not(None),
+                _role_piso_scope_condition(),
                 select(Piso.id)
                 .join(Complejo, Complejo.id == Piso.complejo_id)
                 .where(Piso.id == UsuarioRol.piso_id, Complejo.institucion_id == institucion_id_col)
@@ -325,13 +358,21 @@ def _institucion_location_access_predicate(user: Usuario, institucion_id_col: An
                 .exists(),
             ),
             and_(
-                UsuarioRol.consultorio_id.is_not(None),
-                select(Consultorio.id)
-                .join(Complejo, Complejo.id == Consultorio.complejo_id)
-                .where(Consultorio.id == UsuarioRol.consultorio_id, Complejo.institucion_id == institucion_id_col)
-                .correlate_except(Consultorio, Complejo)
+                _role_torre_scope_condition(),
+                select(Torre.id)
+                .join(Complejo, Complejo.id == Torre.complejo_id)
+                .where(Torre.id == UsuarioRol.torre_id, Complejo.institucion_id == institucion_id_col)
+                .correlate_except(Torre, Complejo)
                 .exists(),
             ),
+            and_(
+                _role_complejo_scope_condition(),
+                select(Complejo.id)
+                .where(Complejo.id == UsuarioRol.complejo_id, Complejo.institucion_id == institucion_id_col)
+                .correlate_except(Complejo)
+                .exists(),
+            ),
+            and_(_role_institucion_scope_condition(), UsuarioRol.institucion_id == institucion_id_col),
         ),
         today,
     )
