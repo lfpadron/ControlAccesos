@@ -1,0 +1,177 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index a93c8aa..7cbe281 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -33,6 +33,18 @@ type DuplicateWarning = {
+   }>;
+ };
+ 
++type LocationCatalogData = {
++  consultoriosData: Consultorio[];
++  institucionesData: Institucion[];
++  complejosData: Complejo[];
++  torresData: Torre[];
++  pisosData: Piso[];
++};
++
++type ResetFormOptions = {
++  keepMedico?: boolean;
++};
++
+ const citas = ref<Cita[]>([]);
+ const pacientes = ref<Paciente[]>([]);
+ const medicos = ref<Medico[]>([]);
+@@ -354,7 +366,9 @@ function syncConsultorio() {
+ }
+ 
+ async function syncMedico() {
+-  const match = matchByLabel(medicos.value, medicoSearch.value, medicoLabel);
++  const current = medicos.value.find((item) => item.id === form.medico_id);
++  const currentMatches = current ? matchByLabel([current], medicoSearch.value, medicoLabel) : null;
++  const match = currentMatches ?? matchByLabel(medicos.value, medicoSearch.value, medicoLabel);
+   const nextId = match?.id ?? '';
+   if (form.medico_id === nextId) return;
+   form.medico_id = nextId;
+@@ -366,15 +380,21 @@ function syncPaciente() {
+   form.paciente_id = match?.id ?? '';
+ }
+ 
+-function defaultMedicoId() {
++function defaultMedicoOptions() {
+   const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+-  return ownMedico?.id ?? medicos.value[0]?.id ?? '';
++  const rows = ownMedico ? [ownMedico, ...medicos.value.filter((medico) => medico.id !== ownMedico.id)] : medicos.value;
++  return uniqueById(rows);
++}
++
++function defaultMedicoId() {
++  return defaultMedicoOptions()[0]?.id ?? '';
+ }
+ 
+ function setDefaultLocation() {
+   setInstitutionOption(null);
+   clearLocation('institucion');
+-  if (consultorios.value.length === 1 && setLocationFromConsultorio(consultorios.value[0])) {
++  const uniqueConsultorios = uniqueById(consultorios.value);
++  if (uniqueConsultorios.length === 1 && setLocationFromConsultorio(uniqueConsultorios[0])) {
+     setAutocompleteLabels();
+     return;
+   }
+@@ -382,14 +402,18 @@ function setDefaultLocation() {
+   setAutocompleteLabels();
+ }
+ 
+-async function resetForm() {
++async function resetForm(options: ResetFormOptions = {}) {
+   form.tipo = 'PROGRAMADA';
+   form.fecha_cita = todayLocalIso();
+   form.hora_cita = '09:00';
+   form.duracion_estimada = 30;
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+-  form.medico_id = defaultMedicoId();
++  if (!options.keepMedico) {
++    await loadDefaultLocationCatalogs();
++  } else if (!form.medico_id) {
++    form.medico_id = defaultMedicoId();
++  }
+   form.paciente_id = '';
+   pacienteSearch.value = '';
+   if (locationCatalogMedicoId.value !== (form.medico_id || null)) {
+@@ -426,6 +450,10 @@ async function loadTable() {
+ }
+ 
+ async function loadLocationCatalogs(medicoId = form.medico_id) {
++  applyLocationCatalogs(await fetchLocationCatalogs(medicoId), medicoId);
++}
++
++async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
+   const params = medicoId ? { medico_id: medicoId } : {};
+   const [consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+     listAccessibleConsultorios(params),
+@@ -434,14 +462,59 @@ async function loadLocationCatalogs(medicoId = form.medico_id) {
+     listAccessibleTorres(params),
+     listAccessiblePisos(params),
+   ]);
+-  consultorios.value = consultoriosData;
+-  instituciones.value = institucionesData;
+-  complejos.value = complejosData;
+-  torres.value = torresData;
+-  pisos.value = pisosData;
++  return { consultoriosData, institucionesData, complejosData, torresData, pisosData };
++}
++
++function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico_id) {
++  consultorios.value = uniqueById(data.consultoriosData);
++  instituciones.value = uniqueById(data.institucionesData);
++  complejos.value = uniqueById(data.complejosData);
++  torres.value = uniqueById(data.torresData);
++  pisos.value = uniqueById(data.pisosData);
+   locationCatalogMedicoId.value = medicoId || null;
+ }
+ 
++async function loadDefaultLocationCatalogs() {
++  let fallback: { medicoId: string; catalogs: LocationCatalogData } | null = null;
++  let lastError: unknown = null;
++
++  for (const medico of defaultMedicoOptions()) {
++    try {
++      const catalogs = await fetchLocationCatalogs(medico.id);
++      fallback ??= { medicoId: medico.id, catalogs };
++      if (catalogs.consultoriosData.length > 0) {
++        form.medico_id = medico.id;
++        applyLocationCatalogs(catalogs, medico.id);
++        return;
++      }
++    } catch (err) {
++      lastError = err;
++    }
++  }
++
++  try {
++    const accessibleCatalogs = await fetchLocationCatalogs('');
++    if (accessibleCatalogs.consultoriosData.length > 0) {
++      form.medico_id = fallback?.medicoId ?? defaultMedicoId();
++      applyLocationCatalogs(accessibleCatalogs, form.medico_id);
++      return;
++    }
++  } catch (err) {
++    lastError = err;
++  }
++
++  if (fallback) {
++    form.medico_id = fallback.medicoId;
++    applyLocationCatalogs(fallback.catalogs, fallback.medicoId);
++    return;
++  }
++  if (lastError) {
++    throw lastError;
++  }
++  form.medico_id = '';
++  await loadLocationCatalogs('');
++}
++
+ async function load() {
+   error.value = '';
+   try {
+@@ -453,10 +526,8 @@ async function load() {
+     citas.value = uniqueById(citasData);
+     currentUser.value = userData;
+     medicos.value = medicosData;
+-    form.medico_id = defaultMedicoId();
+-    await loadLocationCatalogs(form.medico_id);
+-    await loadPatientsForMedico();
+     await resetForm();
++    await loadPatientsForMedico();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
+   }
+@@ -668,7 +739,7 @@ onMounted(load);
+         </div>
+         <div class="actions-row">
+           <button type="submit">✓ Guardar</button>
+-          <button class="danger solid" type="button" @click="resetForm">× Cancelar</button>
++          <button class="danger solid" type="button" @click="resetForm()">× Cancelar</button>
+         </div>
+         <div v-if="duplicateWarning" class="duplicate-warning">
+           <div>
