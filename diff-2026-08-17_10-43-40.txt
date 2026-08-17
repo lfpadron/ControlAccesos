@@ -1,0 +1,110 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 6d36e7e..bd88178 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -142,6 +142,10 @@ function uniqueById<T extends { id: string }>(rows: T[]) {
+   return result;
+ }
+ 
++function mergeUniqueById<T extends { id: string }>(first: T[], second: T[]) {
++  return uniqueById([...first, ...second]);
++}
++
+ function institucionLabel(item: Institucion) {
+   return item.nombre;
+ }
+@@ -258,6 +262,23 @@ function autoFillSingleConsultorio() {
+   }
+ }
+ 
++function autoFillSingleConsultorioInCurrentLocation() {
++  const pisoIdsInTower = form.torre_id
++    ? new Set(
++        pisos.value
++          .filter((piso) => piso.torre_id === form.torre_id && (!form.complejo_id || piso.complejo_id === form.complejo_id))
++          .map((piso) => piso.id),
++      )
++    : null;
++  const rows = uniqueById(consultorios.value).filter((consultorio) => {
++    if (form.piso_id) return consultorio.piso_id === form.piso_id;
++    if (pisoIdsInTower) return pisoIdsInTower.has(consultorio.piso_id);
++    if (form.complejo_id) return consultorio.complejo_id === form.complejo_id;
++    return true;
++  });
++  return rows.length === 1 && setLocationFromConsultorio(rows[0]);
++}
++
+ function autoFillSinglePiso() {
+   if (!form.complejo_id || !form.torre_id) return;
+   if (filteredPisos.value.length === 1) {
+@@ -345,6 +366,7 @@ function syncTorre() {
+     clearLocation('torre');
+   }
+   autoFillSinglePiso();
++  autoFillSingleConsultorioInCurrentLocation();
+ }
+ 
+ function syncPiso() {
+@@ -403,6 +425,7 @@ function setDefaultLocation() {
+     return;
+   }
+   autoFillSingleInstitution();
++  autoFillSingleConsultorioInCurrentLocation();
+   setAutocompleteLabels();
+ }
+ 
+@@ -478,6 +501,43 @@ function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico
+   locationCatalogMedicoId.value = medicoId || null;
+ }
+ 
++function mergeLocationCatalogData(primary: LocationCatalogData, secondary: LocationCatalogData, keepPrimaryConsultorios = false) {
++  return {
++    consultoriosData: keepPrimaryConsultorios
++      ? uniqueById(primary.consultoriosData)
++      : mergeUniqueById(primary.consultoriosData, secondary.consultoriosData),
++    institucionesData: mergeUniqueById(primary.institucionesData, secondary.institucionesData),
++    complejosData: mergeUniqueById(primary.complejosData, secondary.complejosData),
++    torresData: mergeUniqueById(primary.torresData, secondary.torresData),
++    pisosData: mergeUniqueById(primary.pisosData, secondary.pisosData),
++  };
++}
++
++function singleCatalogConsultorio(data: LocationCatalogData) {
++  const rows = uniqueById(data.consultoriosData);
++  return rows.length === 1 ? rows[0] : null;
++}
++
++function hasFullLocationForSingleConsultorio(data: LocationCatalogData) {
++  const consultorio = singleCatalogConsultorio(data);
++  if (!consultorio) return true;
++  const piso = data.pisosData.find((item) => item.id === consultorio.piso_id) ?? null;
++  const complejo = data.complejosData.find((item) => item.id === consultorio.complejo_id) ?? null;
++  const torre = piso ? data.torresData.find((item) => item.id === piso.torre_id) ?? null : null;
++  const institucion = complejo ? data.institucionesData.find((item) => item.id === complejo.institucion_id) ?? null : null;
++  return Boolean(piso && torre && complejo && institucion);
++}
++
++async function completeSingleConsultorioLocation(data: LocationCatalogData) {
++  if (hasFullLocationForSingleConsultorio(data)) return data;
++  try {
++    const accessibleCatalogs = await fetchLocationCatalogs('');
++    return mergeLocationCatalogData(data, accessibleCatalogs, true);
++  } catch {
++    return data;
++  }
++}
++
+ async function loadDefaultLocationCatalogs() {
+   let fallback: { medicoId: string; catalogs: LocationCatalogData } | null = null;
+   let lastError: unknown = null;
+@@ -492,8 +552,9 @@ async function loadDefaultLocationCatalogs() {
+       const catalogs = await fetchLocationCatalogs(medico.id);
+       fallback ??= { medicoId: medico.id, catalogs };
+       if (catalogs.consultoriosData.length > 0) {
++        const completeCatalogs = await completeSingleConsultorioLocation(catalogs);
+         form.medico_id = medico.id;
+-        applyLocationCatalogs(catalogs, medico.id);
++        applyLocationCatalogs(completeCatalogs, medico.id);
+         return;
+       }
+     } catch (err) {
