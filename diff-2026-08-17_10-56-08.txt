@@ -1,0 +1,32 @@
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index cfa055b..9f412c8 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -43,7 +43,12 @@ async function refreshCurrentUser() {
+   }
+ }
+ 
+-function handleCurrentUserUpdated() {
++function handleCurrentUserUpdated(event: Event) {
++  const updatedUser = event instanceof CustomEvent ? (event.detail as Usuario | null | undefined) : undefined;
++  if (updatedUser !== undefined) {
++    currentUser.value = updatedUser;
++    return;
++  }
+   void refreshCurrentUser();
+ }
+ 
+diff --git a/access-manager/frontend/src/views/LoginView.vue b/access-manager/frontend/src/views/LoginView.vue
+index 4f9b8cd..108f7ca 100644
+--- a/access-manager/frontend/src/views/LoginView.vue
++++ b/access-manager/frontend/src/views/LoginView.vue
+@@ -16,7 +16,8 @@ async function submit() {
+     const response = await login(email.value.trim(), password.value);
+     setToken(response.access_token);
+     const user = await getCurrentUser();
+-    router.push(user.force_password_change ? '/perfil' : '/instituciones');
++    await router.push(user.force_password_change ? '/perfil' : '/instituciones');
++    window.dispatchEvent(new CustomEvent('current-user-updated', { detail: user }));
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';
+   } finally {

@@ -16,7 +16,8 @@ async function submit() {
     const response = await login(email.value.trim(), password.value);
     setToken(response.access_token);
     const user = await getCurrentUser();
-    router.push(user.force_password_change ? '/perfil' : '/instituciones');
+    await router.push(user.force_password_change ? '/perfil' : '/instituciones');
+    window.dispatchEvent(new CustomEvent('current-user-updated', { detail: user }));
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';
   } finally {

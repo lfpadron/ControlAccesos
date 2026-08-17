@@ -43,7 +43,12 @@ async function refreshCurrentUser() {
   }
 }
 
-function handleCurrentUserUpdated() {
+function handleCurrentUserUpdated(event: Event) {
+  const updatedUser = event instanceof CustomEvent ? (event.detail as Usuario | null | undefined) : undefined;
+  if (updatedUser !== undefined) {
+    currentUser.value = updatedUser;
+    return;
+  }
   void refreshCurrentUser();
 }
 
