@@ -1,0 +1,72 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 7cf0995..ef004d4 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -85,9 +85,9 @@ const filteredTorres = computed(() => {
+ });
+ 
+ const filteredPisos = computed(() => {
+-  if (!form.complejo_id) return [];
++  if (!form.complejo_id || !form.torre_id) return [];
+   return pisos.value
+-    .filter((item) => item.complejo_id === form.complejo_id && (!form.torre_id || item.torre_id === form.torre_id))
++    .filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id)
+     .sort((a, b) => a.numero - b.numero);
+ });
+ 
+@@ -224,18 +224,26 @@ function autoFillSingleConsultorio() {
+ }
+ 
+ function autoFillSinglePiso() {
+-  if (!form.complejo_id) return;
++  if (!form.complejo_id || !form.torre_id) return;
+   if (filteredPisos.value.length === 1) {
+     setPisoOption(filteredPisos.value[0]);
+     autoFillSingleConsultorio();
+   }
+ }
+ 
++function autoFillSingleTower() {
++  if (!form.complejo_id) return;
++  if (filteredTorres.value.length === 1) {
++    setTowerOption(filteredTorres.value[0]);
++    autoFillSinglePiso();
++  }
++}
++
+ function autoFillSingleComplex() {
+   if (!form.institucion_id) return;
+   if (filteredComplejos.value.length === 1) {
+     setComplexOption(filteredComplejos.value[0]);
+-    autoFillSinglePiso();
++    autoFillSingleTower();
+   }
+ }
+ 
+@@ -272,12 +280,16 @@ function syncComplex() {
+   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+     clearLocation('torre');
+   }
+-  autoFillSinglePiso();
++  autoFillSingleTower();
+ }
+ 
+ function syncTorre() {
+   const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
+   setTowerOption(match ?? null);
++  if (!match) {
++    clearLocation('torre');
++    return;
++  }
+   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+     clearLocation('torre');
+   }
+@@ -564,7 +576,7 @@ onMounted(load);
+             v-model="pisoSearch"
+             list="cita-pisos"
+             required
+-            :disabled="!form.complejo_id"
++            :disabled="!form.torre_id"
+             @input="syncPiso"
+             @change="syncPiso"
+           />
