@@ -23,8 +23,10 @@ import {
   type UsuarioRol,
 } from '../api/client';
 import { todayLocalIso } from '../dateUtils';
+import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
 
 const PAGE_SIZE = 20;
+const LOCATION_ASSIGNMENTS_PAGE_SIZE = 10;
 
 const assignments = ref<UsuarioRol[]>([]);
 const usuarios = ref<Usuario[]>([]);
@@ -44,6 +46,7 @@ const loadingUsers = ref(false);
 const error = ref('');
 const message = ref('');
 const page = ref(1);
+const locationAssignmentPage = ref(1);
 const doctorSearch = ref('');
 const doctorDropdownOpen = ref(false);
 const highlightedDoctorIndex = ref(-1);
@@ -101,18 +104,12 @@ const scopedTorres = computed(() =>
 );
 const scopedPisos = computed(() =>
   locationForm.torre_id
-    ? sortByLabel(
-        pisos.value.filter((item) => item.activo && item.torre_id === locationForm.torre_id),
-        pisoLabel,
-      )
+    ? sortPisosByCodigo(pisos.value.filter((item) => item.activo && item.torre_id === locationForm.torre_id))
     : [],
 );
 const scopedConsultorios = computed(() =>
   locationForm.piso_id
-    ? sortByLabel(
-        consultorios.value.filter((item) => item.activo && item.piso_id === locationForm.piso_id),
-        consultorioLabel,
-      )
+    ? sortConsultoriosByCodigo(consultorios.value.filter((item) => item.activo && item.piso_id === locationForm.piso_id))
     : [],
 );
 const activeRoleForSelected = computed(() => {
@@ -129,6 +126,15 @@ const locationAssignmentsForSelected = computed(() =>
     .filter((item) => item.usuario_id === selectedUserId.value && !item.medico_id)
     .filter((item) => item.institucion_id || item.complejo_id || item.torre_id || item.piso_id || item.consultorio_id)
     .sort(compareAssignments),
+);
+const locationAssignmentTotalPages = computed(() =>
+  Math.max(1, Math.ceil(locationAssignmentsForSelected.value.length / LOCATION_ASSIGNMENTS_PAGE_SIZE)),
+);
+const paginatedLocationAssignments = computed(() =>
+  locationAssignmentsForSelected.value.slice(
+    (locationAssignmentPage.value - 1) * LOCATION_ASSIGNMENTS_PAGE_SIZE,
+    locationAssignmentPage.value * LOCATION_ASSIGNMENTS_PAGE_SIZE,
+  ),
 );
 const doctorAssignmentsForSelected = computed(() =>
   assignments.value
@@ -163,6 +169,14 @@ function normalize(value: string | null | undefined) {
 
 function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
   return [...rows].sort((a, b) => labeler(a).localeCompare(labeler(b), 'es', { sensitivity: 'base' }));
+}
+
+function sortConsultoriosByCodigo(rows: Consultorio[]) {
+  return [...rows].sort((a, b) => {
+    const byCodigo = a.codigo.localeCompare(b.codigo, 'es', { numeric: true, sensitivity: 'base' });
+    if (byCodigo !== 0) return byCodigo;
+    return consultorioDropdownLabel(a).localeCompare(consultorioDropdownLabel(b), 'es', { numeric: true, sensitivity: 'base' });
+  });
 }
 
 function compareUsers(a: Usuario, b: Usuario) {
@@ -208,13 +222,16 @@ function institutionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} - ${detail}` : `Piso ${item.numero}`;
+  return pisoCodigoVisibleLabel(item);
 }
 
 function consultorioLabel(item: Consultorio) {
-  const description = item.nombre_visible || item.instrucciones_acceso || 'Sin descripción';
-  return `${item.codigo} - ${description}`;
+  const visibleName = item.nombre_visible?.trim();
+  return visibleName ? `${item.codigo} - ${visibleName}` : item.codigo;
+}
+
+function consultorioDropdownLabel(item: Consultorio) {
+  return item.nombre_visible?.trim() || item.codigo;
 }
 
 function doctorSortLabel(item: Medico) {
@@ -621,9 +638,14 @@ function onDoctorSearchKeydown(event: KeyboardEvent) {
 }
 
 watch(selectedUserId, () => {
+  locationAssignmentPage.value = 1;
   if (doctorMatchesSelectedUser(selectedDoctor.value)) {
     resetDoctorForm();
   }
+});
+
+watch(locationAssignmentsForSelected, () => {
+  locationAssignmentPage.value = Math.min(Math.max(1, locationAssignmentPage.value), locationAssignmentTotalPages.value);
 });
 
 onMounted(loadReferenceData);
@@ -712,50 +734,52 @@ onMounted(loadReferenceData);
     <p v-if="message" class="message">{{ message }}</p>
     <p v-if="error" class="error">{{ error }}</p>
 
-    <div class="grid catalog-grid">
+    <div class="assignment-stack">
       <section class="panel form">
         <h2>Asignación a consultorios</h2>
         <p v-if="!selectedUser" class="message">Seleccione un usuario para habilitar asignaciones.</p>
-        <div class="form-row">
-          <label for="asignacion-institucion-search">Institución</label>
-          <input
-            id="asignacion-institucion-search"
-            v-model="locationForm.institucionSearch"
-            :disabled="!selectedUser"
-            list="instituciones-asignacion"
-            @input="syncInstitutionFromSearch"
-          />
-          <datalist id="instituciones-asignacion">
-            <option v-for="item in institutionOptions" :key="item.id" :value="institutionLabel(item)" />
-          </datalist>
-        </div>
-        <div class="form-row">
-          <label for="asignacion-campus">Campus</label>
-          <select id="asignacion-campus" v-model="locationForm.complejo_id" :disabled="!selectedUser || !locationForm.institucion_id" @change="syncCampus">
-            <option value="">Toda la institución</option>
-            <option v-for="item in scopedCampus" :key="item.id" :value="item.id">{{ item.nombre }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="asignacion-torre">Torre</label>
-          <select id="asignacion-torre" v-model="locationForm.torre_id" :disabled="!selectedUser || !locationForm.complejo_id" @change="syncTorre">
-            <option value="">Todo el campus</option>
-            <option v-for="item in scopedTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="asignacion-piso">Piso</label>
-          <select id="asignacion-piso" v-model="locationForm.piso_id" :disabled="!selectedUser || !locationForm.torre_id" @change="syncPiso">
-            <option value="">Toda la torre</option>
-            <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="asignacion-consultorio">Consultorio</label>
-          <select id="asignacion-consultorio" v-model="locationForm.consultorio_id" :disabled="!selectedUser || !locationForm.piso_id">
-            <option value="">Todo el piso</option>
-            <option v-for="item in scopedConsultorios" :key="item.id" :value="item.id">{{ consultorioLabel(item) }}</option>
-          </select>
+        <div class="form-grid assignment-location-grid">
+          <div class="form-row">
+            <label for="asignacion-institucion-search">Institución</label>
+            <input
+              id="asignacion-institucion-search"
+              v-model="locationForm.institucionSearch"
+              :disabled="!selectedUser"
+              list="instituciones-asignacion"
+              @input="syncInstitutionFromSearch"
+            />
+            <datalist id="instituciones-asignacion">
+              <option v-for="item in institutionOptions" :key="item.id" :value="institutionLabel(item)" />
+            </datalist>
+          </div>
+          <div class="form-row">
+            <label for="asignacion-campus">Campus</label>
+            <select id="asignacion-campus" v-model="locationForm.complejo_id" :disabled="!selectedUser || !locationForm.institucion_id" @change="syncCampus">
+              <option value="">Toda la institución</option>
+              <option v-for="item in scopedCampus" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="asignacion-torre">Torre</label>
+            <select id="asignacion-torre" v-model="locationForm.torre_id" :disabled="!selectedUser || !locationForm.complejo_id" @change="syncTorre">
+              <option value="">Todo el campus</option>
+              <option v-for="item in scopedTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="asignacion-piso">Piso</label>
+            <select id="asignacion-piso" v-model="locationForm.piso_id" :disabled="!selectedUser || !locationForm.torre_id" @change="syncPiso">
+              <option value="">Toda la torre</option>
+              <option v-for="item in scopedPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="asignacion-consultorio">Consultorio</label>
+            <select id="asignacion-consultorio" v-model="locationForm.consultorio_id" :disabled="!selectedUser || !locationForm.piso_id">
+              <option value="">Todo el piso</option>
+              <option v-for="item in scopedConsultorios" :key="item.id" :value="item.id">{{ consultorioDropdownLabel(item) }}</option>
+            </select>
+          </div>
         </div>
         <div class="form-grid">
           <div class="form-row">
@@ -784,7 +808,7 @@ onMounted(loadReferenceData);
               </tr>
             </thead>
             <tbody>
-              <tr v-for="item in locationAssignmentsForSelected" :key="item.id">
+              <tr v-for="item in paginatedLocationAssignments" :key="item.id">
                 <td>{{ assignmentScope(item) }}</td>
                 <td>{{ dateText(item.fecha_inicio) }}</td>
                 <td>{{ dateText(item.fecha_fin) }}</td>
@@ -797,49 +821,64 @@ onMounted(loadReferenceData);
             </tbody>
           </table>
         </div>
+        <div v-if="selectedUser && locationAssignmentsForSelected.length > 0" class="actions-row">
+          <button class="secondary" type="button" :disabled="locationAssignmentPage <= 1" @click="locationAssignmentPage -= 1">Anterior</button>
+          <span class="message">Página {{ locationAssignmentPage }} de {{ locationAssignmentTotalPages }}</span>
+          <button class="secondary" type="button" :disabled="locationAssignmentPage >= locationAssignmentTotalPages" @click="locationAssignmentPage += 1">Siguiente</button>
+        </div>
         <p v-if="selectedUser && locationAssignmentsForSelected.length === 0" class="message">Sin asignaciones a consultorios.</p>
       </section>
 
       <section class="panel form">
         <h2>Asignación a médicos</h2>
         <p v-if="!selectedUser" class="message">Seleccione un usuario para habilitar asignaciones.</p>
-        <div class="form-row">
-          <label for="asignacion-medico-search">Médico</label>
-          <div class="combobox">
-            <input
-              id="asignacion-medico-search"
-              v-model="doctorSearch"
-              :aria-activedescendant="highlightedDoctor ? `medico-option-${highlightedDoctor.id}` : undefined"
-              aria-autocomplete="list"
-              aria-controls="medicos-asignacion-options"
-              :aria-expanded="doctorDropdownOpen"
-              autocomplete="off"
-              :disabled="!selectedUser"
-              role="combobox"
-              @blur="scheduleDoctorDropdownClose"
-              @focus="openDoctorDropdown"
-              @input="onDoctorSearchInput"
-              @keydown="onDoctorSearchKeydown"
-            />
-            <div v-if="doctorDropdownOpen" id="medicos-asignacion-options" class="combobox-list" role="listbox">
-              <button
-                v-for="(item, index) in doctorOptions"
-                :id="`medico-option-${item.id}`"
-                :key="item.id"
-                class="combobox-option"
-                :class="{ highlighted: index === highlightedDoctorIndex, selected: item.id === doctorForm.medico_id }"
-                role="option"
-                type="button"
-                :aria-selected="item.id === doctorForm.medico_id"
-                @click="selectDoctor(item)"
-                @mousedown.prevent
-                @mouseenter="highlightedDoctorIndex = index"
-              >
-                <span class="combobox-option-title">{{ item.apellidos }}, {{ item.nombre }}</span>
-                <span class="combobox-option-meta">{{ medicoDisplay(item).correo }} - {{ medicoDisplay(item).estado }}</span>
-              </button>
-              <div v-if="doctorOptions.length === 0" class="combobox-empty">Sin resultados</div>
+        <div class="form-grid assignment-doctor-grid">
+          <div class="form-row">
+            <label for="asignacion-medico-search">Médico</label>
+            <div class="combobox">
+              <input
+                id="asignacion-medico-search"
+                v-model="doctorSearch"
+                :aria-activedescendant="highlightedDoctor ? `medico-option-${highlightedDoctor.id}` : undefined"
+                aria-autocomplete="list"
+                aria-controls="medicos-asignacion-options"
+                :aria-expanded="doctorDropdownOpen"
+                autocomplete="off"
+                :disabled="!selectedUser"
+                role="combobox"
+                @blur="scheduleDoctorDropdownClose"
+                @focus="openDoctorDropdown"
+                @input="onDoctorSearchInput"
+                @keydown="onDoctorSearchKeydown"
+              />
+              <div v-if="doctorDropdownOpen" id="medicos-asignacion-options" class="combobox-list" role="listbox">
+                <button
+                  v-for="(item, index) in doctorOptions"
+                  :id="`medico-option-${item.id}`"
+                  :key="item.id"
+                  class="combobox-option"
+                  :class="{ highlighted: index === highlightedDoctorIndex, selected: item.id === doctorForm.medico_id }"
+                  role="option"
+                  type="button"
+                  :aria-selected="item.id === doctorForm.medico_id"
+                  @click="selectDoctor(item)"
+                  @mousedown.prevent
+                  @mouseenter="highlightedDoctorIndex = index"
+                >
+                  <span class="combobox-option-title">{{ item.apellidos }}, {{ item.nombre }}</span>
+                  <span class="combobox-option-meta">{{ medicoDisplay(item).correo }} - {{ medicoDisplay(item).estado }}</span>
+                </button>
+                <div v-if="doctorOptions.length === 0" class="combobox-empty">Sin resultados</div>
+              </div>
             </div>
+          </div>
+          <div class="form-row">
+            <label for="medico-fecha-inicio">Inicio de vigencia</label>
+            <input id="medico-fecha-inicio" v-model="doctorForm.fecha_inicio" :disabled="!selectedUser" required type="date" />
+          </div>
+          <div class="form-row">
+            <label for="medico-fecha-fin">Fin de vigencia</label>
+            <input id="medico-fecha-fin" v-model="doctorForm.fecha_fin" :disabled="!selectedUser" type="date" />
           </div>
         </div>
         <div v-if="selectedDoctor" class="form-grid">
@@ -858,16 +897,6 @@ onMounted(loadReferenceData);
           <div class="form-row">
             <label>Estado</label>
             <span class="status" :class="selectedDoctor.activo ? 'ok' : 'muted'">{{ medicoDisplay(selectedDoctor).estado }}</span>
-          </div>
-        </div>
-        <div class="form-grid">
-          <div class="form-row">
-            <label for="medico-fecha-inicio">Inicio de vigencia</label>
-            <input id="medico-fecha-inicio" v-model="doctorForm.fecha_inicio" :disabled="!selectedUser" required type="date" />
-          </div>
-          <div class="form-row">
-            <label for="medico-fecha-fin">Fin de vigencia</label>
-            <input id="medico-fecha-fin" v-model="doctorForm.fecha_fin" :disabled="!selectedUser" type="date" />
           </div>
         </div>
         <div class="actions-row">

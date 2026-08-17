@@ -27,6 +27,7 @@ import {
   type UsuarioRol,
 } from '../api/client';
 import { exportRows, type ExportFormat } from '../exporters';
+import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
 
 type ActiveFilter = 'todos' | 'activos' | 'inactivos';
 type UserRow = Record<string, unknown> & {
@@ -56,9 +57,11 @@ const asignacionesMedico = ref<AsignacionMedicoConsultorio[]>([]);
 const asignacionesOperador = ref<AsignacionOperador[]>([]);
 const institucionSearch = ref('');
 const complejoSearch = ref('');
+const torreSearch = ref('');
 const pisoSearch = ref('');
 const selectedInstitucionId = ref('');
 const selectedComplejoId = ref('');
+const selectedTorreId = ref('');
 const selectedPisoId = ref('');
 const selectedRoleId = ref('');
 const activeFilter = ref<ActiveFilter>('todos');
@@ -72,8 +75,15 @@ const filteredComplejos = computed(() =>
   selectedInstitucionId.value ? complejos.value.filter((item) => item.institucion_id === selectedInstitucionId.value) : complejos.value,
 );
 
+const filteredTorres = computed(() => {
+  if (selectedComplejoId.value) return torres.value.filter((item) => item.complejo_id === selectedComplejoId.value);
+  if (!selectedInstitucionId.value) return torres.value;
+  const complejoIds = new Set(filteredComplejos.value.map((item) => item.id));
+  return torres.value.filter((item) => complejoIds.has(item.complejo_id));
+});
+
 const filteredPisos = computed(() =>
-  selectedComplejoId.value ? pisos.value.filter((item) => item.complejo_id === selectedComplejoId.value) : pisos.value,
+  selectedTorreId.value ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === selectedTorreId.value)) : [],
 );
 
 function institucionLabel(item: Institucion) {
@@ -81,15 +91,18 @@ function institucionLabel(item: Institucion) {
 }
 
 function pisoLabel(item: Piso) {
-  const detail = item.codigo || item.nombre_visible;
-  return detail ? `Piso ${item.numero} · ${detail}` : `Piso ${item.numero}`;
+  return pisoCodigoVisibleLabel(item);
+}
+
+function torreLabel(item: Torre) {
+  return item.nombre;
 }
 
 function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
   const normalized = text.trim().toLowerCase();
   return rows.find((item) => {
     const label = labeler(item).toLowerCase();
-    return label === normalized || label.split(' · ')[0] === normalized;
+    return label === normalized || label.split(' · ')[0] === normalized || label.split(' - ')[0] === normalized;
   });
 }
 
@@ -98,6 +111,12 @@ function syncInstitution() {
   if (!filteredComplejos.value.some((item) => item.id === selectedComplejoId.value)) {
     selectedComplejoId.value = '';
     complejoSearch.value = '';
+  }
+  if (!filteredTorres.value.some((item) => item.id === selectedTorreId.value)) {
+    selectedTorreId.value = '';
+    torreSearch.value = '';
+  }
+  if (!filteredPisos.value.some((item) => item.id === selectedPisoId.value)) {
     selectedPisoId.value = '';
     pisoSearch.value = '';
   }
@@ -105,6 +124,18 @@ function syncInstitution() {
 
 function syncComplex() {
   selectedComplejoId.value = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre)?.id ?? '';
+  if (!filteredTorres.value.some((item) => item.id === selectedTorreId.value)) {
+    selectedTorreId.value = '';
+    torreSearch.value = '';
+  }
+  if (!filteredPisos.value.some((item) => item.id === selectedPisoId.value)) {
+    selectedPisoId.value = '';
+    pisoSearch.value = '';
+  }
+}
+
+function syncTorre() {
+  selectedTorreId.value = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel)?.id ?? '';
   if (!filteredPisos.value.some((item) => item.id === selectedPisoId.value)) {
     selectedPisoId.value = '';
     pisoSearch.value = '';
@@ -209,6 +240,7 @@ function passesFilters(usuario: Usuario) {
   if (selectedRoleId.value && !scope.roleIds.has(selectedRoleId.value)) return false;
   if (selectedInstitucionId.value && !scope.institucionIds.has(selectedInstitucionId.value)) return false;
   if (selectedComplejoId.value && !scope.complejoIds.has(selectedComplejoId.value)) return false;
+  if (selectedTorreId.value && !scope.torreIds.has(selectedTorreId.value)) return false;
   if (selectedPisoId.value && !scope.pisoIds.has(selectedPisoId.value)) return false;
   if (activeFilter.value !== 'todos') {
     const active = usuario.estado.toUpperCase() === 'ACTIVO';
@@ -307,9 +339,11 @@ async function loadData() {
 function clearFilters() {
   institucionSearch.value = '';
   complejoSearch.value = '';
+  torreSearch.value = '';
   pisoSearch.value = '';
   selectedInstitucionId.value = '';
   selectedComplejoId.value = '';
+  selectedTorreId.value = '';
   selectedPisoId.value = '';
   selectedRoleId.value = '';
   activeFilter.value = 'todos';
@@ -363,8 +397,15 @@ onMounted(loadData);
           </datalist>
         </div>
         <div class="form-row">
+          <label for="usuarios-torre">Torre</label>
+          <input id="usuarios-torre" v-model="torreSearch" list="usuarios-torres" @input="syncTorre" @change="syncTorre" />
+          <datalist id="usuarios-torres">
+            <option v-for="item in filteredTorres" :key="item.id" :value="torreLabel(item)" />
+          </datalist>
+        </div>
+        <div class="form-row">
           <label for="usuarios-piso">Piso</label>
-          <input id="usuarios-piso" v-model="pisoSearch" list="usuarios-pisos" @input="syncPiso" @change="syncPiso" />
+          <input id="usuarios-piso" v-model="pisoSearch" :disabled="!selectedTorreId" list="usuarios-pisos" @input="syncPiso" @change="syncPiso" />
           <datalist id="usuarios-pisos">
             <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
           </datalist>

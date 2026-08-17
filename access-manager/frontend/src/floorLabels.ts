@@ -7,6 +7,12 @@ export function pisoVisibleLabel(item: PisoLabelSource) {
   return item.nombre_visible.trim() || `Piso ${item.numero}`;
 }
 
+export function pisoCodigoVisibleLabel(item: PisoLabelSource) {
+  const codigo = item.codigo?.trim() || String(item.numero);
+  const nombreVisible = item.nombre_visible.trim();
+  return nombreVisible ? `${codigo} - ${nombreVisible}` : codigo;
+}
+
 export function pisoTorreLabel(item: PisoLabelSource, torres: TorreLabelSource[]) {
   const torre = torres.find((row) => row.id === item.torre_id);
   return torre ? `${torre.nombre} · ${pisoVisibleLabel(item)}` : pisoVisibleLabel(item);
