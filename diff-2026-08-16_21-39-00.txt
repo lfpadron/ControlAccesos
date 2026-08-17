@@ -1,0 +1,180 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 69d50ef..7cf0995 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -174,63 +174,132 @@ function setAutocompleteLabels() {
+   pacienteSearch.value = paciente ? patientOptionLabel(paciente) : '';
+ }
+ 
++function setInstitutionOption(item: Institucion | null) {
++  form.institucion_id = item?.id ?? '';
++  institucionSearch.value = item ? institucionLabel(item) : '';
++}
++
++function setComplexOption(item: Complejo | null) {
++  form.complejo_id = item?.id ?? '';
++  complejoSearch.value = item?.nombre ?? '';
++}
++
++function setTowerOption(item: Torre | null) {
++  form.torre_id = item?.id ?? '';
++  torreSearch.value = item ? torreLabel(item) : '';
++}
++
++function setPisoOption(item: Piso | null) {
++  form.piso_id = item?.id ?? '';
++  pisoSearch.value = item ? pisoLabel(item) : '';
++  if (item) {
++    const torre = torres.value.find((row) => row.id === item.torre_id) ?? null;
++    setTowerOption(torre);
++  }
++}
++
++function setConsultorioOption(item: Consultorio | null) {
++  form.consultorio_id = item?.id ?? '';
++  consultorioSearch.value = item ? consultorioLabel(item) : '';
++}
++
+ function clearLocation(from: 'institucion' | 'complejo' | 'torre' | 'piso') {
+   if (from === 'institucion') {
+-    form.complejo_id = '';
+-    complejoSearch.value = '';
++    setComplexOption(null);
+   }
+   if (from === 'institucion' || from === 'complejo') {
+-    form.torre_id = '';
+-    torreSearch.value = '';
++    setTowerOption(null);
+   }
+   if (from === 'institucion' || from === 'complejo' || from === 'torre') {
+-    form.piso_id = '';
+-    pisoSearch.value = '';
++    setPisoOption(null);
++  }
++  setConsultorioOption(null);
++}
++
++function autoFillSingleConsultorio() {
++  if (!form.piso_id) return;
++  if (filteredConsultorios.value.length === 1) {
++    setConsultorioOption(filteredConsultorios.value[0]);
++  }
++}
++
++function autoFillSinglePiso() {
++  if (!form.complejo_id) return;
++  if (filteredPisos.value.length === 1) {
++    setPisoOption(filteredPisos.value[0]);
++    autoFillSingleConsultorio();
++  }
++}
++
++function autoFillSingleComplex() {
++  if (!form.institucion_id) return;
++  if (filteredComplejos.value.length === 1) {
++    setComplexOption(filteredComplejos.value[0]);
++    autoFillSinglePiso();
++  }
++}
++
++function autoFillSingleInstitution() {
++  if (instituciones.value.length === 1) {
++    setInstitutionOption(instituciones.value[0]);
++    autoFillSingleComplex();
+   }
+-  form.consultorio_id = '';
+-  consultorioSearch.value = '';
+ }
+ 
+ function syncInstitution() {
+   const match = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel);
+-  form.institucion_id = match?.id ?? '';
++  setInstitutionOption(match ?? null);
++  if (!match) {
++    clearLocation('institucion');
++    return;
++  }
+   if (!filteredComplejos.value.some((item) => item.id === form.complejo_id)) {
+     clearLocation('institucion');
+   }
++  autoFillSingleComplex();
+ }
+ 
+ function syncComplex() {
+   const match = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre);
+-  form.complejo_id = match?.id ?? '';
+-  if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
++  setComplexOption(match ?? null);
++  if (!match) {
+     clearLocation('complejo');
++    return;
+   }
++  if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
++    setTowerOption(null);
++  }
++  if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
++    clearLocation('torre');
++  }
++  autoFillSinglePiso();
+ }
+ 
+ function syncTorre() {
+   const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
+-  form.torre_id = match?.id ?? '';
++  setTowerOption(match ?? null);
+   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+     clearLocation('torre');
+   }
++  autoFillSinglePiso();
+ }
+ 
+ function syncPiso() {
+   const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
+-  form.piso_id = match?.id ?? '';
+-  if (match && !form.torre_id) {
+-    form.torre_id = match.torre_id;
+-    const torre = torres.value.find((item) => item.id === match.torre_id);
+-    torreSearch.value = torre ? torreLabel(torre) : '';
++  setPisoOption(match ?? null);
++  if (!match) {
++    clearLocation('piso');
++    return;
+   }
+   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
+     clearLocation('piso');
+   }
++  autoFillSingleConsultorio();
+ }
+ 
+ function syncConsultorio() {
+   const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, consultorioLabel);
+-  form.consultorio_id = match?.id ?? '';
++  setConsultorioOption(match ?? null);
+ }
+ 
+ async function syncMedico() {
+@@ -252,21 +321,9 @@ function defaultMedicoId() {
+ }
+ 
+ function setDefaultLocation() {
+-  const consultorio = consultorios.value[0];
+-  if (consultorio) {
+-    const piso = pisos.value.find((item) => item.id === consultorio.piso_id);
+-    form.complejo_id = consultorio.complejo_id;
+-    form.piso_id = consultorio.piso_id;
+-    form.torre_id = piso?.torre_id ?? '';
+-    form.consultorio_id = consultorio.id;
+-    form.institucion_id = complejos.value.find((item) => item.id === consultorio.complejo_id)?.institucion_id ?? '';
+-    return;
+-  }
+-  form.institucion_id = instituciones.value[0]?.id ?? '';
+-  form.complejo_id = filteredComplejos.value[0]?.id ?? '';
+-  form.torre_id = filteredTorres.value[0]?.id ?? '';
+-  form.piso_id = filteredPisos.value[0]?.id ?? '';
+-  form.consultorio_id = filteredConsultorios.value[0]?.id ?? '';
++  setInstitutionOption(null);
++  clearLocation('institucion');
++  autoFillSingleInstitution();
+ }
+ 
+ function resetForm() {
