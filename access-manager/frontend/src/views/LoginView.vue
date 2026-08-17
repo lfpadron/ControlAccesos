@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { getCurrentUser, login, setToken } from '../api/client';
+import { getCurrentUser, login } from '../api/client';
+import { setCurrentSessionUser, setSessionToken } from '../authSession';
 
 const router = useRouter();
 const email = ref('admin1@example.com');
@@ -14,8 +15,9 @@ async function submit() {
   loading.value = true;
   try {
     const response = await login(email.value.trim(), password.value);
-    setToken(response.access_token);
+    setSessionToken(response.access_token);
     const user = await getCurrentUser();
+    setCurrentSessionUser(user);
     await router.push(user.force_password_change ? '/perfil' : '/instituciones');
     window.dispatchEvent(new CustomEvent('current-user-updated', { detail: user }));
   } catch (err) {

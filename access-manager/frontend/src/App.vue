@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
-import { clearToken, getCurrentUser, getToken, type Usuario } from './api/client';
 import { canAccessPath } from './accessControl';
+import { clearSession, currentSessionUser, isAuthenticated, refreshCurrentSessionUser, setCurrentSessionUser } from './authSession';
+import type { Usuario } from './api/client';
 import astrogatoLogo from './astrogato-logo-v02.png';
 import capitalHeaderLogo from './capital-logo-encabezado.png';
 import capitalMenuLogo from './capital-logo-menu.png';
@@ -11,9 +12,9 @@ import { useLocationContext } from './composables/useLocationContext';
 const router = useRouter();
 const route = useRoute();
 const fullscreen = computed(() => Boolean(route.meta.fullscreen));
-const currentUser = ref<Usuario | null>(null);
+const currentUser = currentSessionUser;
 const { clearCampus, clearFloor, clearLocation, clearTower } = useLocationContext();
-const showUserBadge = computed(() => Boolean(getToken() && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
+const showUserBadge = computed(() => Boolean(isAuthenticated.value && currentUser.value && !fullscreen.value && !route.meta.hideUserBadge));
 const currentUserDisplayName = computed(() =>
   [currentUser.value?.nombre, currentUser.value?.apellidos].filter(Boolean).join(' ') || currentUser.value?.email || '',
 );
@@ -32,21 +33,22 @@ const footerDatetime = computed(() => footerDate.value.toISOString());
 let footerClockTimer: number | undefined;
 
 async function refreshCurrentUser() {
-  if (!getToken() || fullscreen.value) {
-    currentUser.value = null;
+  if (!isAuthenticated.value) {
+    setCurrentSessionUser(null);
     return;
   }
+  if (fullscreen.value) return;
   try {
-    currentUser.value = await getCurrentUser();
+    await refreshCurrentSessionUser();
   } catch {
-    currentUser.value = null;
+    setCurrentSessionUser(null);
   }
 }
 
 function handleCurrentUserUpdated(event: Event) {
   const updatedUser = event instanceof CustomEvent ? (event.detail as Usuario | null | undefined) : undefined;
   if (updatedUser !== undefined) {
-    currentUser.value = updatedUser;
+    setCurrentSessionUser(updatedUser);
     return;
   }
   void refreshCurrentUser();
@@ -66,8 +68,7 @@ onUnmounted(() => {
 });
 
 function logout() {
-  clearToken();
-  currentUser.value = null;
+  clearSession();
   router.push('/login');
 }
 
@@ -146,7 +147,7 @@ watch(
         <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
         <RouterLink to="/auditoria" :class="{ disabled: !canUse('/auditoria') }" :aria-disabled="!canUse('/auditoria')" @click="handleNav($event, '/auditoria')">Auditoría</RouterLink>
       </nav>
-      <button v-if="getToken()" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+      <button v-if="isAuthenticated" class="secondary" type="button" @click="logout">Cerrar sesión</button>
     </aside>
     <main class="content">
       <img class="app-header-logo" :src="capitalHeaderLogo" alt="Capital Medical Center" />

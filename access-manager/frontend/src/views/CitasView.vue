@@ -166,6 +166,25 @@ function medicoLabel(item: Medico) {
   return [item.apellidos, item.nombre].filter(Boolean).join(' ');
 }
 
+function medicoIdentityValues(item: Medico) {
+  return new Set(
+    [item.nombre, item.apellidos].filter(Boolean).length
+      ? [
+          `${item.nombre} ${item.apellidos}`,
+          `${item.apellidos} ${item.nombre}`,
+          item.nombre_visible ?? '',
+        ]
+          .map(normalizeAutocompleteText)
+          .filter(Boolean)
+      : [normalizeAutocompleteText(item.nombre_visible ?? '')].filter(Boolean),
+  );
+}
+
+function sameMedicoIdentity(first: Medico, second: Medico) {
+  const secondValues = medicoIdentityValues(second);
+  return [...medicoIdentityValues(first)].some((value) => secondValues.has(value));
+}
+
 function patientDisplayName(paciente: Paciente) {
   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
@@ -543,11 +562,16 @@ async function loadDefaultLocationCatalogs() {
   let lastError: unknown = null;
   const currentMedico = ownMedico();
   const lockedMedicoId = currentMedico?.id ?? '';
-  const medicoOptions = lockedMedicoId
-    ? defaultMedicoOptions().filter((medico) => medico.id === lockedMedicoId)
-    : defaultMedicoOptions();
+  const allMedicoOptions = defaultMedicoOptions();
+  const primaryMedicoOptions = lockedMedicoId
+    ? allMedicoOptions.filter((medico) => medico.id === lockedMedicoId)
+    : allMedicoOptions;
+  const catalogFallbackMedicos =
+    lockedMedicoId && currentMedico
+      ? allMedicoOptions.filter((medico) => medico.id !== lockedMedicoId && sameMedicoIdentity(currentMedico, medico))
+      : [];
 
-  for (const medico of medicoOptions) {
+  for (const medico of primaryMedicoOptions) {
     try {
       const catalogs = await fetchLocationCatalogs(medico.id);
       fallback ??= { medicoId: medico.id, catalogs };
@@ -562,11 +586,26 @@ async function loadDefaultLocationCatalogs() {
     }
   }
 
+  for (const medico of catalogFallbackMedicos) {
+    try {
+      const catalogs = await fetchLocationCatalogs(medico.id);
+      if (catalogs.consultoriosData.length > 0) {
+        const completeCatalogs = await completeSingleConsultorioLocation(catalogs);
+        form.medico_id = lockedMedicoId;
+        applyLocationCatalogs(completeCatalogs, lockedMedicoId);
+        return;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
   try {
     const accessibleCatalogs = await fetchLocationCatalogs('');
     if (accessibleCatalogs.consultoriosData.length > 0) {
+      const completeCatalogs = await completeSingleConsultorioLocation(accessibleCatalogs);
       form.medico_id = lockedMedicoId || fallback?.medicoId || defaultMedicoId();
-      applyLocationCatalogs(accessibleCatalogs, form.medico_id);
+      applyLocationCatalogs(completeCatalogs, form.medico_id);
       return;
     }
   } catch (err) {

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { clearToken, getCurrentUser, getToken } from '../api/client';
+import { getCurrentUser, getToken } from '../api/client';
+import { clearSession, setCurrentSessionUser } from '../authSession';
 import LoginView from '../views/LoginView.vue';
 import DashboardView from '../views/DashboardView.vue';
 import InstitucionesView from '../views/InstitucionesView.vue';
@@ -68,6 +69,7 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const token = getToken();
   if (!to.meta.public && !token) {
+    setCurrentSessionUser(null);
     return '/login';
   }
   if (!token || (to.meta.public && to.path !== '/login')) {
@@ -76,6 +78,7 @@ router.beforeEach(async (to) => {
 
   try {
     const user = await getCurrentUser();
+    setCurrentSessionUser(user);
     if (user.force_password_change && to.path !== '/perfil') {
       return '/perfil';
     }
@@ -83,7 +86,7 @@ router.beforeEach(async (to) => {
       return user.force_password_change ? '/perfil' : '/instituciones';
     }
   } catch {
-    clearToken();
+    clearSession();
     if (!to.meta.public) {
       return '/login';
     }
