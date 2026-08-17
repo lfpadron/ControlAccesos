@@ -380,9 +380,13 @@ function syncPaciente() {
   form.paciente_id = match?.id ?? '';
 }
 
+function ownMedico() {
+  return medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id) ?? null;
+}
+
 function defaultMedicoOptions() {
-  const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
-  const rows = ownMedico ? [ownMedico, ...medicos.value.filter((medico) => medico.id !== ownMedico.id)] : medicos.value;
+  const currentMedico = ownMedico();
+  const rows = currentMedico ? [currentMedico, ...medicos.value.filter((medico) => medico.id !== currentMedico.id)] : medicos.value;
   return uniqueById(rows);
 }
 
@@ -477,8 +481,13 @@ function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico
 async function loadDefaultLocationCatalogs() {
   let fallback: { medicoId: string; catalogs: LocationCatalogData } | null = null;
   let lastError: unknown = null;
+  const currentMedico = ownMedico();
+  const lockedMedicoId = currentMedico?.id ?? '';
+  const medicoOptions = lockedMedicoId
+    ? defaultMedicoOptions().filter((medico) => medico.id === lockedMedicoId)
+    : defaultMedicoOptions();
 
-  for (const medico of defaultMedicoOptions()) {
+  for (const medico of medicoOptions) {
     try {
       const catalogs = await fetchLocationCatalogs(medico.id);
       fallback ??= { medicoId: medico.id, catalogs };
@@ -495,7 +504,7 @@ async function loadDefaultLocationCatalogs() {
   try {
     const accessibleCatalogs = await fetchLocationCatalogs('');
     if (accessibleCatalogs.consultoriosData.length > 0) {
-      form.medico_id = fallback?.medicoId ?? defaultMedicoId();
+      form.medico_id = lockedMedicoId || fallback?.medicoId || defaultMedicoId();
       applyLocationCatalogs(accessibleCatalogs, form.medico_id);
       return;
     }
@@ -504,7 +513,7 @@ async function loadDefaultLocationCatalogs() {
   }
 
   if (fallback) {
-    form.medico_id = fallback.medicoId;
+    form.medico_id = lockedMedicoId || fallback.medicoId;
     applyLocationCatalogs(fallback.catalogs, fallback.medicoId);
     return;
   }
