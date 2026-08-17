@@ -88,6 +88,7 @@ def _role_location_scope_condition() -> Any:
         UsuarioRol.torre_id.is_not(None),
         UsuarioRol.piso_id.is_not(None),
         UsuarioRol.consultorio_id.is_not(None),
+        UsuarioRol.medico_id.is_not(None),
     )
 
 
@@ -99,13 +100,14 @@ def _role_global_location_scope_condition() -> Any:
         UsuarioRol.piso_id.is_(None),
         UsuarioRol.consultorio_id.is_(None),
         UsuarioRol.medico_id.is_(None),
+        Role.codigo != "MEDICO",
     )
 
 
 def _unrestricted_location_access_predicate(user: Usuario, today: date | None = None) -> Any:
     active_role = _role_scope_exists(user, true(), today)
     global_location = _role_scope_exists(user, _role_global_location_scope_condition(), today)
-    has_location_scope = _role_scope_exists(user, _role_location_scope_condition(), today)
+    has_location_scope = _role_scope_exists(user, or_(_role_location_scope_condition(), Role.codigo == "MEDICO"), today)
     return and_(active_role, or_(global_location, not_(has_location_scope)))
 
 
@@ -380,6 +382,72 @@ def _active_medico_consultorio_conditions(today: date | None = None) -> list[Any
     ]
 
 
+def _medico_consultorio_assignment_access_predicate(user: Usuario, consultorio_id_col: Any, today: date | None = None) -> Any:
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .where(
+            AsignacionMedicoConsultorio.consultorio_id == consultorio_id_col,
+            *_active_medico_consultorio_conditions(today),
+            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
+        )
+        .exists()
+    )
+
+
+def _medico_piso_assignment_access_predicate(user: Usuario, piso_id_col: Any, today: date | None = None) -> Any:
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .where(
+            Consultorio.piso_id == piso_id_col,
+            *_active_medico_consultorio_conditions(today),
+            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
+        )
+        .exists()
+    )
+
+
+def _medico_torre_assignment_access_predicate(user: Usuario, torre_id_col: Any, today: date | None = None) -> Any:
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .join(Piso, Piso.id == Consultorio.piso_id)
+        .where(
+            Piso.torre_id == torre_id_col,
+            *_active_medico_consultorio_conditions(today),
+            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
+        )
+        .exists()
+    )
+
+
+def _medico_complejo_assignment_access_predicate(user: Usuario, complejo_id_col: Any, today: date | None = None) -> Any:
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .where(
+            Consultorio.complejo_id == complejo_id_col,
+            *_active_medico_consultorio_conditions(today),
+            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
+        )
+        .exists()
+    )
+
+
+def _medico_institucion_assignment_access_predicate(user: Usuario, institucion_id_col: Any, today: date | None = None) -> Any:
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .join(Complejo, Complejo.id == Consultorio.complejo_id)
+        .where(
+            Complejo.institucion_id == institucion_id_col,
+            *_active_medico_consultorio_conditions(today),
+            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
+        )
+        .exists()
+    )
+
+
 def _medico_via_location_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
     return (
         select(AsignacionMedicoConsultorio.id)
@@ -408,6 +476,7 @@ def institucion_catalog_access_predicate(db: Session, user: Usuario, today: date
     return or_(
         _unrestricted_location_access_predicate(user, today),
         _institucion_location_access_predicate(user, Institucion.id, today),
+        _medico_institucion_assignment_access_predicate(user, Institucion.id, today),
     )
 
 
@@ -417,6 +486,7 @@ def complejo_catalog_access_predicate(db: Session, user: Usuario, today: date | 
     return or_(
         _unrestricted_location_access_predicate(user, today),
         _complejo_location_access_predicate(user, Complejo.id, Complejo.institucion_id, today),
+        _medico_complejo_assignment_access_predicate(user, Complejo.id, today),
     )
 
 
@@ -426,6 +496,7 @@ def torre_catalog_access_predicate(db: Session, user: Usuario, today: date | Non
     return or_(
         _unrestricted_location_access_predicate(user, today),
         _torre_location_access_predicate(user, Torre.id, Torre.complejo_id, today),
+        _medico_torre_assignment_access_predicate(user, Torre.id, today),
     )
 
 
@@ -442,15 +513,7 @@ def consultorio_catalog_access_predicate(db: Session, user: Usuario, today: date
             today,
         ),
     )
-    consultorio_by_medico = (
-        select(AsignacionMedicoConsultorio.id)
-        .where(
-            AsignacionMedicoConsultorio.consultorio_id == Consultorio.id,
-            *_active_medico_consultorio_conditions(today),
-            _medico_access_predicate(user, AsignacionMedicoConsultorio.medico_id, today),
-        )
-        .exists()
-    )
+    consultorio_by_medico = _medico_consultorio_assignment_access_predicate(user, Consultorio.id, today)
     return or_(consultorio_by_location, consultorio_by_medico)
 
 
@@ -460,6 +523,7 @@ def piso_catalog_access_predicate(db: Session, user: Usuario, today: date | None
     return or_(
         _unrestricted_location_access_predicate(user, today),
         _piso_location_access_predicate(user, Piso.id, Piso.torre_id, Piso.complejo_id, today),
+        _medico_piso_assignment_access_predicate(user, Piso.id, today),
     )
 
 

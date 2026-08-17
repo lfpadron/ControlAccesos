@@ -254,6 +254,22 @@ function autoFillSingleInstitution() {
   }
 }
 
+function setLocationFromConsultorio(consultorio: Consultorio) {
+  const piso = pisos.value.find((item) => item.id === consultorio.piso_id) ?? null;
+  if (!piso) return false;
+  const torre = torres.value.find((item) => item.id === piso.torre_id) ?? null;
+  const complejo = complejos.value.find((item) => item.id === consultorio.complejo_id) ?? null;
+  const institucion = complejo ? instituciones.value.find((item) => item.id === complejo.institucion_id) ?? null : null;
+  if (!torre || !complejo || !institucion) return false;
+
+  setInstitutionOption(institucion);
+  setComplexOption(complejo);
+  setTowerOption(torre);
+  setPisoOption(piso);
+  setConsultorioOption(consultorio);
+  return true;
+}
+
 function syncInstitution() {
   const match = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel);
   setInstitutionOption(match ?? null);
@@ -335,6 +351,9 @@ function defaultMedicoId() {
 function setDefaultLocation() {
   setInstitutionOption(null);
   clearLocation('institucion');
+  if (consultorios.value.length === 1 && setLocationFromConsultorio(consultorios.value[0])) {
+    return;
+  }
   autoFillSingleInstitution();
 }
 
@@ -381,19 +400,21 @@ async function loadTable() {
 async function load() {
   error.value = '';
   try {
-    const [citasData, userData, medicosData, consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+    const [citasData, userData, medicosData] = await Promise.all([
       listCitas(tableRequestFilters()),
       getCurrentUser(),
       listAccessibleMedicos(),
+    ]);
+    citas.value = citasData;
+    currentUser.value = userData;
+    medicos.value = medicosData;
+    const [consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
       listAccessibleConsultorios(),
       listAccessibleInstituciones(),
       listAccessibleComplejos(),
       listAccessibleTorres(),
       listAccessiblePisos(),
     ]);
-    citas.value = citasData;
-    currentUser.value = userData;
-    medicos.value = medicosData;
     consultorios.value = consultoriosData;
     instituciones.value = institucionesData;
     complejos.value = complejosData;

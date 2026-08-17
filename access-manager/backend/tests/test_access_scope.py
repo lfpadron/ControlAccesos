@@ -74,4 +74,7 @@ def test_location_catalog_scope_predicates_compile() -> None:
 
     assert "usuario_roles" in compiled
     assert "asignaciones_operador" in compiled
+    assert "asignaciones_medico_consultorio" in compiled
+    assert "roles.codigo != " in compiled
+    assert "roles.codigo = " in compiled
     assert "medico_pacientes AS medico_pacientes_1" not in compiled
