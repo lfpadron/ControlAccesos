@@ -52,6 +52,7 @@ const pisoSearch = ref('');
 const consultorioSearch = ref('');
 const pacienteSearch = ref('');
 const medicoSearch = ref('');
+const locationCatalogMedicoId = ref<string | null>(null);
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -357,7 +358,7 @@ function setDefaultLocation() {
   autoFillSingleInstitution();
 }
 
-function resetForm() {
+async function resetForm() {
   form.tipo = 'PROGRAMADA';
   form.fecha_cita = todayLocalIso();
   form.hora_cita = '09:00';
@@ -367,6 +368,9 @@ function resetForm() {
   form.medico_id = defaultMedicoId();
   form.paciente_id = '';
   pacienteSearch.value = '';
+  if (locationCatalogMedicoId.value !== (form.medico_id || null)) {
+    await loadLocationCatalogs(form.medico_id);
+  }
   setDefaultLocation();
   duplicateWarning.value = null;
   setAutocompleteLabels();
@@ -397,6 +401,23 @@ async function loadTable() {
   }
 }
 
+async function loadLocationCatalogs(medicoId = form.medico_id) {
+  const params = medicoId ? { medico_id: medicoId } : {};
+  const [consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+    listAccessibleConsultorios(params),
+    listAccessibleInstituciones(params),
+    listAccessibleComplejos(params),
+    listAccessibleTorres(params),
+    listAccessiblePisos(params),
+  ]);
+  consultorios.value = consultoriosData;
+  instituciones.value = institucionesData;
+  complejos.value = complejosData;
+  torres.value = torresData;
+  pisos.value = pisosData;
+  locationCatalogMedicoId.value = medicoId || null;
+}
+
 async function load() {
   error.value = '';
   try {
@@ -408,21 +429,9 @@ async function load() {
     citas.value = citasData;
     currentUser.value = userData;
     medicos.value = medicosData;
-    const [consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
-      listAccessibleConsultorios(),
-      listAccessibleInstituciones(),
-      listAccessibleComplejos(),
-      listAccessibleTorres(),
-      listAccessiblePisos(),
-    ]);
-    consultorios.value = consultoriosData;
-    instituciones.value = institucionesData;
-    complejos.value = complejosData;
-    torres.value = torresData;
-    pisos.value = pisosData;
     form.medico_id = defaultMedicoId();
-    await loadPatientsForMedico();
-    resetForm();
+    await Promise.all([loadPatientsForMedico(), loadLocationCatalogs(form.medico_id)]);
+    await resetForm();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
@@ -433,7 +442,11 @@ async function onMedicoChange() {
   form.paciente_id = '';
   pacienteSearch.value = '';
   try {
-    await loadPatientsForMedico();
+    setInstitutionOption(null);
+    clearLocation('institucion');
+    await Promise.all([loadPatientsForMedico(), loadLocationCatalogs(form.medico_id)]);
+    setDefaultLocation();
+    setAutocompleteLabels();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
   }
@@ -450,7 +463,7 @@ async function submit(confirmarDuplicado = false) {
     await createCita({ ...payload }, confirmarDuplicado);
     message.value = 'Cita creada.';
     duplicateWarning.value = null;
-    resetForm();
+    await resetForm();
     await loadTable();
   } catch (err) {
     const duplicate = duplicateDetail(err);

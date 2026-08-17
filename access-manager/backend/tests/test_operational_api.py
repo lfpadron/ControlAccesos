@@ -761,6 +761,16 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
         )
     )
     assert asignacion_medico["activo"] is True
+    for path, expected_id in (
+        ("/api/catalogos-operativos/instituciones", institucion["id"]),
+        ("/api/catalogos-operativos/complejos", complejo["id"]),
+        ("/api/catalogos-operativos/torres", torre["id"]),
+        ("/api/catalogos-operativos/pisos", piso["id"]),
+        ("/api/catalogos-operativos/consultorios", consultorio["id"]),
+    ):
+        scoped_catalog = client.get(path, headers=auth_headers, params={"medico_id": medico["id"]})
+        assert scoped_catalog.status_code == 200, scoped_catalog.text
+        assert [item["id"] for item in scoped_catalog.json()] == [expected_id]
 
     asignacion_operador = assert_created(
         client.post(

@@ -686,11 +686,18 @@ export const listClustersTurnos = () => listResource<ClusterTurnos>('clusters-tu
 export const listConsultorios = () => listResource<Consultorio>('consultorios');
 export const listMedicos = () => listResource<Medico>('medicos');
 export const updateMedico = (id: string, payload: Record<string, unknown>) => updateResource<Medico>('medicos', id, payload);
-export const listAccessibleInstituciones = () => apiFetch<Institucion[]>('/catalogos-operativos/instituciones');
-export const listAccessibleComplejos = () => apiFetch<Complejo[]>('/catalogos-operativos/complejos');
-export const listAccessibleTorres = () => apiFetch<Torre[]>('/catalogos-operativos/torres');
-export const listAccessiblePisos = () => apiFetch<Piso[]>('/catalogos-operativos/pisos');
-export const listAccessibleConsultorios = () => apiFetch<Consultorio[]>('/catalogos-operativos/consultorios');
+type LocationCatalogParams = { medico_id?: string };
+
+export const listAccessibleInstituciones = (params: LocationCatalogParams = {}) =>
+  apiFetch<Institucion[]>(`/catalogos-operativos/instituciones${queryString(params)}`);
+export const listAccessibleComplejos = (params: LocationCatalogParams = {}) =>
+  apiFetch<Complejo[]>(`/catalogos-operativos/complejos${queryString(params)}`);
+export const listAccessibleTorres = (params: LocationCatalogParams = {}) =>
+  apiFetch<Torre[]>(`/catalogos-operativos/torres${queryString(params)}`);
+export const listAccessiblePisos = (params: LocationCatalogParams = {}) =>
+  apiFetch<Piso[]>(`/catalogos-operativos/pisos${queryString(params)}`);
+export const listAccessibleConsultorios = (params: LocationCatalogParams = {}) =>
+  apiFetch<Consultorio[]>(`/catalogos-operativos/consultorios${queryString(params)}`);
 export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
 export const listOperadores = () => listResource<Operador>('operadores');
 export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');

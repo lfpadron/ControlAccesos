@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,17 @@ from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
 from app.models.institucion import Institucion
-from app.models.operational import Consultorio, ConsultorioCluster, Medico, Piso, Role, SalaEspera, Torre, UsuarioRol
+from app.models.operational import (
+    AsignacionMedicoConsultorio,
+    Consultorio,
+    ConsultorioCluster,
+    Medico,
+    Piso,
+    Role,
+    SalaEspera,
+    Torre,
+    UsuarioRol,
+)
 from app.models.usuario import Usuario
 from app.schemas.complejo import ComplejoRead
 from app.schemas.flow import (
@@ -185,6 +196,82 @@ def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> Consultor
     )
 
 
+def ensure_medico_catalog_access(db: Session, current_user: Usuario, medico_id: UUID) -> None:
+    query = (
+        select(Medico.id)
+        .where(
+            Medico.id == medico_id,
+            Medico.activo.is_(True),
+            medico_catalog_access_predicate(db, current_user, business_today()),
+        )
+        .limit(1)
+    )
+    if db.execute(query).first() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Médico no encontrado.")
+
+
+def active_medico_assignment_conditions(medico_id: UUID) -> list[Any]:
+    today = business_today()
+    return [
+        AsignacionMedicoConsultorio.medico_id == medico_id,
+        AsignacionMedicoConsultorio.activo.is_(True),
+        AsignacionMedicoConsultorio.fecha_inicio <= today,
+        or_(
+            AsignacionMedicoConsultorio.fecha_fin.is_(None),
+            AsignacionMedicoConsultorio.fecha_fin >= today,
+        ),
+    ]
+
+
+def consultorio_assigned_to_medico(medico_id: UUID):
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .where(
+            AsignacionMedicoConsultorio.consultorio_id == Consultorio.id,
+            *active_medico_assignment_conditions(medico_id),
+        )
+        .exists()
+    )
+
+
+def piso_assigned_to_medico(medico_id: UUID):
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .where(Consultorio.piso_id == Piso.id, *active_medico_assignment_conditions(medico_id))
+        .exists()
+    )
+
+
+def torre_assigned_to_medico(medico_id: UUID):
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .join(Piso, Piso.id == Consultorio.piso_id)
+        .where(Piso.torre_id == Torre.id, *active_medico_assignment_conditions(medico_id))
+        .exists()
+    )
+
+
+def complejo_assigned_to_medico(medico_id: UUID):
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .where(Consultorio.complejo_id == Complejo.id, *active_medico_assignment_conditions(medico_id))
+        .exists()
+    )
+
+
+def institucion_assigned_to_medico(medico_id: UUID):
+    return (
+        select(AsignacionMedicoConsultorio.id)
+        .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+        .join(Complejo, Complejo.id == Consultorio.complejo_id)
+        .where(Complejo.institucion_id == Institucion.id, *active_medico_assignment_conditions(medico_id))
+        .exists()
+    )
+
+
 @catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
 def list_medicos_operativos(
     db: Session = Depends(get_db),
@@ -206,14 +293,19 @@ def list_medicos_operativos(
 
 @catalogos_operativos_router.get("/instituciones", response_model=list[InstitucionRead])
 def list_instituciones_operativas(
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Institucion]:
+    if medico_id is not None:
+        ensure_medico_catalog_access(db, current_user, medico_id)
     query = (
         select(Institucion)
         .where(
             Institucion.activo.is_(True),
-            institucion_catalog_access_predicate(db, current_user, business_today()),
+            institucion_assigned_to_medico(medico_id)
+            if medico_id is not None
+            else institucion_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(func.lower(Institucion.nombre), Institucion.id)
     )
@@ -222,14 +314,19 @@ def list_instituciones_operativas(
 
 @catalogos_operativos_router.get("/complejos", response_model=list[ComplejoRead])
 def list_complejos_operativos(
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Complejo]:
+    if medico_id is not None:
+        ensure_medico_catalog_access(db, current_user, medico_id)
     query = (
         select(Complejo)
         .where(
             Complejo.activo.is_(True),
-            complejo_catalog_access_predicate(db, current_user, business_today()),
+            complejo_assigned_to_medico(medico_id)
+            if medico_id is not None
+            else complejo_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(func.lower(Complejo.nombre), Complejo.id)
     )
@@ -238,14 +335,19 @@ def list_complejos_operativos(
 
 @catalogos_operativos_router.get("/torres", response_model=list[TorreRead])
 def list_torres_operativas(
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Torre]:
+    if medico_id is not None:
+        ensure_medico_catalog_access(db, current_user, medico_id)
     query = (
         select(Torre)
         .where(
             Torre.activo.is_(True),
-            torre_catalog_access_predicate(db, current_user, business_today()),
+            torre_assigned_to_medico(medico_id)
+            if medico_id is not None
+            else torre_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
     )
@@ -254,14 +356,19 @@ def list_torres_operativas(
 
 @catalogos_operativos_router.get("/consultorios", response_model=list[ConsultorioRead])
 def list_consultorios_operativos(
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[ConsultorioRead]:
+    if medico_id is not None:
+        ensure_medico_catalog_access(db, current_user, medico_id)
     query = (
         select(Consultorio)
         .where(
             Consultorio.activo.is_(True),
-            consultorio_catalog_access_predicate(db, current_user, business_today()),
+            consultorio_assigned_to_medico(medico_id)
+            if medico_id is not None
+            else consultorio_catalog_access_predicate(db, current_user, business_today()),
         )
         .order_by(
             Consultorio.complejo_id,
@@ -276,13 +383,27 @@ def list_consultorios_operativos(
 
 @catalogos_operativos_router.get("/pisos", response_model=list[PisoRead])
 def list_pisos_operativos(
+    medico_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Piso]:
+    if medico_id is not None:
+        ensure_medico_catalog_access(db, current_user, medico_id)
     query = (
         select(Piso)
-        .where(Piso.activo.is_(True), piso_catalog_access_predicate(db, current_user, business_today()))
-        .order_by(Piso.complejo_id, func.lower(func.coalesce(Piso.codigo, "")), Piso.numero, func.lower(func.coalesce(Piso.nombre_visible, "")), Piso.id)
+        .where(
+            Piso.activo.is_(True),
+            piso_assigned_to_medico(medico_id)
+            if medico_id is not None
+            else piso_catalog_access_predicate(db, current_user, business_today()),
+        )
+        .order_by(
+            Piso.complejo_id,
+            func.lower(func.coalesce(Piso.codigo, "")),
+            Piso.numero,
+            func.lower(func.coalesce(Piso.nombre_visible, "")),
+            Piso.id,
+        )
     )
     return list(db.execute(query).scalars())
 
