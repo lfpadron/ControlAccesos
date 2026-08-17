@@ -9,11 +9,12 @@ from sqlalchemy.dialects import postgresql
 
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos
-from app.models.flow import MedicoPaciente, Paciente
+from app.models.flow import Cita, MedicoPaciente, Paciente
 from app.models.institucion import Institucion
 from app.models.operational import Consultorio, Piso, Torre
 from app.models.usuario import Usuario
 from app.services.access_scope import (
+    cita_agenda_access_predicate,
     complejo_catalog_access_predicate,
     consultorio_catalog_access_predicate,
     institucion_catalog_access_predicate,
@@ -46,6 +47,24 @@ def test_patient_scope_compiles_with_medico_filter_join() -> None:
     assert "medico_pacientes AS medico_pacientes_1" in compiled
     assert "FROM pisos, citas" not in compiled
     assert "FROM complejos, citas" not in compiled
+
+
+def test_cita_agenda_scope_compiles_with_patient_medico_and_location() -> None:
+    db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+    user = Usuario(
+        id=uuid4(),
+        apellidos="Agenda",
+        nombre="Recepción",
+        email="agenda@example.com",
+        password_hash="irrelevant",
+    )
+
+    query = select(Cita).where(cita_agenda_access_predicate(db, user, date(2026, 8, 17)))
+    compiled = str(query.compile(dialect=postgresql.dialect()))
+
+    assert "medico_pacientes" in compiled
+    assert "usuario_roles" in compiled
+    assert "asignaciones_operador" in compiled
 
 
 def test_location_catalog_scope_predicates_compile() -> None:

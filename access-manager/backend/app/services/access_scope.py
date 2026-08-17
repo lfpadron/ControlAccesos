@@ -370,6 +370,32 @@ def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | No
     return or_(own_medico, role_medico, operator_medico)
 
 
+def _doctor_medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
+    own_medico = (
+        select(Medico.id)
+        .where(Medico.id == medico_id_col, Medico.usuario_id == user.id, Medico.activo.is_(True))
+        .exists()
+    )
+    doctor_role_medico = _role_scope_exists(
+        user,
+        and_(UsuarioRol.medico_id == medico_id_col, Role.codigo == "MEDICO"),
+        today,
+    )
+    return or_(own_medico, doctor_role_medico)
+
+
+def _patient_belongs_to_medico_predicate(paciente_id_col: Any, medico_id_col: Any) -> Any:
+    return (
+        select(MedicoPaciente.paciente_id)
+        .where(
+            MedicoPaciente.paciente_id == paciente_id_col,
+            MedicoPaciente.medico_id == medico_id_col,
+            MedicoPaciente.activo.is_(True),
+        )
+        .exists()
+    )
+
+
 def _active_medico_consultorio_conditions(today: date | None = None) -> list[Any]:
     effective_today = _today(today)
     return [
@@ -563,6 +589,26 @@ def cita_access_predicate(db: Session, user: Usuario, today: date | None = None)
         Cita.medico_id,
         today,
     )
+
+
+def cita_agenda_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:
+    if user_has_global_access(db, user, today):
+        return true()
+    patient_for_cita_medico = _patient_belongs_to_medico_predicate(Cita.paciente_id, Cita.medico_id)
+    doctor_citas = and_(
+        patient_for_cita_medico,
+        _doctor_medico_access_predicate(user, Cita.medico_id, today),
+    )
+    staff_citas = and_(
+        patient_for_cita_medico,
+        _medico_access_predicate(user, Cita.medico_id, today),
+        _location_access_predicate(user, Cita.consultorio_id, Cita.piso_id, Cita.complejo_id, today),
+    )
+    admin_scoped_citas = and_(
+        _role_scope_exists(user, Role.codigo == "ADMIN_NEGOCIO", today),
+        cita_access_predicate(db, user, today),
+    )
+    return or_(doctor_citas, staff_citas, admin_scoped_citas)
 
 
 def paciente_access_predicate(db: Session, user: Usuario, today: date | None = None) -> Any:

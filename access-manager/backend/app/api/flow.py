@@ -52,6 +52,7 @@ from app.schemas.institucion import InstitucionRead
 from app.schemas.operational import ConsultorioRead, MedicoRead, PisoRead, TorreRead
 from app.services.audit_service import audit_safe_dict, record_audit_event
 from app.services.access_scope import (
+    cita_agenda_access_predicate,
     cita_access_predicate,
     cita_payload_is_accessible,
     complejo_catalog_access_predicate,
@@ -512,6 +513,17 @@ def cita_search_item(db: Session, cita: Cita) -> CitaSearchResult:
     )
 
 
+def unique_citas(rows) -> list[Cita]:
+    seen: set[UUID] = set()
+    result: list[Cita] = []
+    for row in rows:
+        if row.id in seen:
+            continue
+        seen.add(row.id)
+        result.append(row)
+    return result
+
+
 def validate_patient_contact(paciente: Paciente) -> None:
     if not paciente.celular and paciente.fecha_nacimiento is None:
         raise HTTPException(
@@ -795,7 +807,7 @@ def buscar_pacientes(
 ) -> list[PacienteRead]:
     query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
     if medico_id is not None:
-        exists_or_404(db, Medico, medico_id, "Médico")
+        ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
         query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
             MedicoPaciente.medico_id == medico_id,
             MedicoPaciente.activo.is_(True),
@@ -829,7 +841,7 @@ def list_pacientes(
 ) -> list[PacienteRead]:
     query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
     if medico_id is not None:
-        exists_or_404(db, Medico, medico_id, "Médico")
+        ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
         query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
             MedicoPaciente.medico_id == medico_id,
             MedicoPaciente.activo.is_(True),
@@ -1106,8 +1118,8 @@ def list_citas(
         estado=estado,
         tipo=tipo,
     )
-    rows = db.execute(query.where(cita_access_predicate(db, current_user, business_today())).limit(200)).scalars()
-    return [cita_item(db, row) for row in rows]
+    rows = db.execute(query.where(cita_agenda_access_predicate(db, current_user, business_today())).limit(200)).scalars()
+    return [cita_item(db, row) for row in unique_citas(rows)]
 
 
 @citas_router.post("/exportacion", status_code=status.HTTP_201_CREATED)

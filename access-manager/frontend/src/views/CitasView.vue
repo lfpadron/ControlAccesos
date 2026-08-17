@@ -108,6 +108,28 @@ const filteredMedicos = computed(() => {
   );
 });
 
+const visibleCitas = computed(() => uniqueById(citas.value));
+
+const pacienteOptions = computed(() => {
+  const q = normalizeAutocompleteText(pacienteSearch.value);
+  const rows = uniqueById(pacientes.value).sort((a, b) =>
+    patientOptionLabel(a).localeCompare(patientOptionLabel(b), 'es', { sensitivity: 'base' }),
+  );
+  if (!q) return rows;
+  return rows.filter((item) => normalizeAutocompleteText(patientOptionLabel(item)).includes(q));
+});
+
+function uniqueById<T extends { id: string }>(rows: T[]) {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    result.push(row);
+  }
+  return result;
+}
+
 function institucionLabel(item: Institucion) {
   return item.nombre;
 }
@@ -353,9 +375,11 @@ function setDefaultLocation() {
   setInstitutionOption(null);
   clearLocation('institucion');
   if (consultorios.value.length === 1 && setLocationFromConsultorio(consultorios.value[0])) {
+    setAutocompleteLabels();
     return;
   }
   autoFillSingleInstitution();
+  setAutocompleteLabels();
 }
 
 async function resetForm() {
@@ -395,7 +419,7 @@ function tableRequestFilters() {
 async function loadTable() {
   error.value = '';
   try {
-    citas.value = await listCitas(tableRequestFilters());
+    citas.value = uniqueById(await listCitas(tableRequestFilters()));
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
@@ -426,11 +450,12 @@ async function load() {
       getCurrentUser(),
       listAccessibleMedicos(),
     ]);
-    citas.value = citasData;
+    citas.value = uniqueById(citasData);
     currentUser.value = userData;
     medicos.value = medicosData;
     form.medico_id = defaultMedicoId();
-    await Promise.all([loadPatientsForMedico(), loadLocationCatalogs(form.medico_id)]);
+    await loadLocationCatalogs(form.medico_id);
+    await loadPatientsForMedico();
     await resetForm();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
@@ -556,7 +581,7 @@ onMounted(load);
             @change="syncPaciente"
           />
           <datalist id="cita-pacientes">
-            <option v-for="paciente in pacientes" :key="paciente.id" :value="patientOptionLabel(paciente)" />
+            <option v-for="paciente in pacienteOptions" :key="paciente.id" :value="patientOptionLabel(paciente)" />
           </datalist>
         </div>
         <div class="form-row">
@@ -692,7 +717,7 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-for="cita in citas" :key="cita.id">
+              <tr v-for="cita in visibleCitas" :key="cita.id">
                 <td>{{ cita.fecha_cita }}</td>
                 <td>{{ cita.hora_cita.slice(0, 5) }}</td>
                 <td>{{ cita.folio_turno }}</td>

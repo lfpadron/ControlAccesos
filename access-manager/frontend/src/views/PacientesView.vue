@@ -389,6 +389,7 @@ onMounted(async () => {
                 <th>Folio</th>
                 <th>Paciente</th>
                 <th>Nombre preferido</th>
+                <th>Fecha de nacimiento</th>
                 <th>Celular</th>
                 <th>Estado</th>
                 <th>Marcar borrar</th>
@@ -405,6 +406,7 @@ onMounted(async () => {
                 <td>{{ paciente.folio_paciente }}</td>
                 <td>{{ patientDisplayName(paciente) }}</td>
                 <td>{{ paciente.nombre_preferido || '-' }}</td>
+                <td>{{ paciente.fecha_nacimiento || '-' }}</td>
                 <td>{{ paciente.celular || '-' }}</td>
                 <td>
                   <span class="status" :class="paciente.activo ? 'ok' : 'muted'">
