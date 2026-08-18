@@ -662,7 +662,9 @@ def query_citas(
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
     hora_fin: time | None = None,
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
     medico_id: UUID | None = None,
@@ -739,8 +741,26 @@ def query_citas(
             query = query.where(Cita.hora_cita <= hora_fin)
     elif hora_fin is not None:
         query = query.where(Cita.hora_cita <= hora_fin)
+    if institucion_id is not None:
+        query = query.where(
+            select(Complejo.id)
+            .where(
+                Complejo.id == Cita.complejo_id,
+                Complejo.institucion_id == institucion_id,
+            )
+            .exists()
+        )
     if complejo_id is not None:
         query = query.where(Cita.complejo_id == complejo_id)
+    if torre_id is not None:
+        query = query.where(
+            select(Piso.id)
+            .where(
+                Piso.id == Cita.piso_id,
+                Piso.torre_id == torre_id,
+            )
+            .exists()
+        )
     if piso_id is not None:
         query = query.where(Cita.piso_id == piso_id)
     if consultorio_id is not None:
@@ -1020,7 +1040,9 @@ def citas_hoy(
     fecha: date | None = None,
     hora_inicio: time | None = None,
     hora_fin: time | None = None,
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
     medico_id: UUID | None = None,
@@ -1035,7 +1057,9 @@ def citas_hoy(
         fecha=fecha or business_today(),
         hora_inicio=hora_inicio,
         hora_fin=hora_fin,
+        institucion_id=institucion_id,
         complejo_id=complejo_id,
+        torre_id=torre_id,
         piso_id=piso_id,
         consultorio_id=consultorio_id,
         medico_id=medico_id,
@@ -1054,7 +1078,9 @@ def buscar_citas(
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
     hora_fin: time | None = None,
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
     medico_id: UUID | None = None,
@@ -1072,7 +1098,9 @@ def buscar_citas(
             fecha_inicio=fecha_inicio,
             hora_inicio=hora_inicio,
             hora_fin=hora_fin,
+            institucion_id=institucion_id,
             complejo_id=complejo_id,
+            torre_id=torre_id,
             piso_id=piso_id,
             consultorio_id=consultorio_id,
             medico_id=medico_id,
@@ -1094,7 +1122,9 @@ def list_citas(
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
     hora_fin: time | None = None,
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
     medico_id: UUID | None = None,
@@ -1110,7 +1140,9 @@ def list_citas(
         fecha_inicio=fecha_inicio,
         hora_inicio=hora_inicio,
         hora_fin=hora_fin,
+        institucion_id=institucion_id,
         complejo_id=complejo_id,
+        torre_id=torre_id,
         piso_id=piso_id,
         consultorio_id=consultorio_id,
         medico_id=medico_id,
@@ -1130,7 +1162,9 @@ def registrar_exportacion_citas(
     fecha_inicio: date | None = None,
     hora_inicio: time | None = None,
     hora_fin: time | None = None,
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     consultorio_id: UUID | None = None,
     medico_id: UUID | None = None,
@@ -1153,7 +1187,9 @@ def registrar_exportacion_citas(
             "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
             "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
             "hora_fin": hora_fin.strftime("%H:%M") if hora_fin else None,
+            "institucion_id": str(institucion_id) if institucion_id else None,
             "complejo_id": str(complejo_id) if complejo_id else None,
+            "torre_id": str(torre_id) if torre_id else None,
             "piso_id": str(piso_id) if piso_id else None,
             "consultorio_id": str(consultorio_id) if consultorio_id else None,
             "medico_id": str(medico_id) if medico_id else None,

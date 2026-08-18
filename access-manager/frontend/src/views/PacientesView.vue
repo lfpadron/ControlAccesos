@@ -53,10 +53,27 @@ const isPreferredOnly = computed(
     !form.apellido_materno.trim(),
 );
 const canEditPatient = computed(() => Boolean(medicoId.value));
+const sortedPacientes = computed(() =>
+  [...pacientes.value].sort((left, right) => {
+    const leftName = patientSortName(left);
+    const rightName = patientSortName(right);
+    if (!leftName && rightName) return 1;
+    if (leftName && !rightName) return -1;
+    const byName = leftName.localeCompare(rightName, 'es', { numeric: true, sensitivity: 'base' });
+    if (byName !== 0) return byName;
+    return left.folio_paciente.localeCompare(right.folio_paciente, 'es', { numeric: true, sensitivity: 'base' });
+  }),
+);
 
 function patientDisplayName(paciente: Paciente) {
-  const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
-  return paciente.nombre_preferido || legalName || 'Sin nombre';
+  const apellidos = [paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+  const nombre = paciente.nombre?.trim() ?? '';
+  if (apellidos && nombre) return `${apellidos}, ${nombre}`;
+  return apellidos || nombre || '-';
+}
+
+function patientSortName(paciente: Paciente) {
+  return [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre].filter(Boolean).join(' ').trim();
 }
 
 function medicoLabel(medico: Medico) {
@@ -397,7 +414,7 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr
-                v-for="paciente in pacientes"
+                v-for="paciente in sortedPacientes"
                 :key="paciente.id"
                 class="selectable-row"
                 :class="{ selected: selected?.id === paciente.id }"

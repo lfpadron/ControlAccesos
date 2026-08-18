@@ -643,7 +643,9 @@ def public_display_turnos(
 
 @router.get("/turnos-display/recientes", response_model=list[TurnoDisplayRecienteRead])
 def turnos_display_recientes(
+    institucion_id: UUID | None = None,
     complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
     piso_id: UUID | None = None,
     cluster_espera_id: UUID | None = None,
     consultorio_id: UUID | None = None,
@@ -658,8 +660,26 @@ def turnos_display_recientes(
         TurnoDisplay.llamado_en >= timestamp - timedelta(minutes=minutos),
         turno_display_access_predicate(db, current_user),
     )
+    if institucion_id is not None:
+        query = query.where(
+            select(Complejo.id)
+            .where(
+                Complejo.id == TurnoDisplay.complejo_id,
+                Complejo.institucion_id == institucion_id,
+            )
+            .exists()
+        )
     if complejo_id is not None:
         query = query.where(TurnoDisplay.complejo_id == complejo_id)
+    if torre_id is not None:
+        query = query.where(
+            select(Piso.id)
+            .where(
+                Piso.id == TurnoDisplay.piso_id,
+                Piso.torre_id == torre_id,
+            )
+            .exists()
+        )
     if piso_id is not None:
         query = query.where(TurnoDisplay.piso_id == piso_id)
     if cluster_espera_id is not None:

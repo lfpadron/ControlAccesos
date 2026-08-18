@@ -30,7 +30,7 @@ import {
 } from '../api/client';
 import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
 import { exportRows, type ExportFormat } from '../exporters';
-import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
+import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
 
 const citas = ref<Cita[]>([]);
 const instituciones = ref<Institucion[]>([]);
@@ -47,10 +47,6 @@ const qrDataUrl = ref('');
 const ticket = ref<TicketResponse | null>(null);
 const selectedCita = ref<Cita | null>(null);
 const loading = ref(false);
-const institucionSearch = ref('');
-const complejoSearch = ref('');
-const pisoSearch = ref('');
-const consultorioSearch = ref('');
 
 const filters = reactive({
   fecha: todayLocalIso(),
@@ -59,78 +55,94 @@ const filters = reactive({
   estado: '',
   institucion_id: '',
   complejo_id: '',
+  torre_id: '',
   piso_id: '',
   consultorio_id: '',
   medico_id: '',
   paciente: '',
 });
 
+const sortedInstituciones = computed(() => sortByLabel(instituciones.value, institucionLabel));
 const filteredComplejos = computed(() =>
-  filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
+  filters.institucion_id
+    ? sortByLabel(
+        complejos.value.filter((item) => item.institucion_id === filters.institucion_id),
+        (item) => item.nombre,
+      )
+    : [],
+);
+const filteredTorres = computed(() =>
+  filters.complejo_id
+    ? sortByLabel(
+        torres.value.filter((item) => item.complejo_id === filters.complejo_id),
+        (item) => item.nombre,
+      )
+    : [],
 );
 const filteredPisos = computed(() =>
-  sortPisosByCodigo(filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value),
+  filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : [],
 );
 const filteredConsultorios = computed(() =>
-  consultorios.value.filter((item) => {
-    if (filters.complejo_id && item.complejo_id !== filters.complejo_id) return false;
-    if (filters.piso_id && item.piso_id !== filters.piso_id) return false;
-    return true;
-  }),
+  filters.piso_id ? sortConsultoriosByCodigo(consultorios.value.filter((item) => item.piso_id === filters.piso_id)) : [],
 );
 
 function institucionLabel(item: Institucion) {
-  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+  return item.nombre;
 }
 
 function pisoLabel(item: Piso) {
-  return pisoTorreLabel(item, torres.value);
+  return pisoCodigoVisibleLabel(item);
 }
 
 function medicoLabel(item: Medico) {
   return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
 }
 
-function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
-  const normalized = text.trim().toLowerCase();
-  return rows.find((item) => {
-    const label = labeler(item).toLowerCase();
-    return label === normalized || label.split(' · ')[0] === normalized;
+function consultorioLabel(item: Consultorio) {
+  const visibleName = item.nombre_visible?.trim();
+  return visibleName ? `${item.codigo} - ${visibleName}` : item.codigo;
+}
+
+function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
+  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
+}
+
+function sortConsultoriosByCodigo(rows: Consultorio[]) {
+  return [...rows].sort((left, right) => {
+    const byCodigo = left.codigo.localeCompare(right.codigo, 'es', { numeric: true, sensitivity: 'base' });
+    if (byCodigo !== 0) return byCodigo;
+    return consultorioLabel(left).localeCompare(consultorioLabel(right), 'es', { numeric: true, sensitivity: 'base' });
   });
 }
 
-function syncInstitution() {
-  filters.institucion_id = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel)?.id ?? '';
+function onInstitucionChange() {
   if (!filteredComplejos.value.some((item) => item.id === filters.complejo_id)) {
     filters.complejo_id = '';
-    complejoSearch.value = '';
-    filters.piso_id = '';
-    pisoSearch.value = '';
-    filters.consultorio_id = '';
-    consultorioSearch.value = '';
   }
+  filters.torre_id = '';
+  filters.piso_id = '';
+  filters.consultorio_id = '';
 }
 
-function syncComplex() {
-  filters.complejo_id = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre)?.id ?? '';
+function onComplejoChange() {
+  if (!filteredTorres.value.some((item) => item.id === filters.torre_id)) {
+    filters.torre_id = '';
+  }
+  filters.piso_id = '';
+  filters.consultorio_id = '';
+}
+
+function onTorreChange() {
   if (!filteredPisos.value.some((item) => item.id === filters.piso_id)) {
     filters.piso_id = '';
-    pisoSearch.value = '';
-    filters.consultorio_id = '';
-    consultorioSearch.value = '';
   }
+  filters.consultorio_id = '';
 }
 
-function syncPiso() {
-  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
+function onPisoChange() {
   if (!filteredConsultorios.value.some((item) => item.id === filters.consultorio_id)) {
     filters.consultorio_id = '';
-    consultorioSearch.value = '';
   }
-}
-
-function syncConsultorio() {
-  filters.consultorio_id = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo)?.id ?? '';
 }
 
 function defaultMedicoId() {
@@ -144,7 +156,9 @@ function requestFilters(): CitaFilters {
     hora_inicio: filters.hora_inicio,
     hora_fin: filters.hora_fin,
     estado: filters.estado,
+    institucion_id: filters.institucion_id,
     complejo_id: filters.complejo_id,
+    torre_id: filters.torre_id,
     piso_id: filters.piso_id,
     consultorio_id: filters.consultorio_id,
     medico_id: filters.medico_id,
@@ -284,14 +298,11 @@ function clearFilters() {
   filters.estado = '';
   filters.institucion_id = '';
   filters.complejo_id = '';
+  filters.torre_id = '';
   filters.piso_id = '';
   filters.consultorio_id = '';
   filters.medico_id = defaultMedicoId();
   filters.paciente = '';
-  institucionSearch.value = '';
-  complejoSearch.value = '';
-  pisoSearch.value = '';
-  consultorioSearch.value = '';
   void load();
 }
 
@@ -368,31 +379,38 @@ onMounted(async () => {
         </div>
         <div class="form-row">
           <label for="filtro-institucion">Institución</label>
-          <input id="filtro-institucion" v-model="institucionSearch" list="filtro-instituciones" @input="syncInstitution" @change="syncInstitution" />
-          <datalist id="filtro-instituciones">
-            <option v-for="item in instituciones" :key="item.id" :value="institucionLabel(item)" />
-          </datalist>
+          <select id="filtro-institucion" v-model="filters.institucion_id" @change="onInstitucionChange">
+            <option value="">Todas</option>
+            <option v-for="item in sortedInstituciones" :key="item.id" :value="item.id">{{ institucionLabel(item) }}</option>
+          </select>
         </div>
         <div class="form-row">
           <label for="filtro-complejo">Campus</label>
-          <input id="filtro-complejo" v-model="complejoSearch" list="filtro-complejos" @input="syncComplex" @change="syncComplex" />
-          <datalist id="filtro-complejos">
-            <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />
-          </datalist>
+          <select id="filtro-complejo" v-model="filters.complejo_id" :disabled="!filters.institucion_id" @change="onComplejoChange">
+            <option value="">Todos</option>
+            <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="filtro-torre">Torre</label>
+          <select id="filtro-torre" v-model="filters.torre_id" :disabled="!filters.complejo_id" @change="onTorreChange">
+            <option value="">Todas</option>
+            <option v-for="item in filteredTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+          </select>
         </div>
         <div class="form-row">
           <label for="filtro-piso">Piso</label>
-          <input id="filtro-piso" v-model="pisoSearch" list="filtro-pisos" @input="syncPiso" @change="syncPiso" />
-          <datalist id="filtro-pisos">
-            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
-          </datalist>
+          <select id="filtro-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="onPisoChange">
+            <option value="">Todos</option>
+            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+          </select>
         </div>
         <div class="form-row">
           <label for="filtro-consultorio">Consultorio</label>
-          <input id="filtro-consultorio" v-model="consultorioSearch" list="filtro-consultorios" @input="syncConsultorio" @change="syncConsultorio" />
-          <datalist id="filtro-consultorios">
-            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.nombre_visible || item.codigo" />
-          </datalist>
+          <select id="filtro-consultorio" v-model="filters.consultorio_id" :disabled="!filters.piso_id">
+            <option value="">Todos</option>
+            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ consultorioLabel(item) }}</option>
+          </select>
         </div>
         <div class="form-row">
           <label for="filtro-medico">Médico</label>

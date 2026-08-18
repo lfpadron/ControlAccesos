@@ -1,0 +1,757 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index bace004..65daa70 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -643,7 +643,9 @@ def public_display_turnos(
+ 
+ @router.get("/turnos-display/recientes", response_model=list[TurnoDisplayRecienteRead])
+ def turnos_display_recientes(
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     cluster_espera_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+@@ -658,8 +660,26 @@ def turnos_display_recientes(
+         TurnoDisplay.llamado_en >= timestamp - timedelta(minutes=minutos),
+         turno_display_access_predicate(db, current_user),
+     )
++    if institucion_id is not None:
++        query = query.where(
++            select(Complejo.id)
++            .where(
++                Complejo.id == TurnoDisplay.complejo_id,
++                Complejo.institucion_id == institucion_id,
++            )
++            .exists()
++        )
+     if complejo_id is not None:
+         query = query.where(TurnoDisplay.complejo_id == complejo_id)
++    if torre_id is not None:
++        query = query.where(
++            select(Piso.id)
++            .where(
++                Piso.id == TurnoDisplay.piso_id,
++                Piso.torre_id == torre_id,
++            )
++            .exists()
++        )
+     if piso_id is not None:
+         query = query.where(TurnoDisplay.piso_id == piso_id)
+     if cluster_espera_id is not None:
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 7dbd5c0..1d30ff2 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -662,7 +662,9 @@ def query_citas(
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
+     hora_fin: time | None = None,
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+     medico_id: UUID | None = None,
+@@ -739,8 +741,26 @@ def query_citas(
+             query = query.where(Cita.hora_cita <= hora_fin)
+     elif hora_fin is not None:
+         query = query.where(Cita.hora_cita <= hora_fin)
++    if institucion_id is not None:
++        query = query.where(
++            select(Complejo.id)
++            .where(
++                Complejo.id == Cita.complejo_id,
++                Complejo.institucion_id == institucion_id,
++            )
++            .exists()
++        )
+     if complejo_id is not None:
+         query = query.where(Cita.complejo_id == complejo_id)
++    if torre_id is not None:
++        query = query.where(
++            select(Piso.id)
++            .where(
++                Piso.id == Cita.piso_id,
++                Piso.torre_id == torre_id,
++            )
++            .exists()
++        )
+     if piso_id is not None:
+         query = query.where(Cita.piso_id == piso_id)
+     if consultorio_id is not None:
+@@ -1020,7 +1040,9 @@ def citas_hoy(
+     fecha: date | None = None,
+     hora_inicio: time | None = None,
+     hora_fin: time | None = None,
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+     medico_id: UUID | None = None,
+@@ -1035,7 +1057,9 @@ def citas_hoy(
+         fecha=fecha or business_today(),
+         hora_inicio=hora_inicio,
+         hora_fin=hora_fin,
++        institucion_id=institucion_id,
+         complejo_id=complejo_id,
++        torre_id=torre_id,
+         piso_id=piso_id,
+         consultorio_id=consultorio_id,
+         medico_id=medico_id,
+@@ -1054,7 +1078,9 @@ def buscar_citas(
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
+     hora_fin: time | None = None,
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+     medico_id: UUID | None = None,
+@@ -1072,7 +1098,9 @@ def buscar_citas(
+             fecha_inicio=fecha_inicio,
+             hora_inicio=hora_inicio,
+             hora_fin=hora_fin,
++            institucion_id=institucion_id,
+             complejo_id=complejo_id,
++            torre_id=torre_id,
+             piso_id=piso_id,
+             consultorio_id=consultorio_id,
+             medico_id=medico_id,
+@@ -1094,7 +1122,9 @@ def list_citas(
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
+     hora_fin: time | None = None,
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+     medico_id: UUID | None = None,
+@@ -1110,7 +1140,9 @@ def list_citas(
+         fecha_inicio=fecha_inicio,
+         hora_inicio=hora_inicio,
+         hora_fin=hora_fin,
++        institucion_id=institucion_id,
+         complejo_id=complejo_id,
++        torre_id=torre_id,
+         piso_id=piso_id,
+         consultorio_id=consultorio_id,
+         medico_id=medico_id,
+@@ -1130,7 +1162,9 @@ def registrar_exportacion_citas(
+     fecha_inicio: date | None = None,
+     hora_inicio: time | None = None,
+     hora_fin: time | None = None,
++    institucion_id: UUID | None = None,
+     complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
+     piso_id: UUID | None = None,
+     consultorio_id: UUID | None = None,
+     medico_id: UUID | None = None,
+@@ -1153,7 +1187,9 @@ def registrar_exportacion_citas(
+             "fecha_inicio": str(fecha_inicio) if fecha_inicio else None,
+             "hora_inicio": hora_inicio.strftime("%H:%M") if hora_inicio else None,
+             "hora_fin": hora_fin.strftime("%H:%M") if hora_fin else None,
++            "institucion_id": str(institucion_id) if institucion_id else None,
+             "complejo_id": str(complejo_id) if complejo_id else None,
++            "torre_id": str(torre_id) if torre_id else None,
+             "piso_id": str(piso_id) if piso_id else None,
+             "consultorio_id": str(consultorio_id) if consultorio_id else None,
+             "medico_id": str(medico_id) if medico_id else None,
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index a00fd70..91aaa83 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -742,7 +742,9 @@ export type CitaFilters = {
+   fecha_inicio?: string;
+   hora_inicio?: string;
+   hora_fin?: string;
++  institucion_id?: string;
+   complejo_id?: string;
++  torre_id?: string;
+   piso_id?: string;
+   consultorio_id?: string;
+   medico_id?: string;
+@@ -880,7 +882,9 @@ export function searchCitas(params: {
+   fecha?: string;
+   fecha_inicio?: string;
+   hora_inicio?: string;
++  institucion_id?: string;
+   complejo_id?: string;
++  torre_id?: string;
+   piso_id?: string;
+   consultorio_id?: string;
+   medico_id?: string;
+@@ -973,7 +977,9 @@ export function getPublicDisplayTurnos(codigoDispositivo: string, token?: string
+ }
+ 
+ export function listTurnosDisplayRecientes(params: {
++  institucion_id?: string;
+   complejo_id?: string;
++  torre_id?: string;
+   piso_id?: string;
+   cluster_espera_id?: string;
+   consultorio_id?: string;
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 36dedbe..e28d19f 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -30,7 +30,7 @@ import {
+ } from '../api/client';
+ import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
+ import { exportRows, type ExportFormat } from '../exporters';
+-import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
++import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ const citas = ref<Cita[]>([]);
+ const instituciones = ref<Institucion[]>([]);
+@@ -47,10 +47,6 @@ const qrDataUrl = ref('');
+ const ticket = ref<TicketResponse | null>(null);
+ const selectedCita = ref<Cita | null>(null);
+ const loading = ref(false);
+-const institucionSearch = ref('');
+-const complejoSearch = ref('');
+-const pisoSearch = ref('');
+-const consultorioSearch = ref('');
+ 
+ const filters = reactive({
+   fecha: todayLocalIso(),
+@@ -59,80 +55,96 @@ const filters = reactive({
+   estado: '',
+   institucion_id: '',
+   complejo_id: '',
++  torre_id: '',
+   piso_id: '',
+   consultorio_id: '',
+   medico_id: '',
+   paciente: '',
+ });
+ 
++const sortedInstituciones = computed(() => sortByLabel(instituciones.value, institucionLabel));
+ const filteredComplejos = computed(() =>
+-  filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : complejos.value,
++  filters.institucion_id
++    ? sortByLabel(
++        complejos.value.filter((item) => item.institucion_id === filters.institucion_id),
++        (item) => item.nombre,
++      )
++    : [],
++);
++const filteredTorres = computed(() =>
++  filters.complejo_id
++    ? sortByLabel(
++        torres.value.filter((item) => item.complejo_id === filters.complejo_id),
++        (item) => item.nombre,
++      )
++    : [],
+ );
+ const filteredPisos = computed(() =>
+-  sortPisosByCodigo(filters.complejo_id ? pisos.value.filter((item) => item.complejo_id === filters.complejo_id) : pisos.value),
++  filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : [],
+ );
+ const filteredConsultorios = computed(() =>
+-  consultorios.value.filter((item) => {
+-    if (filters.complejo_id && item.complejo_id !== filters.complejo_id) return false;
+-    if (filters.piso_id && item.piso_id !== filters.piso_id) return false;
+-    return true;
+-  }),
++  filters.piso_id ? sortConsultoriosByCodigo(consultorios.value.filter((item) => item.piso_id === filters.piso_id)) : [],
+ );
+ 
+ function institucionLabel(item: Institucion) {
+-  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
++  return item.nombre;
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  return pisoTorreLabel(item, torres.value);
++  return pisoCodigoVisibleLabel(item);
+ }
+ 
+ function medicoLabel(item: Medico) {
+   return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
+ }
+ 
+-function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+-  const normalized = text.trim().toLowerCase();
+-  return rows.find((item) => {
+-    const label = labeler(item).toLowerCase();
+-    return label === normalized || label.split(' · ')[0] === normalized;
++function consultorioLabel(item: Consultorio) {
++  const visibleName = item.nombre_visible?.trim();
++  return visibleName ? `${item.codigo} - ${visibleName}` : item.codigo;
++}
++
++function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
++  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
++}
++
++function sortConsultoriosByCodigo(rows: Consultorio[]) {
++  return [...rows].sort((left, right) => {
++    const byCodigo = left.codigo.localeCompare(right.codigo, 'es', { numeric: true, sensitivity: 'base' });
++    if (byCodigo !== 0) return byCodigo;
++    return consultorioLabel(left).localeCompare(consultorioLabel(right), 'es', { numeric: true, sensitivity: 'base' });
+   });
+ }
+ 
+-function syncInstitution() {
+-  filters.institucion_id = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel)?.id ?? '';
++function onInstitucionChange() {
+   if (!filteredComplejos.value.some((item) => item.id === filters.complejo_id)) {
+     filters.complejo_id = '';
+-    complejoSearch.value = '';
+-    filters.piso_id = '';
+-    pisoSearch.value = '';
+-    filters.consultorio_id = '';
+-    consultorioSearch.value = '';
+   }
++  filters.torre_id = '';
++  filters.piso_id = '';
++  filters.consultorio_id = '';
++}
++
++function onComplejoChange() {
++  if (!filteredTorres.value.some((item) => item.id === filters.torre_id)) {
++    filters.torre_id = '';
++  }
++  filters.piso_id = '';
++  filters.consultorio_id = '';
+ }
+ 
+-function syncComplex() {
+-  filters.complejo_id = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre)?.id ?? '';
++function onTorreChange() {
+   if (!filteredPisos.value.some((item) => item.id === filters.piso_id)) {
+     filters.piso_id = '';
+-    pisoSearch.value = '';
+-    filters.consultorio_id = '';
+-    consultorioSearch.value = '';
+   }
++  filters.consultorio_id = '';
+ }
+ 
+-function syncPiso() {
+-  filters.piso_id = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel)?.id ?? '';
++function onPisoChange() {
+   if (!filteredConsultorios.value.some((item) => item.id === filters.consultorio_id)) {
+     filters.consultorio_id = '';
+-    consultorioSearch.value = '';
+   }
+ }
+ 
+-function syncConsultorio() {
+-  filters.consultorio_id = matchByLabel(filteredConsultorios.value, consultorioSearch.value, (item) => item.nombre_visible || item.codigo)?.id ?? '';
+-}
+-
+ function defaultMedicoId() {
+   const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+   return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
+@@ -144,7 +156,9 @@ function requestFilters(): CitaFilters {
+     hora_inicio: filters.hora_inicio,
+     hora_fin: filters.hora_fin,
+     estado: filters.estado,
++    institucion_id: filters.institucion_id,
+     complejo_id: filters.complejo_id,
++    torre_id: filters.torre_id,
+     piso_id: filters.piso_id,
+     consultorio_id: filters.consultorio_id,
+     medico_id: filters.medico_id,
+@@ -284,14 +298,11 @@ function clearFilters() {
+   filters.estado = '';
+   filters.institucion_id = '';
+   filters.complejo_id = '';
++  filters.torre_id = '';
+   filters.piso_id = '';
+   filters.consultorio_id = '';
+   filters.medico_id = defaultMedicoId();
+   filters.paciente = '';
+-  institucionSearch.value = '';
+-  complejoSearch.value = '';
+-  pisoSearch.value = '';
+-  consultorioSearch.value = '';
+   void load();
+ }
+ 
+@@ -368,31 +379,38 @@ onMounted(async () => {
+         </div>
+         <div class="form-row">
+           <label for="filtro-institucion">Institución</label>
+-          <input id="filtro-institucion" v-model="institucionSearch" list="filtro-instituciones" @input="syncInstitution" @change="syncInstitution" />
+-          <datalist id="filtro-instituciones">
+-            <option v-for="item in instituciones" :key="item.id" :value="institucionLabel(item)" />
+-          </datalist>
++          <select id="filtro-institucion" v-model="filters.institucion_id" @change="onInstitucionChange">
++            <option value="">Todas</option>
++            <option v-for="item in sortedInstituciones" :key="item.id" :value="item.id">{{ institucionLabel(item) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="filtro-complejo">Campus</label>
+-          <input id="filtro-complejo" v-model="complejoSearch" list="filtro-complejos" @input="syncComplex" @change="syncComplex" />
+-          <datalist id="filtro-complejos">
+-            <option v-for="item in filteredComplejos" :key="item.id" :value="item.nombre" />
+-          </datalist>
++          <select id="filtro-complejo" v-model="filters.complejo_id" :disabled="!filters.institucion_id" @change="onComplejoChange">
++            <option value="">Todos</option>
++            <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
++          </select>
++        </div>
++        <div class="form-row">
++          <label for="filtro-torre">Torre</label>
++          <select id="filtro-torre" v-model="filters.torre_id" :disabled="!filters.complejo_id" @change="onTorreChange">
++            <option value="">Todas</option>
++            <option v-for="item in filteredTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="filtro-piso">Piso</label>
+-          <input id="filtro-piso" v-model="pisoSearch" list="filtro-pisos" @input="syncPiso" @change="syncPiso" />
+-          <datalist id="filtro-pisos">
+-            <option v-for="item in filteredPisos" :key="item.id" :value="pisoLabel(item)" />
+-          </datalist>
++          <select id="filtro-piso" v-model="filters.piso_id" :disabled="!filters.torre_id" @change="onPisoChange">
++            <option value="">Todos</option>
++            <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="filtro-consultorio">Consultorio</label>
+-          <input id="filtro-consultorio" v-model="consultorioSearch" list="filtro-consultorios" @input="syncConsultorio" @change="syncConsultorio" />
+-          <datalist id="filtro-consultorios">
+-            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.nombre_visible || item.codigo" />
+-          </datalist>
++          <select id="filtro-consultorio" v-model="filters.consultorio_id" :disabled="!filters.piso_id">
++            <option value="">Todos</option>
++            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ consultorioLabel(item) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="filtro-medico">Médico</label>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index 9923bcf..bf5dc89 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -53,10 +53,27 @@ const isPreferredOnly = computed(
+     !form.apellido_materno.trim(),
+ );
+ const canEditPatient = computed(() => Boolean(medicoId.value));
++const sortedPacientes = computed(() =>
++  [...pacientes.value].sort((left, right) => {
++    const leftName = patientSortName(left);
++    const rightName = patientSortName(right);
++    if (!leftName && rightName) return 1;
++    if (leftName && !rightName) return -1;
++    const byName = leftName.localeCompare(rightName, 'es', { numeric: true, sensitivity: 'base' });
++    if (byName !== 0) return byName;
++    return left.folio_paciente.localeCompare(right.folio_paciente, 'es', { numeric: true, sensitivity: 'base' });
++  }),
++);
+ 
+ function patientDisplayName(paciente: Paciente) {
+-  const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+-  return paciente.nombre_preferido || legalName || 'Sin nombre';
++  const apellidos = [paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
++  const nombre = paciente.nombre?.trim() ?? '';
++  if (apellidos && nombre) return `${apellidos}, ${nombre}`;
++  return apellidos || nombre || '-';
++}
++
++function patientSortName(paciente: Paciente) {
++  return [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre].filter(Boolean).join(' ').trim();
+ }
+ 
+ function medicoLabel(medico: Medico) {
+@@ -397,7 +414,7 @@ onMounted(async () => {
+             </thead>
+             <tbody>
+               <tr
+-                v-for="paciente in pacientes"
++                v-for="paciente in sortedPacientes"
+                 :key="paciente.id"
+                 class="selectable-row"
+                 :class="{ selected: selected?.id === paciente.id }"
+diff --git a/access-manager/frontend/src/views/TurnosLlamadosView.vue b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+index ad2d0f1..a452713 100644
+--- a/access-manager/frontend/src/views/TurnosLlamadosView.vue
++++ b/access-manager/frontend/src/views/TurnosLlamadosView.vue
+@@ -6,12 +6,12 @@ import {
+   getCurrentUser,
+   Institucion,
+   llamarCita,
++  listAccessibleComplejos,
+   listAccessibleConsultorios,
++  listAccessibleInstituciones,
+   listAccessibleMedicos,
+   listAccessiblePisos,
+   listAccessibleTorres,
+-  listComplejos,
+-  listInstituciones,
+   listTurnosDisplayRecientes,
+   Medico,
+   Piso,
+@@ -19,7 +19,7 @@ import {
+   TurnoDisplayReciente,
+   Usuario,
+ } from '../api/client';
+-import { pisoTorreLabel, sortPisosByCodigo } from '../floorLabels';
++import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
+@@ -31,6 +31,7 @@ const currentUser = ref<Usuario | null>(null);
+ const rows = ref<TurnoDisplayReciente[]>([]);
+ const institucionId = ref('');
+ const complejoId = ref('');
++const torreId = ref('');
+ const pisoId = ref('');
+ const clusterEsperaId = ref('');
+ const consultorioId = ref('');
+@@ -41,30 +42,58 @@ const error = ref('');
+ const message = ref('');
+ const minuteOptions = Array.from({ length: 16 }, (_, index) => (index + 1) * 15);
+ 
++const sortedInstituciones = computed(() => sortByLabel(instituciones.value, (item) => item.nombre));
+ const filteredComplejos = computed(() =>
+-  institucionId.value ? complejos.value.filter((item) => item.institucion_id === institucionId.value) : complejos.value,
++  institucionId.value
++    ? sortByLabel(
++        complejos.value.filter((item) => item.institucion_id === institucionId.value),
++        (item) => item.nombre,
++      )
++    : sortByLabel(complejos.value, (item) => item.nombre),
++);
++
++const filteredTorres = computed(() =>
++  complejoId.value
++    ? sortByLabel(
++        torres.value.filter((item) => item.complejo_id === complejoId.value),
++        (item) => item.nombre,
++      )
++    : [],
+ );
+ 
+ const filteredPisos = computed(() =>
+-  sortPisosByCodigo(complejoId.value ? pisos.value.filter((item) => item.complejo_id === complejoId.value) : pisos.value),
++  torreId.value ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === torreId.value)) : [],
+ );
+ 
+ const filteredConsultorios = computed(() =>
+-  consultorios.value.filter((item) => {
+-    if (complejoId.value && item.complejo_id !== complejoId.value) return false;
+-    if (pisoId.value && item.piso_id !== pisoId.value) return false;
+-    return true;
+-  }),
++  pisoId.value ? sortConsultoriosByCodigo(consultorios.value.filter((item) => item.piso_id === pisoId.value)) : [],
+ );
+ 
+ function pisoLabel(item: Piso) {
+-  return pisoTorreLabel(item, torres.value);
++  return pisoCodigoVisibleLabel(item);
++}
++
++function consultorioLabel(item: Consultorio) {
++  const visibleName = item.nombre_visible?.trim();
++  return visibleName ? `${item.codigo} - ${visibleName}` : item.codigo;
+ }
+ 
+ function medicoLabel(item: Medico) {
+   return item.nombre_visible || `${item.nombre} ${item.apellidos}`;
+ }
+ 
++function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
++  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
++}
++
++function sortConsultoriosByCodigo(rows: Consultorio[]) {
++  return [...rows].sort((left, right) => {
++    const byCodigo = left.codigo.localeCompare(right.codigo, 'es', { numeric: true, sensitivity: 'base' });
++    if (byCodigo !== 0) return byCodigo;
++    return consultorioLabel(left).localeCompare(consultorioLabel(right), 'es', { numeric: true, sensitivity: 'base' });
++  });
++}
++
+ function defaultMedicoId() {
+   const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
+   return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
+@@ -80,8 +109,8 @@ function formatMinuteOption(value: number) {
+ async function loadCatalogs() {
+   const [userData, institucionesData, complejosData, torresData, pisosData, consultoriosData, medicosData] = await Promise.all([
+     getCurrentUser(),
+-    listInstituciones(),
+-    listComplejos(),
++    listAccessibleInstituciones(),
++    listAccessibleComplejos(),
+     listAccessibleTorres(),
+     listAccessiblePisos(),
+     listAccessibleConsultorios(),
+@@ -95,11 +124,7 @@ async function loadCatalogs() {
+   consultorios.value = consultoriosData;
+   medicos.value = medicosData;
+   medicoId.value ||= defaultMedicoId();
+-  const firstConsultorio = consultoriosData[0];
+-  if (firstConsultorio && !complejoId.value) {
+-    complejoId.value = firstConsultorio.complejo_id;
+-    institucionId.value = complejosData.find((item) => item.id === firstConsultorio.complejo_id)?.institucion_id ?? '';
+-  }
++  prefillSingleAssignedLocation();
+ }
+ 
+ async function loadRows() {
+@@ -107,7 +132,9 @@ async function loadRows() {
+   error.value = '';
+   try {
+     rows.value = await listTurnosDisplayRecientes({
++      institucion_id: institucionId.value,
+       complejo_id: complejoId.value,
++      torre_id: torreId.value,
+       piso_id: pisoId.value,
+       cluster_espera_id: clusterEsperaId.value,
+       consultorio_id: consultorioId.value,
+@@ -122,13 +149,31 @@ async function loadRows() {
+ }
+ 
+ function quickConsultorio() {
+-  consultorioId.value ||= filteredConsultorios.value[0]?.id ?? '';
++  const currentRows = filteredConsultorios.value;
++  const scopedRows = sortConsultoriosByCodigo(
++    consultorios.value.filter((item) => {
++      if (complejoId.value && item.complejo_id !== complejoId.value) return false;
++      if (torreId.value) {
++        const piso = pisos.value.find((row) => row.id === item.piso_id);
++        if (piso?.torre_id !== torreId.value) return false;
++      }
++      return true;
++    }),
++  );
++  const selected = currentRows.find((item) => item.id === consultorioId.value) ?? currentRows[0] ?? scopedRows[0] ?? null;
++  if (selected) {
++    setLocationFromConsultorio(selected);
++  }
+   void loadRows();
+ }
+ 
+ function quickPiso() {
+   const selectedConsultorio = consultorios.value.find((item) => item.id === consultorioId.value);
+   pisoId.value ||= selectedConsultorio?.piso_id ?? filteredPisos.value[0]?.id ?? '';
++  const selectedPiso = pisos.value.find((item) => item.id === pisoId.value);
++  if (selectedPiso) {
++    setLocationFromPiso(selectedPiso);
++  }
+   if (!filteredConsultorios.value.some((item) => item.id === consultorioId.value)) {
+     consultorioId.value = '';
+   }
+@@ -180,8 +225,9 @@ async function callAgain(item: TurnoDisplayReciente) {
+ 
+ function onInstitutionChange() {
+   if (!filteredComplejos.value.some((item) => item.id === complejoId.value)) {
+-    complejoId.value = filteredComplejos.value[0]?.id ?? '';
++    complejoId.value = '';
+   }
++  torreId.value = '';
+   pisoId.value = '';
+   consultorioId.value = '';
+   clusterEsperaId.value = '';
+@@ -191,12 +237,22 @@ function onInstitutionChange() {
+ function onComplejoChange() {
+   const selected = complejos.value.find((item) => item.id === complejoId.value);
+   institucionId.value = selected?.institucion_id ?? institucionId.value;
++  torreId.value = '';
+   pisoId.value = '';
+   consultorioId.value = '';
+   clusterEsperaId.value = '';
+   void loadRows();
+ }
+ 
++function onTorreChange() {
++  if (!filteredPisos.value.some((item) => item.id === pisoId.value)) {
++    pisoId.value = '';
++  }
++  consultorioId.value = '';
++  clusterEsperaId.value = '';
++  void loadRows();
++}
++
+ function onPisoChange() {
+   if (!filteredConsultorios.value.some((item) => item.id === consultorioId.value)) {
+     consultorioId.value = '';
+@@ -204,6 +260,40 @@ function onPisoChange() {
+   void loadRows();
+ }
+ 
++function setLocationFromPiso(piso: Piso) {
++  torreId.value = piso.torre_id;
++  const selectedTorre = torres.value.find((item) => item.id === piso.torre_id);
++  if (!selectedTorre) return;
++  complejoId.value = selectedTorre.complejo_id;
++  institucionId.value = complejos.value.find((item) => item.id === selectedTorre.complejo_id)?.institucion_id ?? institucionId.value;
++}
++
++function setLocationFromConsultorio(consultorio: Consultorio) {
++  const piso = pisos.value.find((item) => item.id === consultorio.piso_id);
++  if (piso) {
++    pisoId.value = piso.id;
++    setLocationFromPiso(piso);
++  }
++  consultorioId.value = consultorio.id;
++}
++
++function prefillSingleAssignedLocation() {
++  const singleConsultorio = consultorios.value.length === 1 ? consultorios.value[0] : null;
++  const singlePiso = pisos.value.length === 1 ? pisos.value[0] : null;
++  const basePiso = singleConsultorio ? pisos.value.find((item) => item.id === singleConsultorio.piso_id) ?? null : singlePiso;
++  if (!basePiso || torreId.value) return;
++  const torre = torres.value.find((item) => item.id === basePiso.torre_id);
++  if (!torre) return;
++  torreId.value = torre.id;
++  if (!complejoId.value) {
++    complejoId.value = torre.complejo_id;
++  }
++  const complejo = complejos.value.find((item) => item.id === torre.complejo_id);
++  if (complejo && !institucionId.value) {
++    institucionId.value = complejo.institucion_id;
++  }
++}
++
+ onMounted(async () => {
+   await loadCatalogs();
+   await loadRows();
+@@ -226,7 +316,7 @@ onMounted(async () => {
+           <label for="institucion-turnos">Institución</label>
+           <select id="institucion-turnos" v-model="institucionId" @change="onInstitutionChange">
+             <option value="">Todas</option>
+-            <option v-for="item in instituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
++            <option v-for="item in sortedInstituciones" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+@@ -236,18 +326,25 @@ onMounted(async () => {
+             <option v-for="item in filteredComplejos" :key="item.id" :value="item.id">{{ item.nombre }}</option>
+           </select>
+         </div>
++        <div class="form-row">
++          <label for="torre-turnos">Torre</label>
++          <select id="torre-turnos" v-model="torreId" :disabled="!complejoId" @change="onTorreChange">
++            <option value="">Todas</option>
++            <option v-for="item in filteredTorres" :key="item.id" :value="item.id">{{ item.nombre }}</option>
++          </select>
++        </div>
+         <div class="form-row">
+           <label for="piso-turnos">Piso</label>
+-          <select id="piso-turnos" v-model="pisoId" @change="onPisoChange">
++          <select id="piso-turnos" v-model="pisoId" :disabled="!torreId" @change="onPisoChange">
+             <option value="">Todos</option>
+             <option v-for="item in filteredPisos" :key="item.id" :value="item.id">{{ pisoLabel(item) }}</option>
+           </select>
+         </div>
+         <div class="form-row">
+           <label for="consultorio-turnos">Consultorio</label>
+-          <select id="consultorio-turnos" v-model="consultorioId" @change="loadRows">
++          <select id="consultorio-turnos" v-model="consultorioId" :disabled="!pisoId" @change="loadRows">
+             <option value="">Todos</option>
+-            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ item.nombre_visible || item.codigo }}</option>
++            <option v-for="item in filteredConsultorios" :key="item.id" :value="item.id">{{ consultorioLabel(item) }}</option>
+           </select>
+         </div>
+         <div class="form-row">

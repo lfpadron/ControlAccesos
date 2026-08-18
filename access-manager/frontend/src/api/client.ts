@@ -742,7 +742,9 @@ export type CitaFilters = {
   fecha_inicio?: string;
   hora_inicio?: string;
   hora_fin?: string;
+  institucion_id?: string;
   complejo_id?: string;
+  torre_id?: string;
   piso_id?: string;
   consultorio_id?: string;
   medico_id?: string;
@@ -880,7 +882,9 @@ export function searchCitas(params: {
   fecha?: string;
   fecha_inicio?: string;
   hora_inicio?: string;
+  institucion_id?: string;
   complejo_id?: string;
+  torre_id?: string;
   piso_id?: string;
   consultorio_id?: string;
   medico_id?: string;
@@ -973,7 +977,9 @@ export function getPublicDisplayTurnos(codigoDispositivo: string, token?: string
 }
 
 export function listTurnosDisplayRecientes(params: {
+  institucion_id?: string;
   complejo_id?: string;
+  torre_id?: string;
   piso_id?: string;
   cluster_espera_id?: string;
   consultorio_id?: string;
