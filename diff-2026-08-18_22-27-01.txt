@@ -1,0 +1,541 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 1d30ff2..c0abcc1 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+ from sqlalchemy import and_, func, or_, select
+-from sqlalchemy.orm import Session
++from sqlalchemy.orm import Session, aliased
+ 
+ from app.core.database import get_db
+ from app.core.security import require_permission, require_role
+@@ -77,6 +77,9 @@ qr_router = APIRouter()
+ mobile_router = APIRouter()
+ catalogos_operativos_router = APIRouter()
+ 
++ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
++ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
++
+ CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
+ PacientesReadUser = Depends(require_permission("pacientes"))
+ PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
+@@ -116,6 +119,7 @@ def normalized_digits(value: str | None) -> str | None:
+ 
+ 
+ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
++    today = business_today()
+     return set(
+         db.execute(
+             select(Role.codigo)
+@@ -123,12 +127,46 @@ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
+             .where(
+                 UsuarioRol.usuario_id == usuario.id,
+                 UsuarioRol.activo.is_(True),
++                UsuarioRol.fecha_inicio <= today,
++                or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+                 Role.activo.is_(True),
+             )
+         ).scalars()
+     )
+ 
+ 
++def active_user_role_conditions(usuario: Usuario, today: date) -> list[Any]:
++    return [
++        UsuarioRol.usuario_id == usuario.id,
++        UsuarioRol.activo.is_(True),
++        UsuarioRol.fecha_inicio <= today,
++        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++        Role.activo.is_(True),
++    ]
++
++
++def user_has_direct_medico_assignments(db: Session, usuario: Usuario, today: date) -> bool:
++    return (
++        db.execute(
++            select(UsuarioRol.id)
++            .join(Role, Role.id == UsuarioRol.rol_id)
++            .where(*active_user_role_conditions(usuario, today), UsuarioRol.medico_id.is_not(None))
++            .limit(1)
++        ).first()
++        is not None
++    )
++
++
++def medico_assigned_to_user_predicate(usuario: Usuario, today: date, role_codes: set[str] | None = None):
++    conditions = [
++        *active_user_role_conditions(usuario, today),
++        UsuarioRol.medico_id == Medico.id,
++    ]
++    if role_codes is not None:
++        conditions.append(Role.codigo.in_(role_codes))
++    return select(UsuarioRol.id).join(Role, Role.id == UsuarioRol.rol_id).where(*conditions).exists()
++
++
+ def patient_full_name(paciente: Paciente | None) -> str | None:
+     if paciente is None:
+         return None
+@@ -224,52 +262,149 @@ def active_medico_assignment_conditions(medico_id: UUID) -> list[Any]:
+     ]
+ 
+ 
+-def consultorio_assigned_to_medico(medico_id: UUID):
++def active_medico_role_consultorio_conditions(medico_id: UUID) -> list[Any]:
++    today = business_today()
++    medico_user_id = select(Medico.usuario_id).where(Medico.id == medico_id).scalar_subquery()
++    return [
++        Role.codigo == "MEDICO",
++        Role.activo.is_(True),
++        UsuarioRol.activo.is_(True),
++        UsuarioRol.fecha_inicio <= today,
++        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++        UsuarioRol.consultorio_id.is_not(None),
++        or_(UsuarioRol.medico_id == medico_id, UsuarioRol.usuario_id == medico_user_id),
++    ]
++
++
++def consultorio_role_assigned_to_medico(medico_id: UUID):
++    return (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .where(
++            UsuarioRol.consultorio_id == Consultorio.id,
++            *active_medico_role_consultorio_conditions(medico_id),
++        )
++        .exists()
++    )
++
++
++def piso_role_assigned_to_medico(medico_id: UUID):
++    role_consultorio = aliased(Consultorio)
++    return (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
++        .where(
++            role_consultorio.activo.is_(True),
++            role_consultorio.piso_id == Piso.id,
++            *active_medico_role_consultorio_conditions(medico_id),
++        )
++        .exists()
++    )
++
++
++def torre_role_assigned_to_medico(medico_id: UUID):
++    role_consultorio = aliased(Consultorio)
++    role_piso = aliased(Piso)
++    return (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
++        .join(role_piso, role_piso.id == role_consultorio.piso_id)
++        .where(
++            role_consultorio.activo.is_(True),
++            role_piso.activo.is_(True),
++            role_piso.torre_id == Torre.id,
++            *active_medico_role_consultorio_conditions(medico_id),
++        )
++        .exists()
++    )
++
++
++def complejo_role_assigned_to_medico(medico_id: UUID):
++    role_consultorio = aliased(Consultorio)
+     return (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
++        .where(
++            role_consultorio.activo.is_(True),
++            role_consultorio.complejo_id == Complejo.id,
++            *active_medico_role_consultorio_conditions(medico_id),
++        )
++        .exists()
++    )
++
++
++def institucion_role_assigned_to_medico(medico_id: UUID):
++    role_consultorio = aliased(Consultorio)
++    role_complejo = aliased(Complejo)
++    return (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
++        .join(role_complejo, role_complejo.id == role_consultorio.complejo_id)
++        .where(
++            role_consultorio.activo.is_(True),
++            role_complejo.activo.is_(True),
++            role_complejo.institucion_id == Institucion.id,
++            *active_medico_role_consultorio_conditions(medico_id),
++        )
++        .exists()
++    )
++
++
++def consultorio_assigned_to_medico(medico_id: UUID):
++    return or_(
+         select(AsignacionMedicoConsultorio.id)
+         .where(
+             AsignacionMedicoConsultorio.consultorio_id == Consultorio.id,
+             *active_medico_assignment_conditions(medico_id),
+         )
+-        .exists()
++        .exists(),
++        consultorio_role_assigned_to_medico(medico_id),
+     )
+ 
+ 
+ def piso_assigned_to_medico(medico_id: UUID):
+-    return (
++    return or_(
+         select(AsignacionMedicoConsultorio.id)
+         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+         .where(Consultorio.piso_id == Piso.id, *active_medico_assignment_conditions(medico_id))
+-        .exists()
++        .exists(),
++        piso_role_assigned_to_medico(medico_id),
+     )
+ 
+ 
+ def torre_assigned_to_medico(medico_id: UUID):
+-    return (
++    return or_(
+         select(AsignacionMedicoConsultorio.id)
+         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+         .join(Piso, Piso.id == Consultorio.piso_id)
+         .where(Piso.torre_id == Torre.id, *active_medico_assignment_conditions(medico_id))
+-        .exists()
++        .exists(),
++        torre_role_assigned_to_medico(medico_id),
+     )
+ 
+ 
+ def complejo_assigned_to_medico(medico_id: UUID):
+-    return (
++    return or_(
+         select(AsignacionMedicoConsultorio.id)
+         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+         .where(Consultorio.complejo_id == Complejo.id, *active_medico_assignment_conditions(medico_id))
+-        .exists()
++        .exists(),
++        complejo_role_assigned_to_medico(medico_id),
+     )
+ 
+ 
+ def institucion_assigned_to_medico(medico_id: UUID):
+-    return (
++    return or_(
+         select(AsignacionMedicoConsultorio.id)
+         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
+         .join(Complejo, Complejo.id == Consultorio.complejo_id)
+         .where(Complejo.institucion_id == Institucion.id, *active_medico_assignment_conditions(medico_id))
+-        .exists()
++        .exists(),
++        institucion_role_assigned_to_medico(medico_id),
+     )
+ 
+ 
+@@ -278,11 +413,22 @@ def list_medicos_operativos(
+     db: Session = Depends(get_db),
+     current_user: Usuario = CatalogosOperativosUser,
+ ) -> list[Medico]:
+-    if sync_medicos_for_medico_users(db, business_today()):
++    today = business_today()
++    if sync_medicos_for_medico_users(db, today):
+         db.commit()
++    roles = active_role_codes(db, current_user)
++    access_predicate = medico_catalog_access_predicate(db, current_user, today)
++    if not roles.intersection(ADMIN_ROLE_CODES):
++        if "MEDICO" in roles:
++            access_predicate = or_(
++                Medico.usuario_id == current_user.id,
++                medico_assigned_to_user_predicate(current_user, today, {"MEDICO"}),
++            )
++        elif roles.intersection(ASSISTANT_MEDICO_ROLE_CODES) or user_has_direct_medico_assignments(db, current_user, today):
++            access_predicate = medico_assigned_to_user_predicate(current_user, today)
+     query = (
+         select(Medico)
+-        .where(Medico.activo.is_(True), medico_catalog_access_predicate(db, current_user, business_today()))
++        .where(Medico.activo.is_(True), access_predicate)
+         .order_by(
+             func.lower(func.coalesce(Medico.apellidos, "")),
+             func.lower(func.coalesce(Medico.nombre, "")),
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index db57153..a0c8ca0 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -689,6 +689,52 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
+     operador_role = next(role for role in roles_response.json() if role["codigo"] == "OPERADOR")
+ 
++    role_scoped_medico_user = assert_created(
++        client.post(
++            "/api/usuarios",
++            headers=auth_headers,
++            json={
++                "apellidos": f"Rol {suffix}",
++                "nombre": f"Médico Rol {suffix}",
++                "email": f"medico-rol-{suffix}@example.com",
++                "password": "Temporal123!",
++            },
++        )
++    )
++    role_scoped_medico = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={
++                "usuario_id": role_scoped_medico_user["id"],
++                "nombre": "Médico",
++                "apellidos": f"Rol {suffix}",
++            },
++        )
++    )
++    assert_created(
++        client.post(
++            "/api/usuario-roles",
++            headers=auth_headers,
++            json={
++                "usuario_id": role_scoped_medico_user["id"],
++                "rol_id": medico_role["id"],
++                "consultorio_id": consultorio["id"],
++                "fecha_inicio": "2026-06-01",
++            },
++        )
++    )
++    for path, expected_id in (
++        ("/api/catalogos-operativos/instituciones", institucion["id"]),
++        ("/api/catalogos-operativos/complejos", complejo["id"]),
++        ("/api/catalogos-operativos/torres", torre["id"]),
++        ("/api/catalogos-operativos/pisos", piso["id"]),
++        ("/api/catalogos-operativos/consultorios", consultorio["id"]),
++    ):
++        scoped_catalog = client.get(path, headers=auth_headers, params={"medico_id": role_scoped_medico["id"]})
++        assert scoped_catalog.status_code == 200, scoped_catalog.text
++        assert [item["id"] for item in scoped_catalog.json()] == [expected_id]
++
+     assert_created(
+         client.post(
+             "/api/usuario-roles",
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index b3bd46b..9612ffa 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -1,5 +1,5 @@
+ <script setup lang="ts">
+-import { computed, onMounted, reactive, ref, watch } from 'vue';
++import { computed, onMounted, reactive, ref } from 'vue';
+ import {
+   ApiError,
+   createCita,
+@@ -59,8 +59,6 @@ const error = ref('');
+ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+ const pacienteSearch = ref('');
+-const locationCatalogMedicoId = ref<string | null>(null);
+-const locationCatalogsLoaded = ref(false);
+ const medicoLocationSyncToken = ref(0);
+ 
+ const form = reactive({
+@@ -118,8 +116,7 @@ const filteredConsultorios = computed(() => {
+ });
+ 
+ const visibleCitas = computed(() => uniqueById(citas.value));
+-const requiresMedicoSelectionForLocation = computed(() => shouldRequireMedicoSelectionForLocation());
+-const locationLockedUntilMedico = computed(() => requiresMedicoSelectionForLocation.value && !form.medico_id);
++const locationLockedUntilMedico = computed(() => !form.medico_id);
+ 
+ const pacienteOptions = computed(() => {
+   const q = normalizeAutocompleteText(pacienteSearch.value);
+@@ -229,12 +226,8 @@ function isAdminUser() {
+   return hasAnyRole(['ADMIN_SISTEMA', 'ADMIN_NEGOCIO']);
+ }
+ 
+-function isAssistantUser() {
+-  return hasAnyRole(['ASISTENTE', 'ASISTENTE_MEDICO', 'RECEPCIONISTA']);
+-}
+-
+-function shouldRequireMedicoSelectionForLocation() {
+-  return isAssistantUser() && !isAdminUser() && medicos.value.length > 0;
++function isDoctorUser() {
++  return hasAnyRole(['MEDICO']);
+ }
+ 
+ function syncPacienteLabel() {
+@@ -350,6 +343,54 @@ function setLocationFromConsultorio(consultorio: Consultorio) {
+   return true;
+ }
+ 
++function setDefaultLocationFromCatalogs(data: LocationCatalogData) {
++  const catalogInstituciones = uniqueById(data.institucionesData);
++  const catalogComplejos = uniqueById(data.complejosData);
++  const catalogTorres = uniqueById(data.torresData);
++  const catalogPisos = uniqueById(data.pisosData);
++  const catalogConsultorios = uniqueById(data.consultoriosData);
++  const singleConsultorio = catalogConsultorios.length === 1 ? catalogConsultorios[0] : null;
++
++  if (singleConsultorio) {
++    const piso = catalogPisos.find((item) => item.id === singleConsultorio.piso_id) ?? null;
++    const torre = piso ? catalogTorres.find((item) => item.id === piso.torre_id) ?? null : null;
++    const complejo = catalogComplejos.find((item) => item.id === singleConsultorio.complejo_id) ?? null;
++    const institucion = complejo ? catalogInstituciones.find((item) => item.id === complejo.institucion_id) ?? null : null;
++    if (piso && torre && complejo && institucion) {
++      setInstitutionOption(institucion);
++      setComplexOption(complejo);
++      setTowerOption(torre);
++      setPisoOption(piso);
++      setConsultorioOption(singleConsultorio);
++      return;
++    }
++  }
++
++  if (catalogInstituciones.length !== 1) return;
++  const institucion = catalogInstituciones[0];
++  setInstitutionOption(institucion);
++
++  const institutionComplejos = uniqueById(catalogComplejos.filter((item) => item.institucion_id === institucion.id));
++  if (institutionComplejos.length !== 1) return;
++  const complejo = institutionComplejos[0];
++  setComplexOption(complejo);
++
++  const complexTorres = uniqueById(catalogTorres.filter((item) => item.complejo_id === complejo.id));
++  if (complexTorres.length !== 1) return;
++  const torre = complexTorres[0];
++  setTowerOption(torre);
++
++  const towerPisos = uniqueById(catalogPisos.filter((item) => item.complejo_id === complejo.id && item.torre_id === torre.id));
++  if (towerPisos.length !== 1) return;
++  const piso = towerPisos[0];
++  setPisoOption(piso);
++
++  const floorConsultorios = uniqueById(catalogConsultorios.filter((item) => item.complejo_id === complejo.id && item.piso_id === piso.id));
++  if (floorConsultorios.length === 1) {
++    setConsultorioOption(floorConsultorios[0]);
++  }
++}
++
+ function onInstitutionChange() {
+   if (!filteredComplejos.value.some((item) => item.id === form.complejo_id)) {
+     clearLocation('institucion');
+@@ -391,31 +432,26 @@ function syncPaciente() {
+ }
+ 
+ function defaultMedicoId() {
++  if (isDoctorUser() && !isAdminUser()) {
++    return medicos.value.find((medico) => medico.usuario_id === currentUser.value?.id)?.id ?? '';
++  }
+   return medicos.value.length === 1 ? medicos.value[0].id : '';
+ }
+ 
+-function setDefaultLocation() {
+-  setInstitutionOption(null);
+-  clearLocation('institucion');
+-  const uniqueConsultorios = uniqueById(consultorios.value);
+-  if (uniqueConsultorios.length === 1 && setLocationFromConsultorio(uniqueConsultorios[0])) return;
+-  autoFillSingleInstitution();
+-}
+-
+ async function syncLocationForMedico(medicoId = form.medico_id) {
+   const syncToken = ++medicoLocationSyncToken.value;
+   setInstitutionOption(null);
+   clearLocation('institucion');
+ 
+-  if (requiresMedicoSelectionForLocation.value && !medicoId) {
+-    applyLocationCatalogs(emptyLocationCatalogData(), '');
++  if (!medicoId) {
++    applyLocationCatalogs(emptyLocationCatalogData());
+     return;
+   }
+ 
+   const data = await fetchScopedLocationCatalogs(medicoId);
+   if (syncToken !== medicoLocationSyncToken.value || form.medico_id !== medicoId) return;
+-  applyLocationCatalogs(data, medicoId);
+-  setDefaultLocation();
++  applyLocationCatalogs(data);
++  setDefaultLocationFromCatalogs(data);
+ }
+ 
+ async function resetForm(options: ResetFormOptions = {}) {
+@@ -462,10 +498,6 @@ async function loadTable() {
+   }
+ }
+ 
+-async function loadLocationCatalogs(medicoId = form.medico_id) {
+-  applyLocationCatalogs(await fetchScopedLocationCatalogs(medicoId), medicoId);
+-}
+-
+ async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
+   const params = medicoId ? { medico_id: medicoId } : {};
+   const [consultoriosData, institucionesData, complejosData, torresData, pisosData] = await Promise.all([
+@@ -553,27 +585,16 @@ async function completeLocationCatalogParents(data: LocationCatalogData) {
+ }
+ 
+ async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
+-  if (requiresMedicoSelectionForLocation.value && !medicoId) return emptyLocationCatalogData();
+-  if (medicoId) return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
+-  if (!shouldAggregateLocationCatalogsByMedico()) return completeLocationCatalogParents(await fetchLocationCatalogs(''));
+-  const catalogRows = await Promise.all(medicos.value.map((medico) => fetchLocationCatalogs(medico.id)));
+-  const mergedCatalogs = catalogRows.reduce((merged, catalogs) => mergeLocationCatalogData(merged, catalogs), emptyLocationCatalogData());
+-  return completeLocationCatalogParents(mergedCatalogs);
++  if (!medicoId) return emptyLocationCatalogData();
++  return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
+ }
+ 
+-function shouldAggregateLocationCatalogsByMedico() {
+-  if (isAdminUser() || requiresMedicoSelectionForLocation.value) return false;
+-  return medicos.value.length > 0;
+-}
+-
+-function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico_id) {
++function applyLocationCatalogs(data: LocationCatalogData) {
+   consultorios.value = uniqueById(data.consultoriosData);
+   instituciones.value = uniqueById(data.institucionesData);
+   complejos.value = uniqueById(data.complejosData);
+   torres.value = uniqueById(data.torresData);
+   pisos.value = uniqueById(data.pisosData);
+-  locationCatalogMedicoId.value = medicoId || null;
+-  locationCatalogsLoaded.value = true;
+ }
+ 
+ function mergeLocationCatalogData(primary: LocationCatalogData, secondary: LocationCatalogData, keepPrimaryConsultorios = false) {
+@@ -606,12 +627,14 @@ async function load() {
+   }
+ }
+ 
+-async function onMedicoChange() {
++async function onMedicoChange(event?: Event) {
+   error.value = '';
++  const selectedMedicoId = event?.target instanceof HTMLSelectElement ? event.target.value : form.medico_id;
++  form.medico_id = selectedMedicoId;
+   form.paciente_id = '';
+   pacienteSearch.value = '';
+   try {
+-    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(form.medico_id)]);
++    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(selectedMedicoId)]);
+     syncPacienteLabel();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
+@@ -661,14 +684,6 @@ function duplicateDetail(err: unknown): DuplicateWarning | null {
+   };
+ }
+ 
+-watch(
+-  () => form.medico_id,
+-  (medicoId, previousMedicoId) => {
+-    if (medicoId === previousMedicoId) return;
+-    void onMedicoChange();
+-  },
+-);
+-
+ onMounted(load);
+ </script>
+ 
+@@ -708,6 +723,7 @@ onMounted(load);
+             v-model="form.medico_id"
+             required
+             :disabled="medicos.length === 0"
++            @change="onMedicoChange"
+           >
+             <option value="">Selecciona médico</option>
+             <option v-for="medico in medicoOptions" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>

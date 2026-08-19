@@ -689,6 +689,52 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     medico_role = next(role for role in roles_response.json() if role["codigo"] == "MEDICO")
     operador_role = next(role for role in roles_response.json() if role["codigo"] == "OPERADOR")
 
+    role_scoped_medico_user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Rol {suffix}",
+                "nombre": f"Médico Rol {suffix}",
+                "email": f"medico-rol-{suffix}@example.com",
+                "password": "Temporal123!",
+            },
+        )
+    )
+    role_scoped_medico = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={
+                "usuario_id": role_scoped_medico_user["id"],
+                "nombre": "Médico",
+                "apellidos": f"Rol {suffix}",
+            },
+        )
+    )
+    assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={
+                "usuario_id": role_scoped_medico_user["id"],
+                "rol_id": medico_role["id"],
+                "consultorio_id": consultorio["id"],
+                "fecha_inicio": "2026-06-01",
+            },
+        )
+    )
+    for path, expected_id in (
+        ("/api/catalogos-operativos/instituciones", institucion["id"]),
+        ("/api/catalogos-operativos/complejos", complejo["id"]),
+        ("/api/catalogos-operativos/torres", torre["id"]),
+        ("/api/catalogos-operativos/pisos", piso["id"]),
+        ("/api/catalogos-operativos/consultorios", consultorio["id"]),
+    ):
+        scoped_catalog = client.get(path, headers=auth_headers, params={"medico_id": role_scoped_medico["id"]})
+        assert scoped_catalog.status_code == 200, scoped_catalog.text
+        assert [item["id"] for item in scoped_catalog.json()] == [expected_id]
+
     assert_created(
         client.post(
             "/api/usuario-roles",

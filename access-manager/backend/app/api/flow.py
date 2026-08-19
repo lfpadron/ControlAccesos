@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
 from app.core.security import require_permission, require_role
@@ -77,6 +77,9 @@ qr_router = APIRouter()
 mobile_router = APIRouter()
 catalogos_operativos_router = APIRouter()
 
+ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
+ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+
 CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
 PacientesReadUser = Depends(require_permission("pacientes"))
 PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
@@ -116,6 +119,7 @@ def normalized_digits(value: str | None) -> str | None:
 
 
 def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
+    today = business_today()
     return set(
         db.execute(
             select(Role.codigo)
@@ -123,10 +127,44 @@ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
             .where(
                 UsuarioRol.usuario_id == usuario.id,
                 UsuarioRol.activo.is_(True),
+                UsuarioRol.fecha_inicio <= today,
+                or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
                 Role.activo.is_(True),
             )
         ).scalars()
     )
+
+
+def active_user_role_conditions(usuario: Usuario, today: date) -> list[Any]:
+    return [
+        UsuarioRol.usuario_id == usuario.id,
+        UsuarioRol.activo.is_(True),
+        UsuarioRol.fecha_inicio <= today,
+        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+        Role.activo.is_(True),
+    ]
+
+
+def user_has_direct_medico_assignments(db: Session, usuario: Usuario, today: date) -> bool:
+    return (
+        db.execute(
+            select(UsuarioRol.id)
+            .join(Role, Role.id == UsuarioRol.rol_id)
+            .where(*active_user_role_conditions(usuario, today), UsuarioRol.medico_id.is_not(None))
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def medico_assigned_to_user_predicate(usuario: Usuario, today: date, role_codes: set[str] | None = None):
+    conditions = [
+        *active_user_role_conditions(usuario, today),
+        UsuarioRol.medico_id == Medico.id,
+    ]
+    if role_codes is not None:
+        conditions.append(Role.codigo.in_(role_codes))
+    return select(UsuarioRol.id).join(Role, Role.id == UsuarioRol.rol_id).where(*conditions).exists()
 
 
 def patient_full_name(paciente: Paciente | None) -> str | None:
@@ -224,52 +262,149 @@ def active_medico_assignment_conditions(medico_id: UUID) -> list[Any]:
     ]
 
 
-def consultorio_assigned_to_medico(medico_id: UUID):
+def active_medico_role_consultorio_conditions(medico_id: UUID) -> list[Any]:
+    today = business_today()
+    medico_user_id = select(Medico.usuario_id).where(Medico.id == medico_id).scalar_subquery()
+    return [
+        Role.codigo == "MEDICO",
+        Role.activo.is_(True),
+        UsuarioRol.activo.is_(True),
+        UsuarioRol.fecha_inicio <= today,
+        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+        UsuarioRol.consultorio_id.is_not(None),
+        or_(UsuarioRol.medico_id == medico_id, UsuarioRol.usuario_id == medico_user_id),
+    ]
+
+
+def consultorio_role_assigned_to_medico(medico_id: UUID):
     return (
-        select(AsignacionMedicoConsultorio.id)
+        select(UsuarioRol.id)
+        .join(Role, Role.id == UsuarioRol.rol_id)
         .where(
-            AsignacionMedicoConsultorio.consultorio_id == Consultorio.id,
-            *active_medico_assignment_conditions(medico_id),
+            UsuarioRol.consultorio_id == Consultorio.id,
+            *active_medico_role_consultorio_conditions(medico_id),
         )
         .exists()
     )
 
 
-def piso_assigned_to_medico(medico_id: UUID):
+def piso_role_assigned_to_medico(medico_id: UUID):
+    role_consultorio = aliased(Consultorio)
     return (
+        select(UsuarioRol.id)
+        .join(Role, Role.id == UsuarioRol.rol_id)
+        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
+        .where(
+            role_consultorio.activo.is_(True),
+            role_consultorio.piso_id == Piso.id,
+            *active_medico_role_consultorio_conditions(medico_id),
+        )
+        .exists()
+    )
+
+
+def torre_role_assigned_to_medico(medico_id: UUID):
+    role_consultorio = aliased(Consultorio)
+    role_piso = aliased(Piso)
+    return (
+        select(UsuarioRol.id)
+        .join(Role, Role.id == UsuarioRol.rol_id)
+        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
+        .join(role_piso, role_piso.id == role_consultorio.piso_id)
+        .where(
+            role_consultorio.activo.is_(True),
+            role_piso.activo.is_(True),
+            role_piso.torre_id == Torre.id,
+            *active_medico_role_consultorio_conditions(medico_id),
+        )
+        .exists()
+    )
+
+
+def complejo_role_assigned_to_medico(medico_id: UUID):
+    role_consultorio = aliased(Consultorio)
+    return (
+        select(UsuarioRol.id)
+        .join(Role, Role.id == UsuarioRol.rol_id)
+        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
+        .where(
+            role_consultorio.activo.is_(True),
+            role_consultorio.complejo_id == Complejo.id,
+            *active_medico_role_consultorio_conditions(medico_id),
+        )
+        .exists()
+    )
+
+
+def institucion_role_assigned_to_medico(medico_id: UUID):
+    role_consultorio = aliased(Consultorio)
+    role_complejo = aliased(Complejo)
+    return (
+        select(UsuarioRol.id)
+        .join(Role, Role.id == UsuarioRol.rol_id)
+        .join(role_consultorio, role_consultorio.id == UsuarioRol.consultorio_id)
+        .join(role_complejo, role_complejo.id == role_consultorio.complejo_id)
+        .where(
+            role_consultorio.activo.is_(True),
+            role_complejo.activo.is_(True),
+            role_complejo.institucion_id == Institucion.id,
+            *active_medico_role_consultorio_conditions(medico_id),
+        )
+        .exists()
+    )
+
+
+def consultorio_assigned_to_medico(medico_id: UUID):
+    return or_(
+        select(AsignacionMedicoConsultorio.id)
+        .where(
+            AsignacionMedicoConsultorio.consultorio_id == Consultorio.id,
+            *active_medico_assignment_conditions(medico_id),
+        )
+        .exists(),
+        consultorio_role_assigned_to_medico(medico_id),
+    )
+
+
+def piso_assigned_to_medico(medico_id: UUID):
+    return or_(
         select(AsignacionMedicoConsultorio.id)
         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
         .where(Consultorio.piso_id == Piso.id, *active_medico_assignment_conditions(medico_id))
-        .exists()
+        .exists(),
+        piso_role_assigned_to_medico(medico_id),
     )
 
 
 def torre_assigned_to_medico(medico_id: UUID):
-    return (
+    return or_(
         select(AsignacionMedicoConsultorio.id)
         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
         .join(Piso, Piso.id == Consultorio.piso_id)
         .where(Piso.torre_id == Torre.id, *active_medico_assignment_conditions(medico_id))
-        .exists()
+        .exists(),
+        torre_role_assigned_to_medico(medico_id),
     )
 
 
 def complejo_assigned_to_medico(medico_id: UUID):
-    return (
+    return or_(
         select(AsignacionMedicoConsultorio.id)
         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
         .where(Consultorio.complejo_id == Complejo.id, *active_medico_assignment_conditions(medico_id))
-        .exists()
+        .exists(),
+        complejo_role_assigned_to_medico(medico_id),
     )
 
 
 def institucion_assigned_to_medico(medico_id: UUID):
-    return (
+    return or_(
         select(AsignacionMedicoConsultorio.id)
         .join(Consultorio, Consultorio.id == AsignacionMedicoConsultorio.consultorio_id)
         .join(Complejo, Complejo.id == Consultorio.complejo_id)
         .where(Complejo.institucion_id == Institucion.id, *active_medico_assignment_conditions(medico_id))
-        .exists()
+        .exists(),
+        institucion_role_assigned_to_medico(medico_id),
     )
 
 
@@ -278,11 +413,22 @@ def list_medicos_operativos(
     db: Session = Depends(get_db),
     current_user: Usuario = CatalogosOperativosUser,
 ) -> list[Medico]:
-    if sync_medicos_for_medico_users(db, business_today()):
+    today = business_today()
+    if sync_medicos_for_medico_users(db, today):
         db.commit()
+    roles = active_role_codes(db, current_user)
+    access_predicate = medico_catalog_access_predicate(db, current_user, today)
+    if not roles.intersection(ADMIN_ROLE_CODES):
+        if "MEDICO" in roles:
+            access_predicate = or_(
+                Medico.usuario_id == current_user.id,
+                medico_assigned_to_user_predicate(current_user, today, {"MEDICO"}),
+            )
+        elif roles.intersection(ASSISTANT_MEDICO_ROLE_CODES) or user_has_direct_medico_assignments(db, current_user, today):
+            access_predicate = medico_assigned_to_user_predicate(current_user, today)
     query = (
         select(Medico)
-        .where(Medico.activo.is_(True), medico_catalog_access_predicate(db, current_user, business_today()))
+        .where(Medico.activo.is_(True), access_predicate)
         .order_by(
             func.lower(func.coalesce(Medico.apellidos, "")),
             func.lower(func.coalesce(Medico.nombre, "")),

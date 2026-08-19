@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
   ApiError,
   createCita,
@@ -59,8 +59,6 @@ const error = ref('');
 const message = ref('');
 const duplicateWarning = ref<DuplicateWarning | null>(null);
 const pacienteSearch = ref('');
-const locationCatalogMedicoId = ref<string | null>(null);
-const locationCatalogsLoaded = ref(false);
 const medicoLocationSyncToken = ref(0);
 
 const form = reactive({
@@ -118,8 +116,7 @@ const filteredConsultorios = computed(() => {
 });
 
 const visibleCitas = computed(() => uniqueById(citas.value));
-const requiresMedicoSelectionForLocation = computed(() => shouldRequireMedicoSelectionForLocation());
-const locationLockedUntilMedico = computed(() => requiresMedicoSelectionForLocation.value && !form.medico_id);
+const locationLockedUntilMedico = computed(() => !form.medico_id);
 
 const pacienteOptions = computed(() => {
   const q = normalizeAutocompleteText(pacienteSearch.value);
@@ -229,12 +226,8 @@ function isAdminUser() {
   return hasAnyRole(['ADMIN_SISTEMA', 'ADMIN_NEGOCIO']);
 }
 
-function isAssistantUser() {
-  return hasAnyRole(['ASISTENTE', 'ASISTENTE_MEDICO', 'RECEPCIONISTA']);
-}
-
-function shouldRequireMedicoSelectionForLocation() {
-  return isAssistantUser() && !isAdminUser() && medicos.value.length > 0;
+function isDoctorUser() {
+  return hasAnyRole(['MEDICO']);
 }
 
 function syncPacienteLabel() {
@@ -350,6 +343,54 @@ function setLocationFromConsultorio(consultorio: Consultorio) {
   return true;
 }
 
+function setDefaultLocationFromCatalogs(data: LocationCatalogData) {
+  const catalogInstituciones = uniqueById(data.institucionesData);
+  const catalogComplejos = uniqueById(data.complejosData);
+  const catalogTorres = uniqueById(data.torresData);
+  const catalogPisos = uniqueById(data.pisosData);
+  const catalogConsultorios = uniqueById(data.consultoriosData);
+  const singleConsultorio = catalogConsultorios.length === 1 ? catalogConsultorios[0] : null;
+
+  if (singleConsultorio) {
+    const piso = catalogPisos.find((item) => item.id === singleConsultorio.piso_id) ?? null;
+    const torre = piso ? catalogTorres.find((item) => item.id === piso.torre_id) ?? null : null;
+    const complejo = catalogComplejos.find((item) => item.id === singleConsultorio.complejo_id) ?? null;
+    const institucion = complejo ? catalogInstituciones.find((item) => item.id === complejo.institucion_id) ?? null : null;
+    if (piso && torre && complejo && institucion) {
+      setInstitutionOption(institucion);
+      setComplexOption(complejo);
+      setTowerOption(torre);
+      setPisoOption(piso);
+      setConsultorioOption(singleConsultorio);
+      return;
+    }
+  }
+
+  if (catalogInstituciones.length !== 1) return;
+  const institucion = catalogInstituciones[0];
+  setInstitutionOption(institucion);
+
+  const institutionComplejos = uniqueById(catalogComplejos.filter((item) => item.institucion_id === institucion.id));
+  if (institutionComplejos.length !== 1) return;
+  const complejo = institutionComplejos[0];
+  setComplexOption(complejo);
+
+  const complexTorres = uniqueById(catalogTorres.filter((item) => item.complejo_id === complejo.id));
+  if (complexTorres.length !== 1) return;
+  const torre = complexTorres[0];
+  setTowerOption(torre);
+
+  const towerPisos = uniqueById(catalogPisos.filter((item) => item.complejo_id === complejo.id && item.torre_id === torre.id));
+  if (towerPisos.length !== 1) return;
+  const piso = towerPisos[0];
+  setPisoOption(piso);
+
+  const floorConsultorios = uniqueById(catalogConsultorios.filter((item) => item.complejo_id === complejo.id && item.piso_id === piso.id));
+  if (floorConsultorios.length === 1) {
+    setConsultorioOption(floorConsultorios[0]);
+  }
+}
+
 function onInstitutionChange() {
   if (!filteredComplejos.value.some((item) => item.id === form.complejo_id)) {
     clearLocation('institucion');
@@ -391,15 +432,10 @@ function syncPaciente() {
 }
 
 function defaultMedicoId() {
+  if (isDoctorUser() && !isAdminUser()) {
+    return medicos.value.find((medico) => medico.usuario_id === currentUser.value?.id)?.id ?? '';
+  }
   return medicos.value.length === 1 ? medicos.value[0].id : '';
-}
-
-function setDefaultLocation() {
-  setInstitutionOption(null);
-  clearLocation('institucion');
-  const uniqueConsultorios = uniqueById(consultorios.value);
-  if (uniqueConsultorios.length === 1 && setLocationFromConsultorio(uniqueConsultorios[0])) return;
-  autoFillSingleInstitution();
 }
 
 async function syncLocationForMedico(medicoId = form.medico_id) {
@@ -407,15 +443,15 @@ async function syncLocationForMedico(medicoId = form.medico_id) {
   setInstitutionOption(null);
   clearLocation('institucion');
 
-  if (requiresMedicoSelectionForLocation.value && !medicoId) {
-    applyLocationCatalogs(emptyLocationCatalogData(), '');
+  if (!medicoId) {
+    applyLocationCatalogs(emptyLocationCatalogData());
     return;
   }
 
   const data = await fetchScopedLocationCatalogs(medicoId);
   if (syncToken !== medicoLocationSyncToken.value || form.medico_id !== medicoId) return;
-  applyLocationCatalogs(data, medicoId);
-  setDefaultLocation();
+  applyLocationCatalogs(data);
+  setDefaultLocationFromCatalogs(data);
 }
 
 async function resetForm(options: ResetFormOptions = {}) {
@@ -460,10 +496,6 @@ async function loadTable() {
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
-}
-
-async function loadLocationCatalogs(medicoId = form.medico_id) {
-  applyLocationCatalogs(await fetchScopedLocationCatalogs(medicoId), medicoId);
 }
 
 async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
@@ -553,27 +585,16 @@ async function completeLocationCatalogParents(data: LocationCatalogData) {
 }
 
 async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
-  if (requiresMedicoSelectionForLocation.value && !medicoId) return emptyLocationCatalogData();
-  if (medicoId) return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
-  if (!shouldAggregateLocationCatalogsByMedico()) return completeLocationCatalogParents(await fetchLocationCatalogs(''));
-  const catalogRows = await Promise.all(medicos.value.map((medico) => fetchLocationCatalogs(medico.id)));
-  const mergedCatalogs = catalogRows.reduce((merged, catalogs) => mergeLocationCatalogData(merged, catalogs), emptyLocationCatalogData());
-  return completeLocationCatalogParents(mergedCatalogs);
+  if (!medicoId) return emptyLocationCatalogData();
+  return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
 }
 
-function shouldAggregateLocationCatalogsByMedico() {
-  if (isAdminUser() || requiresMedicoSelectionForLocation.value) return false;
-  return medicos.value.length > 0;
-}
-
-function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico_id) {
+function applyLocationCatalogs(data: LocationCatalogData) {
   consultorios.value = uniqueById(data.consultoriosData);
   instituciones.value = uniqueById(data.institucionesData);
   complejos.value = uniqueById(data.complejosData);
   torres.value = uniqueById(data.torresData);
   pisos.value = uniqueById(data.pisosData);
-  locationCatalogMedicoId.value = medicoId || null;
-  locationCatalogsLoaded.value = true;
 }
 
 function mergeLocationCatalogData(primary: LocationCatalogData, secondary: LocationCatalogData, keepPrimaryConsultorios = false) {
@@ -606,12 +627,14 @@ async function load() {
   }
 }
 
-async function onMedicoChange() {
+async function onMedicoChange(event?: Event) {
   error.value = '';
+  const selectedMedicoId = event?.target instanceof HTMLSelectElement ? event.target.value : form.medico_id;
+  form.medico_id = selectedMedicoId;
   form.paciente_id = '';
   pacienteSearch.value = '';
   try {
-    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(form.medico_id)]);
+    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(selectedMedicoId)]);
     syncPacienteLabel();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
@@ -661,14 +684,6 @@ function duplicateDetail(err: unknown): DuplicateWarning | null {
   };
 }
 
-watch(
-  () => form.medico_id,
-  (medicoId, previousMedicoId) => {
-    if (medicoId === previousMedicoId) return;
-    void onMedicoChange();
-  },
-);
-
 onMounted(load);
 </script>
 
@@ -708,6 +723,7 @@ onMounted(load);
             v-model="form.medico_id"
             required
             :disabled="medicos.length === 0"
+            @change="onMedicoChange"
           >
             <option value="">Selecciona médico</option>
             <option v-for="medico in medicoOptions" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>
