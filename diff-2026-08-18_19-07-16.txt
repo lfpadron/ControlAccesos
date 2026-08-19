@@ -1,0 +1,636 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index bad410d..ca0589e 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -23,6 +23,7 @@ import {
+   type Usuario,
+ } from '../api/client';
+ import { localTimeMinusHours, todayLocalIso } from '../dateUtils';
++import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ type DuplicateWarning = {
+   mensaje: string;
+@@ -57,14 +58,9 @@ const currentUser = ref<Usuario | null>(null);
+ const error = ref('');
+ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+-const institucionSearch = ref('');
+-const complejoSearch = ref('');
+-const torreSearch = ref('');
+-const pisoSearch = ref('');
+-const consultorioSearch = ref('');
+ const pacienteSearch = ref('');
+-const medicoSearch = ref('');
+ const locationCatalogMedicoId = ref<string | null>(null);
++const locationCatalogsLoaded = ref(false);
+ 
+ const form = reactive({
+   tipo: 'PROGRAMADA',
+@@ -87,36 +83,36 @@ const tableFilters = reactive({
+   hora_inicio: localTimeMinusHours(1),
+ });
+ 
++const medicoOptions = computed(() => sortByLabel(medicos.value, medicoLabel));
++const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
++
+ const filteredComplejos = computed(() => {
+   if (!form.institucion_id) return [];
+-  return complejos.value.filter((item) => item.institucion_id === form.institucion_id);
++  return sortByLabel(
++    uniqueById(complejos.value.filter((item) => item.institucion_id === form.institucion_id)),
++    (item) => item.nombre,
++  );
+ });
+ 
+ const filteredTorres = computed(() => {
+   if (!form.complejo_id) return [];
+-  return torres.value.filter((item) => item.complejo_id === form.complejo_id).sort((a, b) => a.nombre.localeCompare(b.nombre));
++  return sortByLabel(
++    uniqueById(torres.value.filter((item) => item.complejo_id === form.complejo_id)),
++    (item) => item.nombre,
++  );
+ });
+ 
+ const filteredPisos = computed(() => {
+   if (!form.complejo_id || !form.torre_id) return [];
+-  return pisos.value
+-    .filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id)
+-    .sort((a, b) => a.numero - b.numero);
++  return sortPisosByCodigo(
++    uniqueById(pisos.value.filter((item) => item.complejo_id === form.complejo_id && item.torre_id === form.torre_id)),
++  );
+ });
+ 
+ const filteredConsultorios = computed(() => {
+   if (!form.complejo_id || !form.piso_id) return [];
+-  return consultorios.value
+-    .filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id)
+-    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+-});
+-
+-const filteredMedicos = computed(() => {
+-  const q = normalizeAutocompleteText(medicoSearch.value);
+-  const rows = [...medicos.value].sort((a, b) => medicoLabel(a).localeCompare(medicoLabel(b), 'es', { sensitivity: 'base' }));
+-  if (!q) return rows;
+-  return rows.filter((item) =>
+-    normalizeAutocompleteText([item.nombre, item.apellidos, item.nombre_visible ?? '', medicoLabel(item)].join(' ')).includes(q),
++  return sortConsultoriosByCodigo(
++    uniqueById(consultorios.value.filter((item) => item.complejo_id === form.complejo_id && item.piso_id === form.piso_id)),
+   );
+ });
+ 
+@@ -146,16 +142,39 @@ function mergeUniqueById<T extends { id: string }>(first: T[], second: T[]) {
+   return uniqueById([...first, ...second]);
+ }
+ 
++function emptyLocationCatalogData(): LocationCatalogData {
++  return {
++    consultoriosData: [],
++    institucionesData: [],
++    complejosData: [],
++    torresData: [],
++    pisosData: [],
++  };
++}
++
++function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
++  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
++}
++
++function sortConsultoriosByCodigo(rows: Consultorio[]) {
++  return [...rows].sort((left, right) => {
++    const byCodigo = left.codigo.localeCompare(right.codigo, 'es', { numeric: true, sensitivity: 'base' });
++    if (byCodigo !== 0) return byCodigo;
++    return consultorioLabel(left).localeCompare(consultorioLabel(right), 'es', { numeric: true, sensitivity: 'base' });
++  });
++}
++
+ function institucionLabel(item: Institucion) {
+   return item.nombre;
+ }
+ 
+ function pisoLabel(item: Piso) {
+-  return [item.codigo || String(item.numero), item.nombre_visible].filter(Boolean).join(' · ');
++  return pisoCodigoVisibleLabel(item);
+ }
+ 
+ function consultorioLabel(item: Consultorio) {
+-  return [item.codigo, item.nombre_visible].filter(Boolean).join(' · ');
++  const visibleName = item.nombre_visible?.trim();
++  return visibleName ? `${item.codigo} - ${visibleName}` : item.codigo;
+ }
+ 
+ function torreLabel(item: Torre) {
+@@ -166,25 +185,6 @@ function medicoLabel(item: Medico) {
+   return [item.apellidos, item.nombre].filter(Boolean).join(' ');
+ }
+ 
+-function medicoIdentityValues(item: Medico) {
+-  return new Set(
+-    [item.nombre, item.apellidos].filter(Boolean).length
+-      ? [
+-          `${item.nombre} ${item.apellidos}`,
+-          `${item.apellidos} ${item.nombre}`,
+-          item.nombre_visible ?? '',
+-        ]
+-          .map(normalizeAutocompleteText)
+-          .filter(Boolean)
+-      : [normalizeAutocompleteText(item.nombre_visible ?? '')].filter(Boolean),
+-  );
+-}
+-
+-function sameMedicoIdentity(first: Medico, second: Medico) {
+-  const secondValues = medicoIdentityValues(second);
+-  return [...medicoIdentityValues(first)].some((value) => secondValues.has(value));
+-}
+-
+ function patientDisplayName(paciente: Paciente) {
+   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+@@ -217,39 +217,25 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string)
+   });
+ }
+ 
+-function setAutocompleteLabels() {
+-  const medico = medicos.value.find((item) => item.id === form.medico_id);
+-  medicoSearch.value = medico ? medicoLabel(medico) : '';
+-  institucionSearch.value = instituciones.value.find((item) => item.id === form.institucion_id)?.nombre ?? '';
+-  complejoSearch.value = complejos.value.find((item) => item.id === form.complejo_id)?.nombre ?? '';
+-  const torre = torres.value.find((item) => item.id === form.torre_id);
+-  torreSearch.value = torre ? torreLabel(torre) : '';
+-  const piso = pisos.value.find((item) => item.id === form.piso_id);
+-  pisoSearch.value = piso ? pisoLabel(piso) : '';
+-  const consultorio = consultorios.value.find((item) => item.id === form.consultorio_id);
+-  consultorioSearch.value = consultorio ? consultorioLabel(consultorio) : '';
++function syncPacienteLabel() {
+   const paciente = pacientes.value.find((item) => item.id === form.paciente_id);
+   pacienteSearch.value = paciente ? patientOptionLabel(paciente) : '';
+ }
+ 
+ function setInstitutionOption(item: Institucion | null) {
+   form.institucion_id = item?.id ?? '';
+-  institucionSearch.value = item ? institucionLabel(item) : '';
+ }
+ 
+ function setComplexOption(item: Complejo | null) {
+   form.complejo_id = item?.id ?? '';
+-  complejoSearch.value = item?.nombre ?? '';
+ }
+ 
+ function setTowerOption(item: Torre | null) {
+   form.torre_id = item?.id ?? '';
+-  torreSearch.value = item ? torreLabel(item) : '';
+ }
+ 
+ function setPisoOption(item: Piso | null) {
+   form.piso_id = item?.id ?? '';
+-  pisoSearch.value = item ? pisoLabel(item) : '';
+   if (item) {
+     const torre = torres.value.find((row) => row.id === item.torre_id) ?? null;
+     setTowerOption(torre);
+@@ -258,7 +244,6 @@ function setPisoOption(item: Piso | null) {
+ 
+ function setConsultorioOption(item: Consultorio | null) {
+   form.consultorio_id = item?.id ?? '';
+-  consultorioSearch.value = item ? consultorioLabel(item) : '';
+ }
+ 
+ function clearLocation(from: 'institucion' | 'complejo' | 'torre' | 'piso') {
+@@ -345,25 +330,17 @@ function setLocationFromConsultorio(consultorio: Consultorio) {
+   return true;
+ }
+ 
+-function syncInstitution() {
+-  const match = matchByLabel(instituciones.value, institucionSearch.value, institucionLabel);
+-  setInstitutionOption(match ?? null);
+-  if (!match) {
+-    clearLocation('institucion');
+-    return;
+-  }
++function onInstitutionChange() {
+   if (!filteredComplejos.value.some((item) => item.id === form.complejo_id)) {
+     clearLocation('institucion');
+   }
+   autoFillSingleComplex();
+ }
+ 
+-function syncComplex() {
+-  const match = matchByLabel(filteredComplejos.value, complejoSearch.value, (item) => item.nombre);
+-  setComplexOption(match ?? null);
+-  if (!match) {
+-    clearLocation('complejo');
+-    return;
++function onComplexChange() {
++  const selected = complejos.value.find((item) => item.id === form.complejo_id);
++  if (selected) {
++    setInstitutionOption(instituciones.value.find((item) => item.id === selected.institucion_id) ?? null);
+   }
+   if (!filteredTorres.value.some((item) => item.id === form.torre_id)) {
+     setTowerOption(null);
+@@ -374,78 +351,33 @@ function syncComplex() {
+   autoFillSingleTower();
+ }
+ 
+-function syncTorre() {
+-  const match = matchByLabel(filteredTorres.value, torreSearch.value, torreLabel);
+-  setTowerOption(match ?? null);
+-  if (!match) {
+-    clearLocation('torre');
+-    return;
+-  }
++function onTowerChange() {
+   if (!filteredPisos.value.some((item) => item.id === form.piso_id)) {
+     clearLocation('torre');
+   }
+   autoFillSinglePiso();
+-  autoFillSingleConsultorioInCurrentLocation();
+ }
+ 
+-function syncPiso() {
+-  const match = matchByLabel(filteredPisos.value, pisoSearch.value, pisoLabel);
+-  setPisoOption(match ?? null);
+-  if (!match) {
+-    clearLocation('piso');
+-    return;
+-  }
++function onPisoChange() {
+   if (!filteredConsultorios.value.some((item) => item.id === form.consultorio_id)) {
+     clearLocation('piso');
+   }
+   autoFillSingleConsultorio();
+ }
+ 
+-function syncConsultorio() {
+-  const match = matchByLabel(filteredConsultorios.value, consultorioSearch.value, consultorioLabel);
+-  setConsultorioOption(match ?? null);
+-}
+-
+-async function syncMedico() {
+-  const current = medicos.value.find((item) => item.id === form.medico_id);
+-  const currentMatches = current ? matchByLabel([current], medicoSearch.value, medicoLabel) : null;
+-  const match = currentMatches ?? matchByLabel(medicos.value, medicoSearch.value, medicoLabel);
+-  const nextId = match?.id ?? '';
+-  if (form.medico_id === nextId) return;
+-  form.medico_id = nextId;
+-  await onMedicoChange();
+-}
+-
+ function syncPaciente() {
+   const match = matchByLabel(pacientes.value, pacienteSearch.value, patientOptionLabel);
+   form.paciente_id = match?.id ?? '';
+ }
+ 
+-function ownMedico() {
+-  return medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id) ?? null;
+-}
+-
+-function defaultMedicoOptions() {
+-  const currentMedico = ownMedico();
+-  const rows = currentMedico ? [currentMedico, ...medicos.value.filter((medico) => medico.id !== currentMedico.id)] : medicos.value;
+-  return uniqueById(rows);
+-}
+-
+ function defaultMedicoId() {
+-  return defaultMedicoOptions()[0]?.id ?? '';
++  return medicos.value.length === 1 ? medicos.value[0].id : '';
+ }
+ 
+ function setDefaultLocation() {
+   setInstitutionOption(null);
+   clearLocation('institucion');
+-  const uniqueConsultorios = uniqueById(consultorios.value);
+-  if (uniqueConsultorios.length === 1 && setLocationFromConsultorio(uniqueConsultorios[0])) {
+-    setAutocompleteLabels();
+-    return;
+-  }
+   autoFillSingleInstitution();
+-  autoFillSingleConsultorioInCurrentLocation();
+-  setAutocompleteLabels();
+ }
+ 
+ async function resetForm(options: ResetFormOptions = {}) {
+@@ -456,18 +388,18 @@ async function resetForm(options: ResetFormOptions = {}) {
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+   if (!options.keepMedico) {
+-    await loadDefaultLocationCatalogs();
++    form.medico_id = defaultMedicoId();
+   } else if (!form.medico_id) {
+     form.medico_id = defaultMedicoId();
+   }
+   form.paciente_id = '';
+   pacienteSearch.value = '';
+-  if (locationCatalogMedicoId.value !== (form.medico_id || null)) {
++  if (!locationCatalogsLoaded.value || locationCatalogMedicoId.value !== (form.medico_id || null)) {
+     await loadLocationCatalogs(form.medico_id);
+   }
+   setDefaultLocation();
+   duplicateWarning.value = null;
+-  setAutocompleteLabels();
++  syncPacienteLabel();
+ }
+ 
+ async function loadPatientsForMedico() {
+@@ -476,7 +408,7 @@ async function loadPatientsForMedico() {
+     form.paciente_id = '';
+     pacienteSearch.value = '';
+   }
+-  setAutocompleteLabels();
++  syncPacienteLabel();
+ }
+ 
+ function tableRequestFilters() {
+@@ -496,7 +428,7 @@ async function loadTable() {
+ }
+ 
+ async function loadLocationCatalogs(medicoId = form.medico_id) {
+-  applyLocationCatalogs(await fetchLocationCatalogs(medicoId), medicoId);
++  applyLocationCatalogs(await fetchScopedLocationCatalogs(medicoId), medicoId);
+ }
+ 
+ async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
+@@ -511,6 +443,19 @@ async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<Locatio
+   return { consultoriosData, institucionesData, complejosData, torresData, pisosData };
+ }
+ 
++async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
++  if (medicoId) return fetchLocationCatalogs(medicoId);
++  if (!shouldAggregateLocationCatalogsByMedico()) return fetchLocationCatalogs('');
++  const catalogRows = await Promise.all(medicos.value.map((medico) => fetchLocationCatalogs(medico.id)));
++  return catalogRows.reduce((merged, catalogs) => mergeLocationCatalogData(merged, catalogs), emptyLocationCatalogData());
++}
++
++function shouldAggregateLocationCatalogsByMedico() {
++  const adminRoles = new Set(['ADMIN_SISTEMA', 'ADMIN_NEGOCIO']);
++  if (currentUser.value?.role_codes?.some((role) => adminRoles.has(role))) return false;
++  return medicos.value.length > 0;
++}
++
+ function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico_id) {
+   consultorios.value = uniqueById(data.consultoriosData);
+   instituciones.value = uniqueById(data.institucionesData);
+@@ -518,6 +463,7 @@ function applyLocationCatalogs(data: LocationCatalogData, medicoId = form.medico
+   torres.value = uniqueById(data.torresData);
+   pisos.value = uniqueById(data.pisosData);
+   locationCatalogMedicoId.value = medicoId || null;
++  locationCatalogsLoaded.value = true;
+ }
+ 
+ function mergeLocationCatalogData(primary: LocationCatalogData, secondary: LocationCatalogData, keepPrimaryConsultorios = false) {
+@@ -532,98 +478,6 @@ function mergeLocationCatalogData(primary: LocationCatalogData, secondary: Locat
+   };
+ }
+ 
+-function singleCatalogConsultorio(data: LocationCatalogData) {
+-  const rows = uniqueById(data.consultoriosData);
+-  return rows.length === 1 ? rows[0] : null;
+-}
+-
+-function hasFullLocationForSingleConsultorio(data: LocationCatalogData) {
+-  const consultorio = singleCatalogConsultorio(data);
+-  if (!consultorio) return true;
+-  const piso = data.pisosData.find((item) => item.id === consultorio.piso_id) ?? null;
+-  const complejo = data.complejosData.find((item) => item.id === consultorio.complejo_id) ?? null;
+-  const torre = piso ? data.torresData.find((item) => item.id === piso.torre_id) ?? null : null;
+-  const institucion = complejo ? data.institucionesData.find((item) => item.id === complejo.institucion_id) ?? null : null;
+-  return Boolean(piso && torre && complejo && institucion);
+-}
+-
+-async function completeSingleConsultorioLocation(data: LocationCatalogData) {
+-  if (hasFullLocationForSingleConsultorio(data)) return data;
+-  try {
+-    const accessibleCatalogs = await fetchLocationCatalogs('');
+-    return mergeLocationCatalogData(data, accessibleCatalogs, true);
+-  } catch {
+-    return data;
+-  }
+-}
+-
+-async function loadDefaultLocationCatalogs() {
+-  let fallback: { medicoId: string; catalogs: LocationCatalogData } | null = null;
+-  let lastError: unknown = null;
+-  const currentMedico = ownMedico();
+-  const lockedMedicoId = currentMedico?.id ?? '';
+-  const allMedicoOptions = defaultMedicoOptions();
+-  const primaryMedicoOptions = lockedMedicoId
+-    ? allMedicoOptions.filter((medico) => medico.id === lockedMedicoId)
+-    : allMedicoOptions;
+-  const catalogFallbackMedicos =
+-    lockedMedicoId && currentMedico
+-      ? allMedicoOptions.filter((medico) => medico.id !== lockedMedicoId && sameMedicoIdentity(currentMedico, medico))
+-      : [];
+-
+-  for (const medico of primaryMedicoOptions) {
+-    try {
+-      const catalogs = await fetchLocationCatalogs(medico.id);
+-      fallback ??= { medicoId: medico.id, catalogs };
+-      if (catalogs.consultoriosData.length > 0) {
+-        const completeCatalogs = await completeSingleConsultorioLocation(catalogs);
+-        form.medico_id = medico.id;
+-        applyLocationCatalogs(completeCatalogs, medico.id);
+-        return;
+-      }
+-    } catch (err) {
+-      lastError = err;
+-    }
+-  }
+-
+-  for (const medico of catalogFallbackMedicos) {
+-    try {
+-      const catalogs = await fetchLocationCatalogs(medico.id);
+-      if (catalogs.consultoriosData.length > 0) {
+-        const completeCatalogs = await completeSingleConsultorioLocation(catalogs);
+-        form.medico_id = lockedMedicoId;
+-        applyLocationCatalogs(completeCatalogs, lockedMedicoId);
+-        return;
+-      }
+-    } catch (err) {
+-      lastError = err;
+-    }
+-  }
+-
+-  try {
+-    const accessibleCatalogs = await fetchLocationCatalogs('');
+-    if (accessibleCatalogs.consultoriosData.length > 0) {
+-      const completeCatalogs = await completeSingleConsultorioLocation(accessibleCatalogs);
+-      form.medico_id = lockedMedicoId || fallback?.medicoId || defaultMedicoId();
+-      applyLocationCatalogs(completeCatalogs, form.medico_id);
+-      return;
+-    }
+-  } catch (err) {
+-    lastError = err;
+-  }
+-
+-  if (fallback) {
+-    form.medico_id = lockedMedicoId || fallback.medicoId;
+-    applyLocationCatalogs(fallback.catalogs, fallback.medicoId);
+-    return;
+-  }
+-  if (lastError) {
+-    throw lastError;
+-  }
+-  form.medico_id = '';
+-  await loadLocationCatalogs('');
+-}
+-
+ async function load() {
+   error.value = '';
+   try {
+@@ -651,7 +505,7 @@ async function onMedicoChange() {
+     clearLocation('institucion');
+     await Promise.all([loadPatientsForMedico(), loadLocationCatalogs(form.medico_id)]);
+     setDefaultLocation();
+-    setAutocompleteLabels();
++    syncPacienteLabel();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
+   }
+@@ -734,19 +588,16 @@ onMounted(load);
+         </div>
+         <div class="form-row">
+           <label for="medico">Médico</label>
+-          <input
++          <select
+             id="medico"
+-            v-model="medicoSearch"
+-            list="cita-medicos"
++            v-model="form.medico_id"
+             required
+             :disabled="medicos.length === 0"
+-            placeholder="Nombre o apellido"
+-            @input="syncMedico"
+-            @change="syncMedico"
+-          />
+-          <datalist id="cita-medicos">
+-            <option v-for="medico in filteredMedicos" :key="medico.id" :value="medicoLabel(medico)" />
+-          </datalist>
++            @change="onMedicoChange"
++          >
++            <option value="">Selecciona médico</option>
++            <option v-for="medico in medicoOptions" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="paciente">Paciente</label>
+@@ -766,81 +617,75 @@ onMounted(load);
+         </div>
+         <div class="form-row">
+           <label for="institucion">Institución</label>
+-          <input
++          <select
+             id="institucion"
+-            v-model="institucionSearch"
+-            list="cita-instituciones"
++            v-model="form.institucion_id"
+             required
+-            @input="syncInstitution"
+-            @change="syncInstitution"
+-          />
+-          <datalist id="cita-instituciones">
+-            <option v-for="institucion in instituciones" :key="institucion.id" :value="institucionLabel(institucion)" />
+-          </datalist>
++            :disabled="institutionOptions.length === 0"
++            @change="onInstitutionChange"
++          >
++            <option value="">Selecciona institución</option>
++            <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucion.id">
++              {{ institucionLabel(institucion) }}
++            </option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="complejo">Campus</label>
+-          <input
++          <select
+             id="complejo"
+-            v-model="complejoSearch"
+-            list="cita-complejos"
++            v-model="form.complejo_id"
+             required
+             :disabled="!form.institucion_id"
+-            @input="syncComplex"
+-            @change="syncComplex"
+-          />
+-          <datalist id="cita-complejos">
+-            <option v-for="complejo in filteredComplejos" :key="complejo.id" :value="complejo.nombre" />
+-          </datalist>
++            @change="onComplexChange"
++          >
++            <option value="">Selecciona campus</option>
++            <option v-for="complejo in filteredComplejos" :key="complejo.id" :value="complejo.id">{{ complejo.nombre }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="torre">Torre</label>
+-          <input
++          <select
+             id="torre"
+-            v-model="torreSearch"
+-            list="cita-torres"
++            v-model="form.torre_id"
+             required
+             :disabled="!form.complejo_id"
+-            @input="syncTorre"
+-            @change="syncTorre"
+-          />
+-          <datalist id="cita-torres">
+-            <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
+-          </datalist>
++            @change="onTowerChange"
++          >
++            <option value="">Selecciona torre</option>
++            <option v-for="torre in filteredTorres" :key="torre.id" :value="torre.id">{{ torreLabel(torre) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="piso">Piso</label>
+-          <input
++          <select
+             id="piso"
+-            v-model="pisoSearch"
+-            list="cita-pisos"
++            v-model="form.piso_id"
+             required
+             :disabled="!form.torre_id"
+-            @input="syncPiso"
+-            @change="syncPiso"
+-          />
+-          <datalist id="cita-pisos">
+-            <option v-for="piso in filteredPisos" :key="piso.id" :value="pisoLabel(piso)" />
+-          </datalist>
++            @change="onPisoChange"
++          >
++            <option value="">Selecciona piso</option>
++            <option v-for="piso in filteredPisos" :key="piso.id" :value="piso.id">{{ pisoLabel(piso) }}</option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="consultorio">Consultorio</label>
+-          <input
++          <select
+             id="consultorio"
+-            v-model="consultorioSearch"
+-            list="cita-consultorios"
++            v-model="form.consultorio_id"
+             required
+             :disabled="!form.piso_id"
+-            @input="syncConsultorio"
+-            @change="syncConsultorio"
+-          />
+-          <datalist id="cita-consultorios">
++          >
++            <option value="">Selecciona consultorio</option>
+             <option
+               v-for="consultorio in filteredConsultorios"
+               :key="consultorio.id"
+-              :value="consultorioLabel(consultorio)"
+-            />
+-          </datalist>
++              :value="consultorio.id"
++            >
++              {{ consultorioLabel(consultorio) }}
++            </option>
++          </select>
+         </div>
+         <div class="form-row">
+           <label for="notas">Notas operativas</label>
