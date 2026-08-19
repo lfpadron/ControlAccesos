@@ -377,6 +377,8 @@ function defaultMedicoId() {
 function setDefaultLocation() {
   setInstitutionOption(null);
   clearLocation('institucion');
+  const uniqueConsultorios = uniqueById(consultorios.value);
+  if (uniqueConsultorios.length === 1 && setLocationFromConsultorio(uniqueConsultorios[0])) return;
   autoFillSingleInstitution();
 }
 
@@ -443,11 +445,49 @@ async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<Locatio
   return { consultoriosData, institucionesData, complejosData, torresData, pisosData };
 }
 
+function locationParentsAreComplete(data: LocationCatalogData) {
+  const institucionesById = new Set(data.institucionesData.map((item) => item.id));
+  const complejosById = new Map(data.complejosData.map((item) => [item.id, item]));
+  const torresById = new Map(data.torresData.map((item) => [item.id, item]));
+  const pisosById = new Map(data.pisosData.map((item) => [item.id, item]));
+
+  for (const consultorio of uniqueById(data.consultoriosData)) {
+    const piso = pisosById.get(consultorio.piso_id);
+    const complejo = complejosById.get(consultorio.complejo_id);
+    if (!piso || !complejo) return false;
+    if (!torresById.has(piso.torre_id) || !institucionesById.has(complejo.institucion_id)) return false;
+  }
+
+  for (const piso of uniqueById(data.pisosData)) {
+    if (!torresById.has(piso.torre_id) || !complejosById.has(piso.complejo_id)) return false;
+  }
+
+  for (const torre of uniqueById(data.torresData)) {
+    if (!complejosById.has(torre.complejo_id)) return false;
+  }
+
+  for (const complejo of uniqueById(data.complejosData)) {
+    if (!institucionesById.has(complejo.institucion_id)) return false;
+  }
+
+  return true;
+}
+
+async function completeLocationCatalogParents(data: LocationCatalogData) {
+  if (locationParentsAreComplete(data)) return data;
+  try {
+    return mergeLocationCatalogData(data, await fetchLocationCatalogs(''), true);
+  } catch {
+    return data;
+  }
+}
+
 async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
-  if (medicoId) return fetchLocationCatalogs(medicoId);
-  if (!shouldAggregateLocationCatalogsByMedico()) return fetchLocationCatalogs('');
+  if (medicoId) return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
+  if (!shouldAggregateLocationCatalogsByMedico()) return completeLocationCatalogParents(await fetchLocationCatalogs(''));
   const catalogRows = await Promise.all(medicos.value.map((medico) => fetchLocationCatalogs(medico.id)));
-  return catalogRows.reduce((merged, catalogs) => mergeLocationCatalogData(merged, catalogs), emptyLocationCatalogData());
+  const mergedCatalogs = catalogRows.reduce((merged, catalogs) => mergeLocationCatalogData(merged, catalogs), emptyLocationCatalogData());
+  return completeLocationCatalogParents(mergedCatalogs);
 }
 
 function shouldAggregateLocationCatalogsByMedico() {
