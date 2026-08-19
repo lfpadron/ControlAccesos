@@ -1,0 +1,12 @@
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index facfbe1..29c6786 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -390,7 +390,6 @@ function syncPaciente() {
+ }
+ 
+ function defaultMedicoId() {
+-  if (requiresMedicoSelectionForLocation.value) return '';
+   return medicos.value.length === 1 ? medicos.value[0].id : '';
+ }
+ 

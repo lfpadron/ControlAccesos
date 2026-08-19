@@ -390,7 +390,6 @@ function syncPaciente() {
 }
 
 function defaultMedicoId() {
-  if (requiresMedicoSelectionForLocation.value) return '';
   return medicos.value.length === 1 ? medicos.value[0].id : '';
 }
 
