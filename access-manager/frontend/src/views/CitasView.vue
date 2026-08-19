@@ -117,6 +117,8 @@ const filteredConsultorios = computed(() => {
 });
 
 const visibleCitas = computed(() => uniqueById(citas.value));
+const requiresMedicoSelectionForLocation = computed(() => shouldRequireMedicoSelectionForLocation());
+const locationLockedUntilMedico = computed(() => requiresMedicoSelectionForLocation.value && !form.medico_id);
 
 const pacienteOptions = computed(() => {
   const q = normalizeAutocompleteText(pacienteSearch.value);
@@ -215,6 +217,23 @@ function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) 
     const label = normalizeAutocompleteText(labeler(item));
     return label === normalized || normalizeAutocompleteText(label.split(' · ')[0] ?? '') === normalized;
   });
+}
+
+function hasAnyRole(roleCodes: string[]) {
+  const roles = new Set(currentUser.value?.role_codes ?? []);
+  return roleCodes.some((role) => roles.has(role));
+}
+
+function isAdminUser() {
+  return hasAnyRole(['ADMIN_SISTEMA', 'ADMIN_NEGOCIO']);
+}
+
+function isAssistantUser() {
+  return hasAnyRole(['ASISTENTE', 'ASISTENTE_MEDICO', 'RECEPCIONISTA']);
+}
+
+function shouldRequireMedicoSelectionForLocation() {
+  return isAssistantUser() && !isAdminUser() && medicos.value.length > 0;
 }
 
 function syncPacienteLabel() {
@@ -371,6 +390,7 @@ function syncPaciente() {
 }
 
 function defaultMedicoId() {
+  if (requiresMedicoSelectionForLocation.value) return '';
   return medicos.value.length === 1 ? medicos.value[0].id : '';
 }
 
@@ -396,7 +416,9 @@ async function resetForm(options: ResetFormOptions = {}) {
   }
   form.paciente_id = '';
   pacienteSearch.value = '';
-  if (!locationCatalogsLoaded.value || locationCatalogMedicoId.value !== (form.medico_id || null)) {
+  if (locationLockedUntilMedico.value) {
+    applyLocationCatalogs(emptyLocationCatalogData(), '');
+  } else if (!locationCatalogsLoaded.value || locationCatalogMedicoId.value !== (form.medico_id || null)) {
     await loadLocationCatalogs(form.medico_id);
   }
   setDefaultLocation();
@@ -473,16 +495,54 @@ function locationParentsAreComplete(data: LocationCatalogData) {
   return true;
 }
 
+function locationParentSubset(primary: LocationCatalogData, available: LocationCatalogData): LocationCatalogData {
+  const primaryConsultorios = uniqueById(primary.consultoriosData);
+  const primaryPisos = uniqueById(primary.pisosData);
+  const primaryTorres = uniqueById(primary.torresData);
+  const primaryComplejos = uniqueById(primary.complejosData);
+  const availablePisosById = new Map(available.pisosData.map((item) => [item.id, item]));
+  const availableTorresById = new Map(available.torresData.map((item) => [item.id, item]));
+  const availableComplejosById = new Map(available.complejosData.map((item) => [item.id, item]));
+  const availableInstitucionesById = new Map(available.institucionesData.map((item) => [item.id, item]));
+
+  const pisoIds = new Set([...primaryPisos.map((item) => item.id), ...primaryConsultorios.map((item) => item.piso_id)]);
+  const parentPisos = uniqueById([...primaryPisos, ...[...pisoIds].map((id) => availablePisosById.get(id)).filter((item): item is Piso => Boolean(item))]);
+  const torreIds = new Set([...primaryTorres.map((item) => item.id), ...parentPisos.map((item) => item.torre_id)]);
+  const complejoIds = new Set([
+    ...primaryComplejos.map((item) => item.id),
+    ...primaryConsultorios.map((item) => item.complejo_id),
+    ...parentPisos.map((item) => item.complejo_id),
+  ]);
+  const parentTorres = uniqueById(
+    [...primaryTorres, ...[...torreIds].map((id) => availableTorresById.get(id)).filter((item): item is Torre => Boolean(item))],
+  );
+  parentTorres.forEach((item) => complejoIds.add(item.complejo_id));
+  const parentComplejos = uniqueById(
+    [...primaryComplejos, ...[...complejoIds].map((id) => availableComplejosById.get(id)).filter((item): item is Complejo => Boolean(item))],
+  );
+  const institucionIds = new Set(parentComplejos.map((item) => item.institucion_id));
+  const parentInstituciones = [...institucionIds].map((id) => availableInstitucionesById.get(id)).filter((item): item is Institucion => Boolean(item));
+
+  return {
+    consultoriosData: [],
+    institucionesData: parentInstituciones,
+    complejosData: parentComplejos,
+    torresData: parentTorres,
+    pisosData: parentPisos,
+  };
+}
+
 async function completeLocationCatalogParents(data: LocationCatalogData) {
   if (locationParentsAreComplete(data)) return data;
   try {
-    return mergeLocationCatalogData(data, await fetchLocationCatalogs(''), true);
+    return mergeLocationCatalogData(data, locationParentSubset(data, await fetchLocationCatalogs('')), true);
   } catch {
     return data;
   }
 }
 
 async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
+  if (requiresMedicoSelectionForLocation.value && !medicoId) return emptyLocationCatalogData();
   if (medicoId) return completeLocationCatalogParents(await fetchLocationCatalogs(medicoId));
   if (!shouldAggregateLocationCatalogsByMedico()) return completeLocationCatalogParents(await fetchLocationCatalogs(''));
   const catalogRows = await Promise.all(medicos.value.map((medico) => fetchLocationCatalogs(medico.id)));
@@ -491,8 +551,7 @@ async function fetchScopedLocationCatalogs(medicoId = form.medico_id): Promise<L
 }
 
 function shouldAggregateLocationCatalogsByMedico() {
-  const adminRoles = new Set(['ADMIN_SISTEMA', 'ADMIN_NEGOCIO']);
-  if (currentUser.value?.role_codes?.some((role) => adminRoles.has(role))) return false;
+  if (isAdminUser() || requiresMedicoSelectionForLocation.value) return false;
   return medicos.value.length > 0;
 }
 
@@ -661,7 +720,7 @@ onMounted(load);
             id="institucion"
             v-model="form.institucion_id"
             required
-            :disabled="institutionOptions.length === 0"
+            :disabled="locationLockedUntilMedico || institutionOptions.length === 0"
             @change="onInstitutionChange"
           >
             <option value="">Selecciona institución</option>
@@ -676,7 +735,7 @@ onMounted(load);
             id="complejo"
             v-model="form.complejo_id"
             required
-            :disabled="!form.institucion_id"
+            :disabled="locationLockedUntilMedico || !form.institucion_id"
             @change="onComplexChange"
           >
             <option value="">Selecciona campus</option>
@@ -689,7 +748,7 @@ onMounted(load);
             id="torre"
             v-model="form.torre_id"
             required
-            :disabled="!form.complejo_id"
+            :disabled="locationLockedUntilMedico || !form.complejo_id"
             @change="onTowerChange"
           >
             <option value="">Selecciona torre</option>
@@ -702,7 +761,7 @@ onMounted(load);
             id="piso"
             v-model="form.piso_id"
             required
-            :disabled="!form.torre_id"
+            :disabled="locationLockedUntilMedico || !form.torre_id"
             @change="onPisoChange"
           >
             <option value="">Selecciona piso</option>
@@ -715,7 +774,7 @@ onMounted(load);
             id="consultorio"
             v-model="form.consultorio_id"
             required
-            :disabled="!form.piso_id"
+            :disabled="locationLockedUntilMedico || !form.piso_id"
           >
             <option value="">Selecciona consultorio</option>
             <option
