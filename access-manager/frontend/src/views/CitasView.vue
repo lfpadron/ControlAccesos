@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   ApiError,
   createCita,
@@ -61,6 +61,7 @@ const duplicateWarning = ref<DuplicateWarning | null>(null);
 const pacienteSearch = ref('');
 const locationCatalogMedicoId = ref<string | null>(null);
 const locationCatalogsLoaded = ref(false);
+const medicoLocationSyncToken = ref(0);
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -401,6 +402,22 @@ function setDefaultLocation() {
   autoFillSingleInstitution();
 }
 
+async function syncLocationForMedico(medicoId = form.medico_id) {
+  const syncToken = ++medicoLocationSyncToken.value;
+  setInstitutionOption(null);
+  clearLocation('institucion');
+
+  if (requiresMedicoSelectionForLocation.value && !medicoId) {
+    applyLocationCatalogs(emptyLocationCatalogData(), '');
+    return;
+  }
+
+  const data = await fetchScopedLocationCatalogs(medicoId);
+  if (syncToken !== medicoLocationSyncToken.value || form.medico_id !== medicoId) return;
+  applyLocationCatalogs(data, medicoId);
+  setDefaultLocation();
+}
+
 async function resetForm(options: ResetFormOptions = {}) {
   form.tipo = 'PROGRAMADA';
   form.fecha_cita = todayLocalIso();
@@ -415,12 +432,7 @@ async function resetForm(options: ResetFormOptions = {}) {
   }
   form.paciente_id = '';
   pacienteSearch.value = '';
-  if (locationLockedUntilMedico.value) {
-    applyLocationCatalogs(emptyLocationCatalogData(), '');
-  } else if (!locationCatalogsLoaded.value || locationCatalogMedicoId.value !== (form.medico_id || null)) {
-    await loadLocationCatalogs(form.medico_id);
-  }
-  setDefaultLocation();
+  await syncLocationForMedico(form.medico_id);
   duplicateWarning.value = null;
   syncPacienteLabel();
 }
@@ -599,10 +611,7 @@ async function onMedicoChange() {
   form.paciente_id = '';
   pacienteSearch.value = '';
   try {
-    setInstitutionOption(null);
-    clearLocation('institucion');
-    await Promise.all([loadPatientsForMedico(), loadLocationCatalogs(form.medico_id)]);
-    setDefaultLocation();
+    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(form.medico_id)]);
     syncPacienteLabel();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
@@ -652,6 +661,14 @@ function duplicateDetail(err: unknown): DuplicateWarning | null {
   };
 }
 
+watch(
+  () => form.medico_id,
+  (medicoId, previousMedicoId) => {
+    if (medicoId === previousMedicoId) return;
+    void onMedicoChange();
+  },
+);
+
 onMounted(load);
 </script>
 
@@ -691,7 +708,6 @@ onMounted(load);
             v-model="form.medico_id"
             required
             :disabled="medicos.length === 0"
-            @change="onMedicoChange"
           >
             <option value="">Selecciona médico</option>
             <option v-for="medico in medicoOptions" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>
