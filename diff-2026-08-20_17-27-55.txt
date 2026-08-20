@@ -1,0 +1,286 @@
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index cc12c5a..3b64640 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -391,6 +391,11 @@ textarea {
+   width: 100%;
+ }
+ 
++input[readonly] {
++  background: #f7f9fc;
++  color: #405064;
++}
++
+ .combobox {
+   position: relative;
+ }
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 9612ffa..65f0026 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -59,7 +59,9 @@ const error = ref('');
+ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+ const pacienteSearch = ref('');
++const pacienteComboboxOpen = ref(false);
+ const medicoLocationSyncToken = ref(0);
++const patientNotRegisteredMessage = 'Error: el paciente no está registrado. Verifique.';
+ 
+ const form = reactive({
+   tipo: 'PROGRAMADA',
+@@ -117,6 +119,8 @@ const filteredConsultorios = computed(() => {
+ 
+ const visibleCitas = computed(() => uniqueById(citas.value));
+ const locationLockedUntilMedico = computed(() => !form.medico_id);
++const selectedPaciente = computed(() => pacientes.value.find((item) => item.id === form.paciente_id) ?? null);
++const selectedPacienteCelular = computed(() => selectedPaciente.value?.celular ?? '');
+ 
+ const pacienteOptions = computed(() => {
+   const q = normalizeAutocompleteText(pacienteSearch.value);
+@@ -126,6 +130,7 @@ const pacienteOptions = computed(() => {
+   if (!q) return rows;
+   return rows.filter((item) => normalizeAutocompleteText(patientOptionLabel(item)).includes(q));
+ });
++const showPacienteOptions = computed(() => pacienteComboboxOpen.value && Boolean(form.medico_id));
+ 
+ function uniqueById<T extends { id: string }>(rows: T[]) {
+   const seen = new Set<string>();
+@@ -196,6 +201,10 @@ function patientOptionLabel(paciente: Paciente) {
+   return `${name} · ${paciente.folio_paciente}`;
+ }
+ 
++function patientOptionMeta(paciente: Paciente) {
++  return [paciente.folio_paciente, paciente.celular ? `Cel. ${paciente.celular}` : 'Sin celular'].join(' · ');
++}
++
+ function statusLabel(status: string) {
+   if (status === 'NO_LLEGO') return 'No Se Presentó';
+   return status;
+@@ -431,6 +440,31 @@ function syncPaciente() {
+   form.paciente_id = match?.id ?? '';
+ }
+ 
++function onPacienteInput() {
++  pacienteComboboxOpen.value = true;
++  syncPaciente();
++}
++
++function openPacienteCombobox() {
++  if (form.medico_id) {
++    pacienteComboboxOpen.value = true;
++  }
++}
++
++function closePacienteCombobox() {
++  pacienteComboboxOpen.value = false;
++}
++
++function selectPaciente(paciente: Paciente) {
++  form.paciente_id = paciente.id;
++  pacienteSearch.value = patientOptionLabel(paciente);
++  pacienteComboboxOpen.value = false;
++}
++
++function patientIsRegisteredForSelectedMedico() {
++  return Boolean(form.medico_id && form.paciente_id && pacientes.value.some((item) => item.id === form.paciente_id));
++}
++
+ function defaultMedicoId() {
+   if (isDoctorUser() && !isAdminUser()) {
+     return medicos.value.find((medico) => medico.usuario_id === currentUser.value?.id)?.id ?? '';
+@@ -479,6 +513,7 @@ async function loadPatientsForMedico() {
+     form.paciente_id = '';
+     pacienteSearch.value = '';
+   }
++  pacienteComboboxOpen.value = false;
+   syncPacienteLabel();
+ }
+ 
+@@ -647,6 +682,11 @@ async function submit(confirmarDuplicado = false) {
+   if (!confirmarDuplicado) {
+     duplicateWarning.value = null;
+   }
++  syncPaciente();
++  if (!patientIsRegisteredForSelectedMedico()) {
++    error.value = patientNotRegisteredMessage;
++    return;
++  }
+   try {
+     const { institucion_id: _institucionId, torre_id: _torreId, ...payload } = form;
+     await createCita({ ...payload }, confirmarDuplicado);
+@@ -660,7 +700,8 @@ async function submit(confirmarDuplicado = false) {
+       duplicateWarning.value = duplicate;
+       return;
+     }
+-    error.value = err instanceof Error ? err.message : 'No fue posible crear la cita.';
++    const errorText = err instanceof Error ? err.message : '';
++    error.value = errorText.includes('paciente no está asignado') ? patientNotRegisteredMessage : errorText || 'No fue posible crear la cita.';
+   }
+ }
+ 
+@@ -731,19 +772,43 @@ onMounted(load);
+         </div>
+         <div class="form-row">
+           <label for="paciente">Paciente</label>
+-          <input
+-            id="paciente"
+-            v-model="pacienteSearch"
+-            list="cita-pacientes"
+-            required
+-            :disabled="!form.medico_id || pacientes.length === 0"
+-            placeholder="Apellido o nombre"
+-            @input="syncPaciente"
+-            @change="syncPaciente"
+-          />
+-          <datalist id="cita-pacientes">
+-            <option v-for="paciente in pacienteOptions" :key="paciente.id" :value="patientOptionLabel(paciente)" />
+-          </datalist>
++          <div class="combobox">
++            <input
++              id="paciente"
++              v-model="pacienteSearch"
++              autocomplete="off"
++              required
++              role="combobox"
++              aria-controls="cita-pacientes"
++              :aria-expanded="showPacienteOptions"
++              :disabled="!form.medico_id || pacientes.length === 0"
++              placeholder="Apellido o nombre"
++              @focus="openPacienteCombobox"
++              @input="onPacienteInput"
++              @change="syncPaciente"
++              @blur="closePacienteCombobox"
++            />
++            <div v-if="showPacienteOptions" id="cita-pacientes" class="combobox-list" role="listbox">
++              <button
++                v-for="paciente in pacienteOptions"
++                :key="paciente.id"
++                class="combobox-option"
++                :class="{ selected: paciente.id === form.paciente_id }"
++                type="button"
++                role="option"
++                :aria-selected="paciente.id === form.paciente_id"
++                @mousedown.prevent="selectPaciente(paciente)"
++              >
++                <span class="combobox-option-title">{{ patientOptionLabel(paciente) }}</span>
++                <span class="combobox-option-meta">{{ patientOptionMeta(paciente) }}</span>
++              </button>
++              <div v-if="pacienteOptions.length === 0" class="combobox-empty">Sin pacientes registrados para este médico.</div>
++            </div>
++          </div>
++        </div>
++        <div class="form-row">
++          <label for="paciente-celular">Celular</label>
++          <input id="paciente-celular" :value="selectedPacienteCelular" readonly placeholder="-" />
+         </div>
+         <div class="form-row">
+           <label for="institucion">Institución</label>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index bf5dc89..b95b0c8 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -24,7 +24,6 @@ const error = ref('');
+ const message = ref('');
+ const query = ref('');
+ const medicoId = ref('');
+-const medicoSearch = ref('');
+ const confirmPreferredOnly = ref(false);
+ const birthYearInput = ref<HTMLInputElement | null>(null);
+ const birthMonthInput = ref<HTMLInputElement | null>(null);
+@@ -82,8 +81,6 @@ function medicoLabel(medico: Medico) {
+ 
+ function setMedicoSelection(id: string) {
+   medicoId.value = id;
+-  const medico = medicos.value.find((item) => item.id === id);
+-  medicoSearch.value = medico ? medicoLabel(medico) : '';
+ }
+ 
+ function defaultMedicoId() {
+@@ -91,13 +88,6 @@ function defaultMedicoId() {
+   return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
+ }
+ 
+-function syncMedico() {
+-  const normalized = medicoSearch.value.trim().toLowerCase();
+-  const match = medicos.value.find((medico) => medicoLabel(medico).toLowerCase() === normalized);
+-  medicoId.value = match?.id ?? '';
+-  void onMedicoChange();
+-}
+-
+ function setBirthDateParts(value?: string | null) {
+   const [year = '', month = '', day = ''] = value?.split('-') ?? [];
+   birthDate.year = year;
+@@ -155,10 +145,15 @@ function setForm(paciente?: Paciente | null) {
+ }
+ 
+ async function load() {
+-  loading.value = true;
+   error.value = '';
++  if (!medicoId.value) {
++    pacientes.value = [];
++    loading.value = false;
++    return;
++  }
++  loading.value = true;
+   try {
+-    pacientes.value = await listPacientes({ medico_id: medicoId.value || undefined });
++    pacientes.value = await listPacientes({ medico_id: medicoId.value });
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes.';
+   } finally {
+@@ -167,14 +162,18 @@ async function load() {
+ }
+ 
+ async function search() {
++  error.value = '';
++  if (!medicoId.value) {
++    pacientes.value = [];
++    return;
++  }
+   if (!query.value.trim()) {
+     await load();
+     return;
+   }
+   loading.value = true;
+-  error.value = '';
+   try {
+-    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value || undefined);
++    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value);
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
+   } finally {
+@@ -297,17 +296,15 @@ onMounted(async () => {
+     <section class="panel">
+       <div class="form-row">
+         <label for="medico-pacientes">Médico</label>
+-        <input
++        <select
+           id="medico-pacientes"
+-          v-model="medicoSearch"
+-          list="medico-pacientes-options"
+-          placeholder="Buscar médico"
+-          @input="syncMedico"
+-          @change="syncMedico"
+-        />
+-        <datalist id="medico-pacientes-options">
+-          <option v-for="medico in medicos" :key="medico.id" :value="medicoLabel(medico)" />
+-        </datalist>
++          v-model="medicoId"
++          :disabled="medicos.length === 0"
++          @change="onMedicoChange"
++        >
++          <option value="">Selecciona médico</option>
++          <option v-for="medico in medicos" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>
++        </select>
+       </div>
+     </section>
+ 
+@@ -397,7 +394,7 @@ onMounted(async () => {
+             <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
+           </form>
+         </div>
+-        <p v-if="!canEditPatient" class="message">Selecciona un médico para crear o editar pacientes.</p>
++        <p v-if="!canEditPatient" class="message">Selecciona un médico para cargar pacientes.</p>
+         <p v-if="loading" class="message">Cargando...</p>
+         <div class="table-scroll">
+           <table>

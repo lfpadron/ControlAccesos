@@ -391,6 +391,11 @@ textarea {
   width: 100%;
 }
 
+input[readonly] {
+  background: #f7f9fc;
+  color: #405064;
+}
+
 .combobox {
   position: relative;
 }

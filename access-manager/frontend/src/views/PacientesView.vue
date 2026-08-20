@@ -24,7 +24,6 @@ const error = ref('');
 const message = ref('');
 const query = ref('');
 const medicoId = ref('');
-const medicoSearch = ref('');
 const confirmPreferredOnly = ref(false);
 const birthYearInput = ref<HTMLInputElement | null>(null);
 const birthMonthInput = ref<HTMLInputElement | null>(null);
@@ -82,20 +81,11 @@ function medicoLabel(medico: Medico) {
 
 function setMedicoSelection(id: string) {
   medicoId.value = id;
-  const medico = medicos.value.find((item) => item.id === id);
-  medicoSearch.value = medico ? medicoLabel(medico) : '';
 }
 
 function defaultMedicoId() {
   const ownMedico = medicos.value.find((medico) => medico.usuario_id && medico.usuario_id === currentUser.value?.id);
   return ownMedico?.id ?? (medicos.value.length === 1 ? medicos.value[0].id : '');
-}
-
-function syncMedico() {
-  const normalized = medicoSearch.value.trim().toLowerCase();
-  const match = medicos.value.find((medico) => medicoLabel(medico).toLowerCase() === normalized);
-  medicoId.value = match?.id ?? '';
-  void onMedicoChange();
 }
 
 function setBirthDateParts(value?: string | null) {
@@ -155,10 +145,15 @@ function setForm(paciente?: Paciente | null) {
 }
 
 async function load() {
-  loading.value = true;
   error.value = '';
+  if (!medicoId.value) {
+    pacientes.value = [];
+    loading.value = false;
+    return;
+  }
+  loading.value = true;
   try {
-    pacientes.value = await listPacientes({ medico_id: medicoId.value || undefined });
+    pacientes.value = await listPacientes({ medico_id: medicoId.value });
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes.';
   } finally {
@@ -167,14 +162,18 @@ async function load() {
 }
 
 async function search() {
+  error.value = '';
+  if (!medicoId.value) {
+    pacientes.value = [];
+    return;
+  }
   if (!query.value.trim()) {
     await load();
     return;
   }
   loading.value = true;
-  error.value = '';
   try {
-    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value || undefined);
+    pacientes.value = await searchPacientes(query.value.trim(), medicoId.value);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
   } finally {
@@ -297,17 +296,15 @@ onMounted(async () => {
     <section class="panel">
       <div class="form-row">
         <label for="medico-pacientes">Médico</label>
-        <input
+        <select
           id="medico-pacientes"
-          v-model="medicoSearch"
-          list="medico-pacientes-options"
-          placeholder="Buscar médico"
-          @input="syncMedico"
-          @change="syncMedico"
-        />
-        <datalist id="medico-pacientes-options">
-          <option v-for="medico in medicos" :key="medico.id" :value="medicoLabel(medico)" />
-        </datalist>
+          v-model="medicoId"
+          :disabled="medicos.length === 0"
+          @change="onMedicoChange"
+        >
+          <option value="">Selecciona médico</option>
+          <option v-for="medico in medicos" :key="medico.id" :value="medico.id">{{ medicoLabel(medico) }}</option>
+        </select>
       </div>
     </section>
 
@@ -397,7 +394,7 @@ onMounted(async () => {
             <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
           </form>
         </div>
-        <p v-if="!canEditPatient" class="message">Selecciona un médico para crear o editar pacientes.</p>
+        <p v-if="!canEditPatient" class="message">Selecciona un médico para cargar pacientes.</p>
         <p v-if="loading" class="message">Cargando...</p>
         <div class="table-scroll">
           <table>

@@ -59,7 +59,9 @@ const error = ref('');
 const message = ref('');
 const duplicateWarning = ref<DuplicateWarning | null>(null);
 const pacienteSearch = ref('');
+const pacienteComboboxOpen = ref(false);
 const medicoLocationSyncToken = ref(0);
+const patientNotRegisteredMessage = 'Error: el paciente no está registrado. Verifique.';
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -117,6 +119,8 @@ const filteredConsultorios = computed(() => {
 
 const visibleCitas = computed(() => uniqueById(citas.value));
 const locationLockedUntilMedico = computed(() => !form.medico_id);
+const selectedPaciente = computed(() => pacientes.value.find((item) => item.id === form.paciente_id) ?? null);
+const selectedPacienteCelular = computed(() => selectedPaciente.value?.celular ?? '');
 
 const pacienteOptions = computed(() => {
   const q = normalizeAutocompleteText(pacienteSearch.value);
@@ -126,6 +130,7 @@ const pacienteOptions = computed(() => {
   if (!q) return rows;
   return rows.filter((item) => normalizeAutocompleteText(patientOptionLabel(item)).includes(q));
 });
+const showPacienteOptions = computed(() => pacienteComboboxOpen.value && Boolean(form.medico_id));
 
 function uniqueById<T extends { id: string }>(rows: T[]) {
   const seen = new Set<string>();
@@ -194,6 +199,10 @@ function patientOptionLabel(paciente: Paciente) {
   const legalName = [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre].filter(Boolean).join(' ');
   const name = paciente.nombre_preferido && legalName ? `${legalName} · ${paciente.nombre_preferido}` : legalName || paciente.nombre_preferido || 'Sin nombre';
   return `${name} · ${paciente.folio_paciente}`;
+}
+
+function patientOptionMeta(paciente: Paciente) {
+  return [paciente.folio_paciente, paciente.celular ? `Cel. ${paciente.celular}` : 'Sin celular'].join(' · ');
 }
 
 function statusLabel(status: string) {
@@ -431,6 +440,31 @@ function syncPaciente() {
   form.paciente_id = match?.id ?? '';
 }
 
+function onPacienteInput() {
+  pacienteComboboxOpen.value = true;
+  syncPaciente();
+}
+
+function openPacienteCombobox() {
+  if (form.medico_id) {
+    pacienteComboboxOpen.value = true;
+  }
+}
+
+function closePacienteCombobox() {
+  pacienteComboboxOpen.value = false;
+}
+
+function selectPaciente(paciente: Paciente) {
+  form.paciente_id = paciente.id;
+  pacienteSearch.value = patientOptionLabel(paciente);
+  pacienteComboboxOpen.value = false;
+}
+
+function patientIsRegisteredForSelectedMedico() {
+  return Boolean(form.medico_id && form.paciente_id && pacientes.value.some((item) => item.id === form.paciente_id));
+}
+
 function defaultMedicoId() {
   if (isDoctorUser() && !isAdminUser()) {
     return medicos.value.find((medico) => medico.usuario_id === currentUser.value?.id)?.id ?? '';
@@ -479,6 +513,7 @@ async function loadPatientsForMedico() {
     form.paciente_id = '';
     pacienteSearch.value = '';
   }
+  pacienteComboboxOpen.value = false;
   syncPacienteLabel();
 }
 
@@ -647,6 +682,11 @@ async function submit(confirmarDuplicado = false) {
   if (!confirmarDuplicado) {
     duplicateWarning.value = null;
   }
+  syncPaciente();
+  if (!patientIsRegisteredForSelectedMedico()) {
+    error.value = patientNotRegisteredMessage;
+    return;
+  }
   try {
     const { institucion_id: _institucionId, torre_id: _torreId, ...payload } = form;
     await createCita({ ...payload }, confirmarDuplicado);
@@ -660,7 +700,8 @@ async function submit(confirmarDuplicado = false) {
       duplicateWarning.value = duplicate;
       return;
     }
-    error.value = err instanceof Error ? err.message : 'No fue posible crear la cita.';
+    const errorText = err instanceof Error ? err.message : '';
+    error.value = errorText.includes('paciente no está asignado') ? patientNotRegisteredMessage : errorText || 'No fue posible crear la cita.';
   }
 }
 
@@ -731,19 +772,43 @@ onMounted(load);
         </div>
         <div class="form-row">
           <label for="paciente">Paciente</label>
-          <input
-            id="paciente"
-            v-model="pacienteSearch"
-            list="cita-pacientes"
-            required
-            :disabled="!form.medico_id || pacientes.length === 0"
-            placeholder="Apellido o nombre"
-            @input="syncPaciente"
-            @change="syncPaciente"
-          />
-          <datalist id="cita-pacientes">
-            <option v-for="paciente in pacienteOptions" :key="paciente.id" :value="patientOptionLabel(paciente)" />
-          </datalist>
+          <div class="combobox">
+            <input
+              id="paciente"
+              v-model="pacienteSearch"
+              autocomplete="off"
+              required
+              role="combobox"
+              aria-controls="cita-pacientes"
+              :aria-expanded="showPacienteOptions"
+              :disabled="!form.medico_id || pacientes.length === 0"
+              placeholder="Apellido o nombre"
+              @focus="openPacienteCombobox"
+              @input="onPacienteInput"
+              @change="syncPaciente"
+              @blur="closePacienteCombobox"
+            />
+            <div v-if="showPacienteOptions" id="cita-pacientes" class="combobox-list" role="listbox">
+              <button
+                v-for="paciente in pacienteOptions"
+                :key="paciente.id"
+                class="combobox-option"
+                :class="{ selected: paciente.id === form.paciente_id }"
+                type="button"
+                role="option"
+                :aria-selected="paciente.id === form.paciente_id"
+                @mousedown.prevent="selectPaciente(paciente)"
+              >
+                <span class="combobox-option-title">{{ patientOptionLabel(paciente) }}</span>
+                <span class="combobox-option-meta">{{ patientOptionMeta(paciente) }}</span>
+              </button>
+              <div v-if="pacienteOptions.length === 0" class="combobox-empty">Sin pacientes registrados para este médico.</div>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="paciente-celular">Celular</label>
+          <input id="paciente-celular" :value="selectedPacienteCelular" readonly placeholder="-" />
         </div>
         <div class="form-row">
           <label for="institucion">Institución</label>
