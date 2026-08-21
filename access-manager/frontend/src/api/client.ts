@@ -751,6 +751,8 @@ export type CitaFilters = {
   paciente?: string;
   estado?: string;
   tipo?: string;
+  limit?: number;
+  offset?: number;
 };
 
 function queryString(params: Record<string, string | number | boolean | null | undefined>) {

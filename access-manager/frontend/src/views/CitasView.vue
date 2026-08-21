@@ -62,6 +62,8 @@ const pacienteSearch = ref('');
 const pacienteComboboxOpen = ref(false);
 const medicoLocationSyncToken = ref(0);
 const patientNotRegisteredMessage = 'Error: el paciente no está registrado. Verifique.';
+const tablePageSize = 20;
+const tablePage = ref(1);
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -80,6 +82,7 @@ const form = reactive({
 });
 
 const tableFilters = reactive({
+  medico_id: '',
   fecha_inicio: todayLocalIso(),
   hora_inicio: localTimeMinusHours(1),
 });
@@ -121,6 +124,8 @@ const visibleCitas = computed(() => uniqueById(citas.value));
 const locationLockedUntilMedico = computed(() => !form.medico_id);
 const selectedPaciente = computed(() => pacientes.value.find((item) => item.id === form.paciente_id) ?? null);
 const selectedPacienteCelular = computed(() => selectedPaciente.value?.celular ?? '');
+const canGoPreviousCitasPage = computed(() => tablePage.value > 1);
+const canGoNextCitasPage = computed(() => citas.value.length === tablePageSize);
 
 const pacienteOptions = computed(() => {
   const q = normalizeAutocompleteText(pacienteSearch.value);
@@ -519,18 +524,42 @@ async function loadPatientsForMedico() {
 
 function tableRequestFilters() {
   return {
+    medico_id: tableFilters.medico_id,
     fecha_inicio: tableFilters.fecha_inicio,
     hora_inicio: tableFilters.hora_inicio,
+    limit: tablePageSize,
+    offset: (tablePage.value - 1) * tablePageSize,
   };
+}
+
+function setTableFiltersForMedico(medicoId: string) {
+  tableFilters.medico_id = medicoId;
+  tableFilters.fecha_inicio = todayLocalIso();
+  tableFilters.hora_inicio = localTimeMinusHours(1);
+  tablePage.value = 1;
 }
 
 async function loadTable() {
   error.value = '';
+  if (!tableFilters.medico_id) {
+    citas.value = [];
+    return;
+  }
   try {
     citas.value = uniqueById(await listCitas(tableRequestFilters()));
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
+}
+
+async function loadTableFirstPage() {
+  tablePage.value = 1;
+  await loadTable();
+}
+
+async function loadTablePage(page: number) {
+  tablePage.value = Math.max(1, page);
+  await loadTable();
 }
 
 async function fetchLocationCatalogs(medicoId = form.medico_id): Promise<LocationCatalogData> {
@@ -647,16 +676,14 @@ function mergeLocationCatalogData(primary: LocationCatalogData, secondary: Locat
 async function load() {
   error.value = '';
   try {
-    const [citasData, userData, medicosData] = await Promise.all([
-      listCitas(tableRequestFilters()),
-      getCurrentUser(),
-      listAccessibleMedicos(),
-    ]);
-    citas.value = uniqueById(citasData);
+    const [userData, medicosData] = await Promise.all([getCurrentUser(), listAccessibleMedicos()]);
     currentUser.value = userData;
     medicos.value = medicosData;
     await resetForm();
-    await loadPatientsForMedico();
+    if (form.medico_id) {
+      setTableFiltersForMedico(form.medico_id);
+    }
+    await Promise.all([loadPatientsForMedico(), loadTable()]);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
@@ -668,8 +695,9 @@ async function onMedicoChange(event?: Event) {
   form.medico_id = selectedMedicoId;
   form.paciente_id = '';
   pacienteSearch.value = '';
+  setTableFiltersForMedico(selectedMedicoId);
   try {
-    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(selectedMedicoId)]);
+    await Promise.all([loadPatientsForMedico(), syncLocationForMedico(selectedMedicoId), loadTable()]);
     syncPacienteLabel();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar pacientes del médico.';
@@ -692,7 +720,10 @@ async function submit(confirmarDuplicado = false) {
     await createCita({ ...payload }, confirmarDuplicado);
     message.value = 'Cita creada.';
     duplicateWarning.value = null;
-    await resetForm();
+    await resetForm({ keepMedico: true });
+    if (form.medico_id) {
+      setTableFiltersForMedico(form.medico_id);
+    }
     await loadTable();
   } catch (err) {
     const duplicate = duplicateDetail(err);
@@ -706,8 +737,7 @@ async function submit(confirmarDuplicado = false) {
 }
 
 function clearTableFilters() {
-  tableFilters.fecha_inicio = todayLocalIso();
-  tableFilters.hora_inicio = localTimeMinusHours(1);
+  setTableFiltersForMedico(form.medico_id);
   void loadTable();
 }
 
@@ -911,7 +941,7 @@ onMounted(load);
       <div class="panel table-panel">
         <div class="page-header compact">
           <h2>Citas</h2>
-          <form class="inline-actions" @submit.prevent="loadTable">
+          <form class="inline-actions" @submit.prevent="loadTableFirstPage">
             <label class="inline-field">
               Fecha inicio
               <input v-model="tableFilters.fecha_inicio" type="date" />
@@ -924,6 +954,7 @@ onMounted(load);
             <button class="secondary" type="button" @click="clearTableFilters">Limpiar</button>
           </form>
         </div>
+        <p v-if="!tableFilters.medico_id" class="message">Selecciona un médico para cargar citas.</p>
         <div class="table-scroll">
           <table>
             <thead>
@@ -947,6 +978,17 @@ onMounted(load);
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="pagination-row">
+          <span>Página {{ tablePage }}</span>
+          <div class="actions-row">
+            <button class="secondary" type="button" :disabled="!canGoPreviousCitasPage" @click="loadTablePage(tablePage - 1)">
+              Anterior
+            </button>
+            <button class="secondary" type="button" :disabled="!canGoNextCitasPage" @click="loadTablePage(tablePage + 1)">
+              Siguiente
+            </button>
+          </div>
         </div>
       </div>
     </div>

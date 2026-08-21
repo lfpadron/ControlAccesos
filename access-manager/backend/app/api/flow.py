@@ -1277,6 +1277,8 @@ def list_citas(
     paciente: str | None = None,
     estado: str | None = None,
     tipo: str | None = None,
+    limit: int = Query(default=200, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: Usuario = CitasAgendaReadUser,
 ) -> list[CitaListItem]:
@@ -1296,7 +1298,7 @@ def list_citas(
         estado=estado,
         tipo=tipo,
     )
-    rows = db.execute(query.where(cita_agenda_access_predicate(db, current_user, business_today())).limit(200)).scalars()
+    rows = db.execute(query.where(cita_agenda_access_predicate(db, current_user, business_today())).offset(offset).limit(limit)).scalars()
     return [cita_item(db, row) for row in unique_citas(rows)]
 
 

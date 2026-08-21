@@ -537,6 +537,15 @@ input[readonly] {
   overflow-x: auto;
 }
 
+.pagination-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding-top: 0.75rem;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
