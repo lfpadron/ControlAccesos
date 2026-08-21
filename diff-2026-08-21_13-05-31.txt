@@ -1,0 +1,1196 @@
+diff --git a/access-manager/backend/alembic/env.py b/access-manager/backend/alembic/env.py
+index 90d680e..0300413 100644
+--- a/access-manager/backend/alembic/env.py
++++ b/access-manager/backend/alembic/env.py
+@@ -13,7 +13,11 @@ from app.core.config import get_settings
+ from app.models.base import Base
+ from app.models.institucion import Institucion  # noqa: F401
+ from app.models.complejo import Complejo  # noqa: F401
+-from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo  # noqa: F401
++from app.models.contacto import (  # noqa: F401
++    ContactoInstitucional,
++    ContactoInstitucionalComplejo,
++    ContactoInstitucionalTorre,
++)
+ from app.models.usuario import Usuario  # noqa: F401
+ from app.models.auditoria import Auditoria  # noqa: F401
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay  # noqa: F401
+diff --git a/access-manager/backend/app/api/contactos.py b/access-manager/backend/app/api/contactos.py
+index df7f843..6b79a79 100644
+--- a/access-manager/backend/app/api/contactos.py
++++ b/access-manager/backend/app/api/contactos.py
+@@ -1,17 +1,30 @@
+ from __future__ import annotations
+ 
++from datetime import date
+ from uuid import UUID
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+-from sqlalchemy import func, select
++from sqlalchemy import String, and_, cast, func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+ from app.core.security import require_role
+ from app.models.complejo import Complejo
+-from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo
++from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo, ContactoInstitucionalTorre
++from app.models.institucion import Institucion
++from app.models.operational import Torre
+ from app.models.usuario import Usuario
+-from app.schemas.contacto import ContactoInstitucionalCreate, ContactoInstitucionalRead, ContactoInstitucionalUpdate
++from app.schemas.contacto import (
++    ContactoInstitucionalCatalogosRead,
++    ContactoInstitucionalCreate,
++    ContactoInstitucionalRead,
++    ContactoInstitucionalUpdate,
++)
++from app.services.access_scope import (
++    complejo_catalog_access_predicate,
++    institucion_catalog_access_predicate,
++    torre_catalog_access_predicate,
++)
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ router = APIRouter()
+@@ -35,13 +48,51 @@ def validate_complexes(db: Session, complejo_ids: list[UUID]) -> None:
+     found = set(db.execute(select(Complejo.id).where(Complejo.id.in_(complejo_ids))).scalars())
+     missing = [str(item_id) for item_id in complejo_ids if item_id not in found]
+     if missing:
+-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Campus no encontrados: {', '.join(missing)}")
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail=f"Campus no encontrados: {', '.join(missing)}",
++        )
++
++
++def validate_torres(db: Session, torre_ids: list[UUID]) -> None:
++    if not torre_ids:
++        return
++    found = set(db.execute(select(Torre.id).where(Torre.id.in_(torre_ids))).scalars())
++    missing = [str(item_id) for item_id in torre_ids if item_id not in found]
++    if missing:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail=f"Torres no encontradas: {', '.join(missing)}",
++        )
++
++
++def unique_uuid_list(values: list[UUID]) -> list[UUID]:
++    unique: list[UUID] = []
++    seen: set[UUID] = set()
++    for value in values:
++        if value in seen:
++            continue
++        unique.append(value)
++        seen.add(value)
++    return unique
+ 
+ 
+ def complex_ids_for(db: Session, contacto_id: UUID) -> list[UUID]:
+     return list(
+         db.execute(
+-            select(ContactoInstitucionalComplejo.complejo_id).where(ContactoInstitucionalComplejo.contacto_id == contacto_id)
++            select(ContactoInstitucionalComplejo.complejo_id)
++            .where(ContactoInstitucionalComplejo.contacto_id == contacto_id)
++            .order_by(ContactoInstitucionalComplejo.complejo_id)
++        ).scalars()
++    )
++
++
++def torre_ids_for(db: Session, contacto_id: UUID) -> list[UUID]:
++    return list(
++        db.execute(
++            select(ContactoInstitucionalTorre.torre_id)
++            .where(ContactoInstitucionalTorre.contacto_id == contacto_id)
++            .order_by(ContactoInstitucionalTorre.torre_id)
+         ).scalars()
+     )
+ 
+@@ -55,6 +106,7 @@ def response_for(db: Session, item: ContactoInstitucional) -> ContactoInstitucio
+         tipo_contacto_descripcion=item.tipo_contacto_descripcion,
+         notas=item.notas,
+         complejo_ids=complex_ids_for(db, item.id),
++        torre_ids=torre_ids_for(db, item.id),
+         created_at=item.created_at,
+         updated_at=item.updated_at,
+     )
+@@ -62,19 +114,236 @@ def response_for(db: Session, item: ContactoInstitucional) -> ContactoInstitucio
+ 
+ def replace_complexes(db: Session, contacto_id: UUID, complejo_ids: list[UUID]) -> None:
+     db.query(ContactoInstitucionalComplejo).filter(ContactoInstitucionalComplejo.contacto_id == contacto_id).delete()
+-    for complejo_id in complejo_ids:
++    for complejo_id in unique_uuid_list(complejo_ids):
+         db.add(ContactoInstitucionalComplejo(contacto_id=contacto_id, complejo_id=complejo_id))
+ 
+ 
++def replace_torres(db: Session, contacto_id: UUID, torre_ids: list[UUID]) -> None:
++    db.query(ContactoInstitucionalTorre).filter(ContactoInstitucionalTorre.contacto_id == contacto_id).delete()
++    for torre_id in unique_uuid_list(torre_ids):
++        db.add(ContactoInstitucionalTorre(contacto_id=contacto_id, torre_id=torre_id))
++
++
++def no_location_scope_predicate():
++    has_complex = (
++        select(ContactoInstitucionalComplejo.contacto_id)
++        .where(ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id)
++        .exists()
++    )
++    has_tower = (
++        select(ContactoInstitucionalTorre.contacto_id)
++        .where(ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id)
++        .exists()
++    )
++    return and_(~has_complex, ~has_tower)
++
++
++def contact_access_predicate(db: Session, user: Usuario, today: date):
++    complex_access = (
++        select(ContactoInstitucionalComplejo.contacto_id)
++        .join(Complejo, Complejo.id == ContactoInstitucionalComplejo.complejo_id)
++        .where(
++            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
++            complejo_catalog_access_predicate(db, user, today),
++        )
++        .exists()
++    )
++    tower_access = (
++        select(ContactoInstitucionalTorre.contacto_id)
++        .join(Torre, Torre.id == ContactoInstitucionalTorre.torre_id)
++        .where(
++            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
++            torre_catalog_access_predicate(db, user, today),
++        )
++        .exists()
++    )
++    return or_(no_location_scope_predicate(), complex_access, tower_access)
++
++
++def contact_institution_predicate(institucion_id: UUID):
++    complex_in_institution = (
++        select(ContactoInstitucionalComplejo.contacto_id)
++        .join(Complejo, Complejo.id == ContactoInstitucionalComplejo.complejo_id)
++        .where(
++            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
++            Complejo.institucion_id == institucion_id,
++        )
++        .exists()
++    )
++    tower_in_institution = (
++        select(ContactoInstitucionalTorre.contacto_id)
++        .join(Torre, Torre.id == ContactoInstitucionalTorre.torre_id)
++        .join(Complejo, Complejo.id == Torre.complejo_id)
++        .where(
++            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
++            Complejo.institucion_id == institucion_id,
++        )
++        .exists()
++    )
++    return or_(no_location_scope_predicate(), complex_in_institution, tower_in_institution)
++
++
++def contact_complex_predicate(complejo_id: UUID):
++    complex_match = (
++        select(ContactoInstitucionalComplejo.contacto_id)
++        .where(
++            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
++            ContactoInstitucionalComplejo.complejo_id == complejo_id,
++        )
++        .exists()
++    )
++    tower_in_complex = (
++        select(ContactoInstitucionalTorre.contacto_id)
++        .join(Torre, Torre.id == ContactoInstitucionalTorre.torre_id)
++        .where(
++            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
++            Torre.complejo_id == complejo_id,
++        )
++        .exists()
++    )
++    return or_(no_location_scope_predicate(), complex_match, tower_in_complex)
++
++
++def contact_tower_predicate(torre_id: UUID):
++    tower_parent_complex = select(Torre.complejo_id).where(Torre.id == torre_id).scalar_subquery()
++    complex_parent_match = (
++        select(ContactoInstitucionalComplejo.contacto_id)
++        .where(
++            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
++            ContactoInstitucionalComplejo.complejo_id == tower_parent_complex,
++        )
++        .exists()
++    )
++    tower_match = (
++        select(ContactoInstitucionalTorre.contacto_id)
++        .where(
++            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
++            ContactoInstitucionalTorre.torre_id == torre_id,
++        )
++        .exists()
++    )
++    return or_(no_location_scope_predicate(), complex_parent_match, tower_match)
++
++
++def ensure_accessible_filters(
++    db: Session,
++    current_user: Usuario,
++    today: date,
++    institucion_id: UUID | None,
++    complejo_id: UUID | None,
++    torre_id: UUID | None,
++) -> None:
++    if institucion_id is not None:
++        exists = (
++            db.execute(
++                select(Institucion.id)
++                .where(
++                    Institucion.id == institucion_id,
++                    Institucion.activo.is_(True),
++                    institucion_catalog_access_predicate(db, current_user, today),
++                )
++                .limit(1)
++            ).first()
++            is not None
++        )
++        if not exists:
++            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institución no encontrada.")
++    if complejo_id is not None:
++        conditions = [
++            Complejo.id == complejo_id,
++            Complejo.activo.is_(True),
++            complejo_catalog_access_predicate(db, current_user, today),
++        ]
++        if institucion_id is not None:
++            conditions.append(Complejo.institucion_id == institucion_id)
++        exists = db.execute(select(Complejo.id).where(*conditions).limit(1)).first() is not None
++        if not exists:
++            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campus no encontrado.")
++    if torre_id is not None:
++        query = select(Torre.id).join(Complejo, Complejo.id == Torre.complejo_id).where(
++            Torre.id == torre_id,
++            Torre.activo.is_(True),
++            torre_catalog_access_predicate(db, current_user, today),
++        )
++        if complejo_id is not None:
++            query = query.where(Torre.complejo_id == complejo_id)
++        if institucion_id is not None:
++            query = query.where(Complejo.institucion_id == institucion_id)
++        if db.execute(query.limit(1)).first() is None:
++            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Torre no encontrada.")
++
++
++@router.get("/catalogos", response_model=ContactoInstitucionalCatalogosRead)
++def list_catalogos_contactos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = AdminUser,
++) -> ContactoInstitucionalCatalogosRead:
++    today = date.today()
++    instituciones = list(
++        db.execute(
++            select(Institucion)
++            .where(
++                Institucion.activo.is_(True),
++                institucion_catalog_access_predicate(db, current_user, today),
++            )
++            .order_by(func.lower(Institucion.nombre), Institucion.id)
++        ).scalars()
++    )
++    complejos = list(
++        db.execute(
++            select(Complejo)
++            .where(
++                Complejo.activo.is_(True),
++                complejo_catalog_access_predicate(db, current_user, today),
++            )
++            .order_by(func.lower(Complejo.nombre), Complejo.id)
++        ).scalars()
++    )
++    torres = list(
++        db.execute(
++            select(Torre)
++            .where(
++                Torre.activo.is_(True),
++                torre_catalog_access_predicate(db, current_user, today),
++            )
++            .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
++        ).scalars()
++    )
++    return ContactoInstitucionalCatalogosRead(instituciones=instituciones, complejos=complejos, torres=torres)
++
++
+ @router.get("", response_model=list[ContactoInstitucionalRead])
+ def list_contactos(
+     q: str | None = Query(default=None),
++    institucion_id: UUID | None = Query(default=None),
++    complejo_id: UUID | None = Query(default=None),
++    torre_id: UUID | None = Query(default=None),
+     db: Session = Depends(get_db),
+-    _current_user: Usuario = AdminUser,
++    current_user: Usuario = AdminUser,
+ ) -> list[ContactoInstitucionalRead]:
+-    query = select(ContactoInstitucional)
+-    if q:
+-        query = query.where(func.lower(ContactoInstitucional.nombre).like(f"%{q.strip().lower()}%"))
++    term = (q or "").strip().lower()
++    if term and institucion_id is None:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Seleccione una institución para buscar contactos.",
++        )
++    today = date.today()
++    ensure_accessible_filters(db, current_user, today, institucion_id, complejo_id, torre_id)
++    query = select(ContactoInstitucional).where(contact_access_predicate(db, current_user, today))
++    if institucion_id is not None:
++        query = query.where(contact_institution_predicate(institucion_id))
++    if complejo_id is not None:
++        query = query.where(contact_complex_predicate(complejo_id))
++    if torre_id is not None:
++        query = query.where(contact_tower_predicate(torre_id))
++    if term:
++        like_term = f"%{term}%"
++        query = query.where(
++            or_(
++                func.lower(ContactoInstitucional.nombre).like(like_term),
++                func.lower(cast(ContactoInstitucional.medios_contacto, String)).like(like_term),
++            )
++        )
+     items = db.execute(query.order_by(ContactoInstitucional.nombre)).scalars()
+     return [response_for(db, item) for item in items]
+ 
+@@ -87,6 +356,7 @@ def create_contacto(
+     current_user: Usuario = AdminUser,
+ ) -> ContactoInstitucionalRead:
+     validate_complexes(db, payload.complejo_ids)
++    validate_torres(db, payload.torre_ids)
+     item = ContactoInstitucional(
+         nombre=payload.nombre,
+         medios_contacto=[medio.model_dump() for medio in payload.medios_contacto],
+@@ -99,6 +369,7 @@ def create_contacto(
+     db.add(item)
+     db.flush()
+     replace_complexes(db, item.id, payload.complejo_ids)
++    replace_torres(db, item.id, payload.torre_ids)
+     record_audit_event(
+         db,
+         evento="CONTACTO_INSTITUCIONAL_CREADO",
+@@ -107,7 +378,11 @@ def create_contacto(
+         usuario_id=current_user.id,
+         canal="WEB",
+         ip_origen=client_ip(request),
+-        valor_despues={**audit_safe_dict(item), "complejo_ids": [str(item_id) for item_id in payload.complejo_ids]},
++        valor_despues={
++            **audit_safe_dict(item),
++            "complejo_ids": [str(item_id) for item_id in payload.complejo_ids],
++            "torre_ids": [str(item_id) for item_id in payload.torre_ids],
++        },
+     )
+     db.commit()
+     db.refresh(item)
+@@ -124,9 +399,14 @@ def update_contacto(
+     current_user: Usuario = AdminUser,
+ ) -> ContactoInstitucionalRead:
+     item = exists_or_404(db, contacto_id)
+-    before = {**audit_safe_dict(item), "complejo_ids": [str(item_id) for item_id in complex_ids_for(db, item.id)]}
++    before = {
++        **audit_safe_dict(item),
++        "complejo_ids": [str(item_id) for item_id in complex_ids_for(db, item.id)],
++        "torre_ids": [str(item_id) for item_id in torre_ids_for(db, item.id)],
++    }
+     data = payload.model_dump(exclude_unset=True)
+     complejo_ids = data.pop("complejo_ids", None)
++    torre_ids = data.pop("torre_ids", None)
+     if "medios_contacto" in data and data["medios_contacto"] is not None:
+         data["medios_contacto"] = [medio.model_dump() for medio in payload.medios_contacto or []]
+     if "tipo_contacto_descripcion" in data and data["tipo_contacto_descripcion"]:
+@@ -138,6 +418,9 @@ def update_contacto(
+     if complejo_ids is not None:
+         validate_complexes(db, complejo_ids)
+         replace_complexes(db, item.id, complejo_ids)
++    if torre_ids is not None:
++        validate_torres(db, torre_ids)
++        replace_torres(db, item.id, torre_ids)
+     db.flush()
+     record_audit_event(
+         db,
+@@ -148,7 +431,11 @@ def update_contacto(
+         canal="WEB",
+         ip_origen=client_ip(request),
+         valor_antes=before,
+-        valor_despues={**audit_safe_dict(item), "complejo_ids": [str(item_id) for item_id in complex_ids_for(db, item.id)]},
++        valor_despues={
++            **audit_safe_dict(item),
++            "complejo_ids": [str(item_id) for item_id in complex_ids_for(db, item.id)],
++            "torre_ids": [str(item_id) for item_id in torre_ids_for(db, item.id)],
++        },
+     )
+     db.commit()
+     db.refresh(item)
+diff --git a/access-manager/backend/app/models/__init__.py b/access-manager/backend/app/models/__init__.py
+index 7510d9b..6a11351 100644
+--- a/access-manager/backend/app/models/__init__.py
++++ b/access-manager/backend/app/models/__init__.py
+@@ -1,6 +1,6 @@
+ from app.models.auditoria import Auditoria
+ from app.models.complejo import Complejo
+-from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo
++from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo, ContactoInstitucionalTorre
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
+ from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+ from app.models.kiosk import Kiosko, PuntoAcceso
+@@ -29,6 +29,7 @@ __all__ = [
+     "Complejo",
+     "ContactoInstitucional",
+     "ContactoInstitucionalComplejo",
++    "ContactoInstitucionalTorre",
+     "ClusterTurnos",
+     "Consultorio",
+     "ConsultorioCluster",
+diff --git a/access-manager/backend/app/models/contacto.py b/access-manager/backend/app/models/contacto.py
+index 567c4d3..e231410 100644
+--- a/access-manager/backend/app/models/contacto.py
++++ b/access-manager/backend/app/models/contacto.py
+@@ -39,3 +39,18 @@ class ContactoInstitucionalComplejo(Base):
+         ForeignKey("complejos.id", name="fk_contacto_complejo_complejo"),
+         primary_key=True,
+     )
++
++
++class ContactoInstitucionalTorre(Base):
++    __tablename__ = "contactos_institucionales_torres"
++
++    contacto_id: Mapped[uuid.UUID] = mapped_column(
++        UUID(as_uuid=True),
++        ForeignKey("contactos_institucionales.id", name="fk_contacto_torre_contacto", ondelete="CASCADE"),
++        primary_key=True,
++    )
++    torre_id: Mapped[uuid.UUID] = mapped_column(
++        UUID(as_uuid=True),
++        ForeignKey("torres.id", name="fk_contacto_torre_torre"),
++        primary_key=True,
++    )
+diff --git a/access-manager/backend/app/schemas/contacto.py b/access-manager/backend/app/schemas/contacto.py
+index 5244ddb..2fb65cd 100644
+--- a/access-manager/backend/app/schemas/contacto.py
++++ b/access-manager/backend/app/schemas/contacto.py
+@@ -5,6 +5,10 @@ from uuid import UUID
+ 
+ from pydantic import BaseModel, ConfigDict, Field, model_validator
+ 
++from app.schemas.complejo import ComplejoRead
++from app.schemas.institucion import InstitucionRead
++from app.schemas.operational import TorreRead
++
+ MEDIO_TIPOS = {"CELULAR", "CORREO"}
+ CONTACTO_TIPOS = {"PRIMARIO", "SECUNDARIO", "SOLO_EMERGENCIAS", "OTRO"}
+ 
+@@ -27,6 +31,7 @@ class ContactoInstitucionalBase(BaseModel):
+     tipo_contacto_descripcion: str | None = Field(default=None, max_length=50)
+     notas: str | None = Field(default=None, max_length=1000)
+     complejo_ids: list[UUID] = Field(default_factory=list)
++    torre_ids: list[UUID] = Field(default_factory=list)
+ 
+     @model_validator(mode="after")
+     def validate_tipo_contacto(self):
+@@ -48,6 +53,7 @@ class ContactoInstitucionalUpdate(BaseModel):
+     tipo_contacto_descripcion: str | None = Field(default=None, max_length=50)
+     notas: str | None = Field(default=None, max_length=1000)
+     complejo_ids: list[UUID] | None = None
++    torre_ids: list[UUID] | None = None
+ 
+     @model_validator(mode="after")
+     def validate_tipo_contacto(self):
+@@ -66,7 +72,14 @@ class ContactoInstitucionalRead(BaseModel):
+     tipo_contacto_descripcion: str | None
+     notas: str | None
+     complejo_ids: list[UUID]
++    torre_ids: list[UUID]
+     created_at: datetime
+     updated_at: datetime
+ 
+     model_config = ConfigDict(from_attributes=True)
++
++
++class ContactoInstitucionalCatalogosRead(BaseModel):
++    instituciones: list[InstitucionRead]
++    complejos: list[ComplejoRead]
++    torres: list[TorreRead]
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index a0c8ca0..d3a1146 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -1010,6 +1010,125 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
+     assert public_response.json()["turnos"][0]["turno"] == llamado["turno"]
+ 
+ 
++def test_contactos_institucionales_filter_by_institution_and_tower(
++    client: TestClient,
++    auth_headers: dict[str, str],
++) -> None:
++    suffix = uuid4().hex[:8]
++
++    institucion_a = assert_created(
++        client.post(
++            "/api/instituciones",
++            headers=auth_headers,
++            json={"nombre": f"Institución Contacto A {suffix}"},
++        )
++    )
++    complejo_a = assert_created(
++        client.post(
++            "/api/complejos",
++            headers=auth_headers,
++            json={
++                "institucion_id": institucion_a["id"],
++                "nombre": f"Campus Contacto A {suffix}",
++                "zona_horaria": "America/Mexico_City",
++            },
++        )
++    )
++    torre_a = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={"complejo_id": complejo_a["id"], "nombre": f"Torre Contacto A {suffix}", "numero_pisos": 1},
++        )
++    )
++    institucion_b = assert_created(
++        client.post(
++            "/api/instituciones",
++            headers=auth_headers,
++            json={"nombre": f"Institución Contacto B {suffix}"},
++        )
++    )
++    complejo_b = assert_created(
++        client.post(
++            "/api/complejos",
++            headers=auth_headers,
++            json={
++                "institucion_id": institucion_b["id"],
++                "nombre": f"Campus Contacto B {suffix}",
++                "zona_horaria": "America/Mexico_City",
++            },
++        )
++    )
++    torre_b = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={"complejo_id": complejo_b["id"], "nombre": f"Torre Contacto B {suffix}", "numero_pisos": 1},
++        )
++    )
++
++    correo_a = f"contacto-a-{suffix}@example.com"
++    contacto_a = assert_created(
++        client.post(
++            "/api/contactos-institucionales",
++            headers=auth_headers,
++            json={
++                "nombre": f"Contacto A {suffix}",
++                "tipo_contacto": "PRIMARIO",
++                "medios_contacto": [{"tipo": "CELULAR", "valor": "5550000000"}, {"tipo": "CORREO", "valor": correo_a}],
++                "complejo_ids": [complejo_a["id"]],
++                "torre_ids": [torre_a["id"]],
++            },
++        )
++    )
++    contacto_b = assert_created(
++        client.post(
++            "/api/contactos-institucionales",
++            headers=auth_headers,
++            json={
++                "nombre": f"Contacto B {suffix}",
++                "tipo_contacto": "SECUNDARIO",
++                "medios_contacto": [
++                    {"tipo": "CELULAR", "valor": "5551111111"},
++                    {"tipo": "CORREO", "valor": f"contacto-b-{suffix}@example.com"},
++                ],
++                "complejo_ids": [complejo_b["id"]],
++                "torre_ids": [torre_b["id"]],
++            },
++        )
++    )
++
++    assert contacto_a["torre_ids"] == [torre_a["id"]]
++    assert contacto_b["torre_ids"] == [torre_b["id"]]
++
++    missing_scope = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
++    assert missing_scope.status_code == 422, missing_scope.text
++
++    scoped_search = client.get(
++        "/api/contactos-institucionales",
++        headers=auth_headers,
++        params={"institucion_id": institucion_a["id"], "q": correo_a},
++    )
++    assert scoped_search.status_code == 200, scoped_search.text
++    assert [item["id"] for item in scoped_search.json()] == [contacto_a["id"]]
++
++    other_institution_search = client.get(
++        "/api/contactos-institucionales",
++        headers=auth_headers,
++        params={"institucion_id": institucion_b["id"], "q": correo_a},
++    )
++    assert other_institution_search.status_code == 200, other_institution_search.text
++    assert other_institution_search.json() == []
++
++    tower_search = client.get(
++        "/api/contactos-institucionales",
++        headers=auth_headers,
++        params={"institucion_id": institucion_a["id"], "complejo_id": complejo_a["id"], "torre_id": torre_a["id"]},
++    )
++    assert tower_search.status_code == 200, tower_search.text
++    assert contacto_a["id"] in {item["id"] for item in tower_search.json()}
++
++
+ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+ 
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 73126fb..2dc153e 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -364,10 +364,17 @@ export type ContactoInstitucional = {
+   tipo_contacto_descripcion?: string | null;
+   notas?: string | null;
+   complejo_ids: string[];
++  torre_ids: string[];
+   created_at: string;
+   updated_at: string;
+ };
+ 
++export type ContactoInstitucionalCatalogos = {
++  instituciones: Institucion[];
++  complejos: Complejo[];
++  torres: Torre[];
++};
++
+ export type Cita = {
+   id: string;
+   tipo: string;
+@@ -703,7 +710,17 @@ export const listOperadores = () => listResource<Operador>('operadores');
+ export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
+ export const listKioskos = () => listResource<Kiosko>('kioskos');
+ export const listPantallasTurnos = () => listResource<PantallaTurnos>('pantallas-turnos');
+-export const listContactosInstitucionales = () => listResource<ContactoInstitucional>('contactos-institucionales');
++export type ContactoInstitucionalFilters = {
++  q?: string;
++  institucion_id?: string;
++  complejo_id?: string;
++  torre_id?: string;
++};
++
++export const listContactosInstitucionales = (params: ContactoInstitucionalFilters = {}) =>
++  apiFetch<ContactoInstitucional[]>(`/contactos-institucionales${queryString(params)}`);
++export const listContactosInstitucionalesCatalogos = () =>
++  apiFetch<ContactoInstitucionalCatalogos>('/contactos-institucionales/catalogos');
+ export const listAsignacionesMedicoConsultorio = () =>
+   listResource<AsignacionMedicoConsultorio>('asignaciones-medico-consultorio');
+ export const listAsignacionesOperador = () =>
+diff --git a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+index 8f9792f..e7f164b 100644
+--- a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
++++ b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+@@ -1,27 +1,50 @@
+ <script setup lang="ts">
+-import { onMounted, reactive, ref } from 'vue';
++import { computed, onMounted, reactive, ref } from 'vue';
+ import {
+   createContactoInstitucional,
+-  listComplejos,
+   listContactosInstitucionales,
++  listContactosInstitucionalesCatalogos,
+   updateContactoInstitucional,
+   type Complejo,
+   type ContactoInstitucional,
++  type Institucion,
+   type MedioContacto,
++  type Torre,
+ } from '../api/client';
+ 
++type ContactoTipo = ContactoInstitucional['tipo_contacto'];
++
+ const contactos = ref<ContactoInstitucional[]>([]);
++const instituciones = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
++const torres = ref<Torre[]>([]);
+ const selected = ref<ContactoInstitucional | null>(null);
+ const error = ref('');
+ const message = ref('');
++const loading = ref(false);
++const campusAssignSearch = ref('');
++const torreAssignSearch = ref('');
++
++const filters = reactive({
++  institucion_id: '',
++  complejo_id: '',
++  torre_id: '',
++  q: '',
++});
++
++const filterSearch = reactive({
++  institucion: '',
++  campus: '',
++  torre: '',
++});
+ 
+ const form = reactive({
+   nombre: '',
+-  tipo_contacto: 'PRIMARIO',
++  tipo_contacto: 'PRIMARIO' as ContactoTipo,
+   tipo_contacto_descripcion: '',
+   notas: '',
+   complejo_ids: [] as string[],
++  torre_ids: [] as string[],
+   medios: [
+     { tipo: 'CELULAR', valor: '' },
+     { tipo: 'CORREO', valor: '' },
+@@ -31,6 +54,97 @@ const form = reactive({
+   ] as MedioContacto[],
+ });
+ 
++const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
++
++const filteredComplejos = computed(() => {
++  if (!filters.institucion_id) return [];
++  return sortByLabel(
++    complejos.value.filter((item) => item.institucion_id === filters.institucion_id),
++    campusLabel,
++  );
++});
++
++const filteredTorres = computed(() => {
++  if (!filters.complejo_id) return [];
++  return sortByLabel(
++    torres.value.filter((item) => item.complejo_id === filters.complejo_id),
++    torreLabel,
++  );
++});
++
++const assignmentComplejos = computed(() => {
++  const rows = filters.institucion_id
++    ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id)
++    : complejos.value;
++  return sortByLabel(rows, campusLabel);
++});
++
++const assignmentTorres = computed(() => {
++  let rows = torres.value;
++  if (filters.complejo_id) {
++    rows = rows.filter((item) => item.complejo_id === filters.complejo_id);
++  } else if (filters.institucion_id) {
++    const campusIds = new Set(complejos.value.filter((item) => item.institucion_id === filters.institucion_id).map((item) => item.id));
++    rows = rows.filter((item) => campusIds.has(item.complejo_id));
++  }
++  return sortByLabel(rows, torreFullLabel);
++});
++
++const selectedComplejos = computed(() =>
++  sortByLabel(
++    form.complejo_ids.map((id) => complejos.value.find((item) => item.id === id)).filter((item): item is Complejo => Boolean(item)),
++    campusLabel,
++  ),
++);
++
++const selectedTorres = computed(() =>
++  sortByLabel(
++    form.torre_ids.map((id) => torres.value.find((item) => item.id === id)).filter((item): item is Torre => Boolean(item)),
++    torreFullLabel,
++  ),
++);
++
++function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
++  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
++}
++
++function normalizeAutocompleteText(text: string) {
++  return text
++    .normalize('NFD')
++    .replace(/[\u0300-\u036f]/g, '')
++    .trim()
++    .toLowerCase();
++}
++
++function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
++  const normalized = normalizeAutocompleteText(text);
++  return rows.find((item) => {
++    const label = normalizeAutocompleteText(labeler(item));
++    return label === normalized || normalizeAutocompleteText(label.split(' · ')[0] ?? '') === normalized;
++  });
++}
++
++function institucionLabel(item: Institucion) {
++  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
++}
++
++function campusLabel(item: Complejo) {
++  return item.nombre;
++}
++
++function torreLabel(item: Torre) {
++  return item.nombre;
++}
++
++function campusForTorre(torre: Torre) {
++  return complejos.value.find((item) => item.id === torre.complejo_id) ?? null;
++}
++
++function torreFullLabel(item: Torre) {
++  const campus = campusForTorre(item);
++  return campus ? `${item.nombre} · ${campus.nombre}` : item.nombre;
++}
++
+ function setForm(contacto?: ContactoInstitucional | null) {
+   selected.value = contacto ?? null;
+   form.nombre = contacto?.nombre ?? '';
+@@ -38,30 +152,142 @@ function setForm(contacto?: ContactoInstitucional | null) {
+   form.tipo_contacto_descripcion = contacto?.tipo_contacto_descripcion ?? '';
+   form.notas = contacto?.notas ?? '';
+   form.complejo_ids = [...(contacto?.complejo_ids ?? [])];
++  form.torre_ids = [...(contacto?.torre_ids ?? [])];
++  campusAssignSearch.value = '';
++  torreAssignSearch.value = '';
+   const medios = contacto?.medios_contacto ?? [];
+   form.medios = Array.from({ length: 5 }, (_, index) => medios[index] ?? { tipo: index % 2 === 0 ? 'CELULAR' : 'CORREO', valor: '' });
+ }
+ 
++function setFilterInstitution(item: Institucion | null, loadResults = true) {
++  const previousId = filters.institucion_id;
++  filters.institucion_id = item?.id ?? '';
++  filterSearch.institucion = item ? institucionLabel(item) : '';
++  filters.complejo_id = '';
++  filters.torre_id = '';
++  filterSearch.campus = '';
++  filterSearch.torre = '';
++  if (!filters.institucion_id) {
++    contactos.value = [];
++    return;
++  }
++  if (loadResults && previousId !== filters.institucion_id) {
++    void loadContactos();
++  }
++}
++
++function syncFilterInstitution() {
++  setFilterInstitution(matchByLabel(institutionOptions.value, filterSearch.institucion, institucionLabel) ?? null);
++}
++
++function syncFilterCampus() {
++  const previousId = filters.complejo_id;
++  const match = matchByLabel(filteredComplejos.value, filterSearch.campus, campusLabel);
++  filters.complejo_id = match?.id ?? '';
++  filterSearch.campus = match ? campusLabel(match) : filterSearch.campus;
++  filters.torre_id = '';
++  filterSearch.torre = '';
++  if (previousId !== filters.complejo_id) {
++    void loadContactos();
++  }
++}
++
++function syncFilterTorre() {
++  const previousId = filters.torre_id;
++  const match = matchByLabel(filteredTorres.value, filterSearch.torre, torreLabel);
++  filters.torre_id = match?.id ?? '';
++  filterSearch.torre = match ? torreLabel(match) : filterSearch.torre;
++  if (previousId !== filters.torre_id) {
++    void loadContactos();
++  }
++}
++
++function applyDefaultInstitution(loadResults = true) {
++  if (institutionOptions.value.length === 1) {
++    setFilterInstitution(institutionOptions.value[0], loadResults);
++  } else {
++    setFilterInstitution(null, loadResults);
++  }
++}
++
+ async function load() {
+   error.value = '';
++  loading.value = true;
+   try {
+-    const [contactosData, complejosData] = await Promise.all([listContactosInstitucionales(), listComplejos()]);
+-    contactos.value = contactosData;
+-    complejos.value = complejosData;
++    const catalogos = await listContactosInstitucionalesCatalogos();
++    instituciones.value = catalogos.instituciones;
++    complejos.value = catalogos.complejos;
++    torres.value = catalogos.torres;
++    setForm(null);
++    applyDefaultInstitution(false);
++    if (filters.institucion_id) {
++      await loadContactos();
++    }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar contactos.';
++  } finally {
++    loading.value = false;
++  }
++}
++
++async function loadContactos() {
++  if (!filters.institucion_id) {
++    contactos.value = [];
++    return;
++  }
++  error.value = '';
++  loading.value = true;
++  try {
++    contactos.value = await listContactosInstitucionales({
++      institucion_id: filters.institucion_id,
++      complejo_id: filters.complejo_id,
++      torre_id: filters.torre_id,
++      q: filters.q.trim() || undefined,
++    });
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible buscar contactos.';
++  } finally {
++    loading.value = false;
+   }
+ }
+ 
++function clearFilters() {
++  filters.q = '';
++  applyDefaultInstitution();
++}
++
++function addComplejo() {
++  const match = matchByLabel(assignmentComplejos.value, campusAssignSearch.value, campusLabel);
++  if (!match || form.complejo_ids.includes(match.id)) return;
++  form.complejo_ids.push(match.id);
++  campusAssignSearch.value = '';
++}
++
++function removeComplejo(complejoId: string) {
++  form.complejo_ids = form.complejo_ids.filter((id) => id !== complejoId);
++}
++
++function addTorre() {
++  const match = matchByLabel(assignmentTorres.value, torreAssignSearch.value, torreFullLabel);
++  if (!match || form.torre_ids.includes(match.id)) return;
++  form.torre_ids.push(match.id);
++  torreAssignSearch.value = '';
++}
++
++function removeTorre(torreId: string) {
++  form.torre_ids = form.torre_ids.filter((id) => id !== torreId);
++}
++
+ function payload() {
+   const medios_contacto = form.medios.filter((item) => item.valor.trim()).map((item) => ({ tipo: item.tipo, valor: item.valor.trim() }));
+   return {
+-    nombre: form.nombre,
++    nombre: form.nombre.trim(),
+     tipo_contacto: form.tipo_contacto,
+     tipo_contacto_descripcion: form.tipo_contacto === 'OTRO' ? form.tipo_contacto_descripcion.trim() : null,
+-    notas: form.notas || null,
++    notas: form.notas.trim() || null,
+     medios_contacto,
+     complejo_ids: form.complejo_ids,
++    torre_ids: form.torre_ids,
+   };
+ }
+ 
+@@ -72,6 +298,28 @@ function tipoContactoLabel(contacto: ContactoInstitucional) {
+   return contacto.tipo_contacto;
+ }
+ 
++function contactoCorreos(contacto: ContactoInstitucional) {
++  return contacto.medios_contacto.filter((item) => item.tipo === 'CORREO').map((item) => item.valor).join(', ') || '-';
++}
++
++function contactoCampusLabel(contacto: ContactoInstitucional) {
++  if (!contacto.complejo_ids.length && !contacto.torre_ids.length) return 'Todos / sin asignar';
++  const names = contacto.complejo_ids
++    .map((id) => complejos.value.find((item) => item.id === id))
++    .filter((item): item is Complejo => Boolean(item))
++    .map(campusLabel);
++  return names.length ? names.join(', ') : '-';
++}
++
++function contactoTorresLabel(contacto: ContactoInstitucional) {
++  if (!contacto.torre_ids.length) return '-';
++  return contacto.torre_ids
++    .map((id) => torres.value.find((item) => item.id === id))
++    .filter((item): item is Torre => Boolean(item))
++    .map(torreFullLabel)
++    .join(', ');
++}
++
+ async function submit() {
+   error.value = '';
+   message.value = '';
+@@ -84,16 +332,13 @@ async function submit() {
+       message.value = 'Contacto creado.';
+     }
+     setForm(null);
+-    await load();
++    await loadContactos();
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible guardar el contacto.';
+   }
+ }
+ 
+-onMounted(async () => {
+-  setForm(null);
+-  await load();
+-});
++onMounted(load);
+ </script>
+ 
+ <template>
+@@ -135,12 +380,55 @@ onMounted(async () => {
+             <input v-model="medio.valor" :placeholder="index < 2 ? 'Obligatorio' : 'Opcional'" maxlength="180" />
+           </div>
+         </div>
++
+         <div class="form-row">
+-          <label for="complejos">Campus asignados</label>
+-          <select id="complejos" v-model="form.complejo_ids" multiple size="5">
+-            <option v-for="complejo in complejos" :key="complejo.id" :value="complejo.id">{{ complejo.nombre }}</option>
+-          </select>
++          <label for="contacto-campus-asignar">Campus asignados</label>
++          <div class="autocomplete-add-row">
++            <input
++              id="contacto-campus-asignar"
++              v-model="campusAssignSearch"
++              list="contacto-campus-asignar-options"
++              @keyup.enter.prevent="addComplejo"
++            />
++            <button class="secondary" type="button" @click="addComplejo">Agregar</button>
++          </div>
++          <datalist id="contacto-campus-asignar-options">
++            <option v-for="complejo in assignmentComplejos" :key="complejo.id" :value="campusLabel(complejo)" />
++          </datalist>
++          <div class="chip-list">
++            <button
++              v-for="complejo in selectedComplejos"
++              :key="complejo.id"
++              class="chip danger"
++              type="button"
++              @click="removeComplejo(complejo.id)"
++            >
++              × {{ campusLabel(complejo) }}
++            </button>
++          </div>
+         </div>
++
++        <div class="form-row">
++          <label for="contacto-torre-asignar">Torres asignadas</label>
++          <div class="autocomplete-add-row">
++            <input
++              id="contacto-torre-asignar"
++              v-model="torreAssignSearch"
++              list="contacto-torre-asignar-options"
++              @keyup.enter.prevent="addTorre"
++            />
++            <button class="secondary" type="button" @click="addTorre">Agregar</button>
++          </div>
++          <datalist id="contacto-torre-asignar-options">
++            <option v-for="torre in assignmentTorres" :key="torre.id" :value="torreFullLabel(torre)" />
++          </datalist>
++          <div class="chip-list">
++            <button v-for="torre in selectedTorres" :key="torre.id" class="chip danger" type="button" @click="removeTorre(torre.id)">
++              × {{ torreFullLabel(torre) }}
++            </button>
++          </div>
++        </div>
++
+         <div class="form-row">
+           <label for="notas">Notas</label>
+           <textarea id="notas" v-model="form.notas" rows="4" />
+@@ -154,14 +442,78 @@ onMounted(async () => {
+       </form>
+ 
+       <section class="panel table-panel">
++        <form class="form" @submit.prevent="loadContactos">
++          <h2>Búsqueda</h2>
++          <div class="form-grid">
++            <div class="form-row">
++              <label for="contacto-institucion">Institución</label>
++              <input
++                id="contacto-institucion"
++                v-model="filterSearch.institucion"
++                list="contacto-institucion-options"
++                @input="syncFilterInstitution"
++                @change="syncFilterInstitution"
++              />
++              <datalist id="contacto-institucion-options">
++                <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
++              </datalist>
++            </div>
++            <div class="form-row">
++              <label for="contacto-campus">Campus</label>
++              <input
++                id="contacto-campus"
++                v-model="filterSearch.campus"
++                list="contacto-campus-options"
++                :disabled="!filters.institucion_id"
++                @input="syncFilterCampus"
++                @change="syncFilterCampus"
++              />
++              <datalist id="contacto-campus-options">
++                <option v-for="complejo in filteredComplejos" :key="complejo.id" :value="campusLabel(complejo)" />
++              </datalist>
++            </div>
++            <div class="form-row">
++              <label for="contacto-torre">Torre</label>
++              <input
++                id="contacto-torre"
++                v-model="filterSearch.torre"
++                list="contacto-torre-options"
++                :disabled="!filters.complejo_id"
++                @input="syncFilterTorre"
++                @change="syncFilterTorre"
++              />
++              <datalist id="contacto-torre-options">
++                <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
++              </datalist>
++            </div>
++          </div>
++          <div class="form-row">
++            <label for="contacto-q">Nombre o correo electrónico</label>
++            <div class="autocomplete-add-row">
++              <input
++                id="contacto-q"
++                v-model="filters.q"
++                :disabled="!filters.institucion_id"
++                placeholder="Selecciona una institución para buscar"
++              />
++              <button type="submit" :disabled="!filters.institucion_id || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
++            </div>
++          </div>
++          <div class="actions-row">
++            <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
++          </div>
++        </form>
++
++        <p v-if="!filters.institucion_id" class="message">Selecciona una institución para buscar contactos.</p>
+         <div class="table-scroll">
+           <table>
+             <thead>
+               <tr>
+                 <th>Nombre</th>
+                 <th>Tipo</th>
+-                <th>Medios</th>
++                <th>Correos</th>
+                 <th>Campus</th>
++                <th>Torres</th>
+               </tr>
+             </thead>
+             <tbody>
+@@ -174,12 +526,14 @@ onMounted(async () => {
+               >
+                 <td>{{ contacto.nombre }}</td>
+                 <td>{{ tipoContactoLabel(contacto) }}</td>
+-                <td>{{ contacto.medios_contacto.map((item) => item.valor).join(', ') }}</td>
+-                <td>{{ contacto.complejo_ids.length || 'Todos / sin asignar' }}</td>
++                <td>{{ contactoCorreos(contacto) }}</td>
++                <td>{{ contactoCampusLabel(contacto) }}</td>
++                <td>{{ contactoTorresLabel(contacto) }}</td>
+               </tr>
+             </tbody>
+           </table>
+         </div>
++        <p v-if="filters.institucion_id && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
+       </section>
+     </div>
+   </section>

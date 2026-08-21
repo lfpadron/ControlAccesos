@@ -1,27 +1,50 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
   createContactoInstitucional,
-  listComplejos,
   listContactosInstitucionales,
+  listContactosInstitucionalesCatalogos,
   updateContactoInstitucional,
   type Complejo,
   type ContactoInstitucional,
+  type Institucion,
   type MedioContacto,
+  type Torre,
 } from '../api/client';
 
+type ContactoTipo = ContactoInstitucional['tipo_contacto'];
+
 const contactos = ref<ContactoInstitucional[]>([]);
+const instituciones = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
+const torres = ref<Torre[]>([]);
 const selected = ref<ContactoInstitucional | null>(null);
 const error = ref('');
 const message = ref('');
+const loading = ref(false);
+const campusAssignSearch = ref('');
+const torreAssignSearch = ref('');
+
+const filters = reactive({
+  institucion_id: '',
+  complejo_id: '',
+  torre_id: '',
+  q: '',
+});
+
+const filterSearch = reactive({
+  institucion: '',
+  campus: '',
+  torre: '',
+});
 
 const form = reactive({
   nombre: '',
-  tipo_contacto: 'PRIMARIO',
+  tipo_contacto: 'PRIMARIO' as ContactoTipo,
   tipo_contacto_descripcion: '',
   notas: '',
   complejo_ids: [] as string[],
+  torre_ids: [] as string[],
   medios: [
     { tipo: 'CELULAR', valor: '' },
     { tipo: 'CORREO', valor: '' },
@@ -31,6 +54,97 @@ const form = reactive({
   ] as MedioContacto[],
 });
 
+const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
+
+const filteredComplejos = computed(() => {
+  if (!filters.institucion_id) return [];
+  return sortByLabel(
+    complejos.value.filter((item) => item.institucion_id === filters.institucion_id),
+    campusLabel,
+  );
+});
+
+const filteredTorres = computed(() => {
+  if (!filters.complejo_id) return [];
+  return sortByLabel(
+    torres.value.filter((item) => item.complejo_id === filters.complejo_id),
+    torreLabel,
+  );
+});
+
+const assignmentComplejos = computed(() => {
+  const rows = filters.institucion_id
+    ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id)
+    : complejos.value;
+  return sortByLabel(rows, campusLabel);
+});
+
+const assignmentTorres = computed(() => {
+  let rows = torres.value;
+  if (filters.complejo_id) {
+    rows = rows.filter((item) => item.complejo_id === filters.complejo_id);
+  } else if (filters.institucion_id) {
+    const campusIds = new Set(complejos.value.filter((item) => item.institucion_id === filters.institucion_id).map((item) => item.id));
+    rows = rows.filter((item) => campusIds.has(item.complejo_id));
+  }
+  return sortByLabel(rows, torreFullLabel);
+});
+
+const selectedComplejos = computed(() =>
+  sortByLabel(
+    form.complejo_ids.map((id) => complejos.value.find((item) => item.id === id)).filter((item): item is Complejo => Boolean(item)),
+    campusLabel,
+  ),
+);
+
+const selectedTorres = computed(() =>
+  sortByLabel(
+    form.torre_ids.map((id) => torres.value.find((item) => item.id === id)).filter((item): item is Torre => Boolean(item)),
+    torreFullLabel,
+  ),
+);
+
+function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
+  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
+}
+
+function normalizeAutocompleteText(text: string) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function matchByLabel<T>(rows: T[], text: string, labeler: (item: T) => string) {
+  const normalized = normalizeAutocompleteText(text);
+  return rows.find((item) => {
+    const label = normalizeAutocompleteText(labeler(item));
+    return label === normalized || normalizeAutocompleteText(label.split(' · ')[0] ?? '') === normalized;
+  });
+}
+
+function institucionLabel(item: Institucion) {
+  return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
+}
+
+function campusLabel(item: Complejo) {
+  return item.nombre;
+}
+
+function torreLabel(item: Torre) {
+  return item.nombre;
+}
+
+function campusForTorre(torre: Torre) {
+  return complejos.value.find((item) => item.id === torre.complejo_id) ?? null;
+}
+
+function torreFullLabel(item: Torre) {
+  const campus = campusForTorre(item);
+  return campus ? `${item.nombre} · ${campus.nombre}` : item.nombre;
+}
+
 function setForm(contacto?: ContactoInstitucional | null) {
   selected.value = contacto ?? null;
   form.nombre = contacto?.nombre ?? '';
@@ -38,30 +152,142 @@ function setForm(contacto?: ContactoInstitucional | null) {
   form.tipo_contacto_descripcion = contacto?.tipo_contacto_descripcion ?? '';
   form.notas = contacto?.notas ?? '';
   form.complejo_ids = [...(contacto?.complejo_ids ?? [])];
+  form.torre_ids = [...(contacto?.torre_ids ?? [])];
+  campusAssignSearch.value = '';
+  torreAssignSearch.value = '';
   const medios = contacto?.medios_contacto ?? [];
   form.medios = Array.from({ length: 5 }, (_, index) => medios[index] ?? { tipo: index % 2 === 0 ? 'CELULAR' : 'CORREO', valor: '' });
 }
 
+function setFilterInstitution(item: Institucion | null, loadResults = true) {
+  const previousId = filters.institucion_id;
+  filters.institucion_id = item?.id ?? '';
+  filterSearch.institucion = item ? institucionLabel(item) : '';
+  filters.complejo_id = '';
+  filters.torre_id = '';
+  filterSearch.campus = '';
+  filterSearch.torre = '';
+  if (!filters.institucion_id) {
+    contactos.value = [];
+    return;
+  }
+  if (loadResults && previousId !== filters.institucion_id) {
+    void loadContactos();
+  }
+}
+
+function syncFilterInstitution() {
+  setFilterInstitution(matchByLabel(institutionOptions.value, filterSearch.institucion, institucionLabel) ?? null);
+}
+
+function syncFilterCampus() {
+  const previousId = filters.complejo_id;
+  const match = matchByLabel(filteredComplejos.value, filterSearch.campus, campusLabel);
+  filters.complejo_id = match?.id ?? '';
+  filterSearch.campus = match ? campusLabel(match) : filterSearch.campus;
+  filters.torre_id = '';
+  filterSearch.torre = '';
+  if (previousId !== filters.complejo_id) {
+    void loadContactos();
+  }
+}
+
+function syncFilterTorre() {
+  const previousId = filters.torre_id;
+  const match = matchByLabel(filteredTorres.value, filterSearch.torre, torreLabel);
+  filters.torre_id = match?.id ?? '';
+  filterSearch.torre = match ? torreLabel(match) : filterSearch.torre;
+  if (previousId !== filters.torre_id) {
+    void loadContactos();
+  }
+}
+
+function applyDefaultInstitution(loadResults = true) {
+  if (institutionOptions.value.length === 1) {
+    setFilterInstitution(institutionOptions.value[0], loadResults);
+  } else {
+    setFilterInstitution(null, loadResults);
+  }
+}
+
 async function load() {
   error.value = '';
+  loading.value = true;
   try {
-    const [contactosData, complejosData] = await Promise.all([listContactosInstitucionales(), listComplejos()]);
-    contactos.value = contactosData;
-    complejos.value = complejosData;
+    const catalogos = await listContactosInstitucionalesCatalogos();
+    instituciones.value = catalogos.instituciones;
+    complejos.value = catalogos.complejos;
+    torres.value = catalogos.torres;
+    setForm(null);
+    applyDefaultInstitution(false);
+    if (filters.institucion_id) {
+      await loadContactos();
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar contactos.';
+  } finally {
+    loading.value = false;
   }
+}
+
+async function loadContactos() {
+  if (!filters.institucion_id) {
+    contactos.value = [];
+    return;
+  }
+  error.value = '';
+  loading.value = true;
+  try {
+    contactos.value = await listContactosInstitucionales({
+      institucion_id: filters.institucion_id,
+      complejo_id: filters.complejo_id,
+      torre_id: filters.torre_id,
+      q: filters.q.trim() || undefined,
+    });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'No fue posible buscar contactos.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+function clearFilters() {
+  filters.q = '';
+  applyDefaultInstitution();
+}
+
+function addComplejo() {
+  const match = matchByLabel(assignmentComplejos.value, campusAssignSearch.value, campusLabel);
+  if (!match || form.complejo_ids.includes(match.id)) return;
+  form.complejo_ids.push(match.id);
+  campusAssignSearch.value = '';
+}
+
+function removeComplejo(complejoId: string) {
+  form.complejo_ids = form.complejo_ids.filter((id) => id !== complejoId);
+}
+
+function addTorre() {
+  const match = matchByLabel(assignmentTorres.value, torreAssignSearch.value, torreFullLabel);
+  if (!match || form.torre_ids.includes(match.id)) return;
+  form.torre_ids.push(match.id);
+  torreAssignSearch.value = '';
+}
+
+function removeTorre(torreId: string) {
+  form.torre_ids = form.torre_ids.filter((id) => id !== torreId);
 }
 
 function payload() {
   const medios_contacto = form.medios.filter((item) => item.valor.trim()).map((item) => ({ tipo: item.tipo, valor: item.valor.trim() }));
   return {
-    nombre: form.nombre,
+    nombre: form.nombre.trim(),
     tipo_contacto: form.tipo_contacto,
     tipo_contacto_descripcion: form.tipo_contacto === 'OTRO' ? form.tipo_contacto_descripcion.trim() : null,
-    notas: form.notas || null,
+    notas: form.notas.trim() || null,
     medios_contacto,
     complejo_ids: form.complejo_ids,
+    torre_ids: form.torre_ids,
   };
 }
 
@@ -70,6 +296,28 @@ function tipoContactoLabel(contacto: ContactoInstitucional) {
     return `OTRO - ${contacto.tipo_contacto_descripcion}`;
   }
   return contacto.tipo_contacto;
+}
+
+function contactoCorreos(contacto: ContactoInstitucional) {
+  return contacto.medios_contacto.filter((item) => item.tipo === 'CORREO').map((item) => item.valor).join(', ') || '-';
+}
+
+function contactoCampusLabel(contacto: ContactoInstitucional) {
+  if (!contacto.complejo_ids.length && !contacto.torre_ids.length) return 'Todos / sin asignar';
+  const names = contacto.complejo_ids
+    .map((id) => complejos.value.find((item) => item.id === id))
+    .filter((item): item is Complejo => Boolean(item))
+    .map(campusLabel);
+  return names.length ? names.join(', ') : '-';
+}
+
+function contactoTorresLabel(contacto: ContactoInstitucional) {
+  if (!contacto.torre_ids.length) return '-';
+  return contacto.torre_ids
+    .map((id) => torres.value.find((item) => item.id === id))
+    .filter((item): item is Torre => Boolean(item))
+    .map(torreFullLabel)
+    .join(', ');
 }
 
 async function submit() {
@@ -84,16 +332,13 @@ async function submit() {
       message.value = 'Contacto creado.';
     }
     setForm(null);
-    await load();
+    await loadContactos();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible guardar el contacto.';
   }
 }
 
-onMounted(async () => {
-  setForm(null);
-  await load();
-});
+onMounted(load);
 </script>
 
 <template>
@@ -135,12 +380,55 @@ onMounted(async () => {
             <input v-model="medio.valor" :placeholder="index < 2 ? 'Obligatorio' : 'Opcional'" maxlength="180" />
           </div>
         </div>
+
         <div class="form-row">
-          <label for="complejos">Campus asignados</label>
-          <select id="complejos" v-model="form.complejo_ids" multiple size="5">
-            <option v-for="complejo in complejos" :key="complejo.id" :value="complejo.id">{{ complejo.nombre }}</option>
-          </select>
+          <label for="contacto-campus-asignar">Campus asignados</label>
+          <div class="autocomplete-add-row">
+            <input
+              id="contacto-campus-asignar"
+              v-model="campusAssignSearch"
+              list="contacto-campus-asignar-options"
+              @keyup.enter.prevent="addComplejo"
+            />
+            <button class="secondary" type="button" @click="addComplejo">Agregar</button>
+          </div>
+          <datalist id="contacto-campus-asignar-options">
+            <option v-for="complejo in assignmentComplejos" :key="complejo.id" :value="campusLabel(complejo)" />
+          </datalist>
+          <div class="chip-list">
+            <button
+              v-for="complejo in selectedComplejos"
+              :key="complejo.id"
+              class="chip danger"
+              type="button"
+              @click="removeComplejo(complejo.id)"
+            >
+              × {{ campusLabel(complejo) }}
+            </button>
+          </div>
         </div>
+
+        <div class="form-row">
+          <label for="contacto-torre-asignar">Torres asignadas</label>
+          <div class="autocomplete-add-row">
+            <input
+              id="contacto-torre-asignar"
+              v-model="torreAssignSearch"
+              list="contacto-torre-asignar-options"
+              @keyup.enter.prevent="addTorre"
+            />
+            <button class="secondary" type="button" @click="addTorre">Agregar</button>
+          </div>
+          <datalist id="contacto-torre-asignar-options">
+            <option v-for="torre in assignmentTorres" :key="torre.id" :value="torreFullLabel(torre)" />
+          </datalist>
+          <div class="chip-list">
+            <button v-for="torre in selectedTorres" :key="torre.id" class="chip danger" type="button" @click="removeTorre(torre.id)">
+              × {{ torreFullLabel(torre) }}
+            </button>
+          </div>
+        </div>
+
         <div class="form-row">
           <label for="notas">Notas</label>
           <textarea id="notas" v-model="form.notas" rows="4" />
@@ -154,14 +442,78 @@ onMounted(async () => {
       </form>
 
       <section class="panel table-panel">
+        <form class="form" @submit.prevent="loadContactos">
+          <h2>Búsqueda</h2>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="contacto-institucion">Institución</label>
+              <input
+                id="contacto-institucion"
+                v-model="filterSearch.institucion"
+                list="contacto-institucion-options"
+                @input="syncFilterInstitution"
+                @change="syncFilterInstitution"
+              />
+              <datalist id="contacto-institucion-options">
+                <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
+              </datalist>
+            </div>
+            <div class="form-row">
+              <label for="contacto-campus">Campus</label>
+              <input
+                id="contacto-campus"
+                v-model="filterSearch.campus"
+                list="contacto-campus-options"
+                :disabled="!filters.institucion_id"
+                @input="syncFilterCampus"
+                @change="syncFilterCampus"
+              />
+              <datalist id="contacto-campus-options">
+                <option v-for="complejo in filteredComplejos" :key="complejo.id" :value="campusLabel(complejo)" />
+              </datalist>
+            </div>
+            <div class="form-row">
+              <label for="contacto-torre">Torre</label>
+              <input
+                id="contacto-torre"
+                v-model="filterSearch.torre"
+                list="contacto-torre-options"
+                :disabled="!filters.complejo_id"
+                @input="syncFilterTorre"
+                @change="syncFilterTorre"
+              />
+              <datalist id="contacto-torre-options">
+                <option v-for="torre in filteredTorres" :key="torre.id" :value="torreLabel(torre)" />
+              </datalist>
+            </div>
+          </div>
+          <div class="form-row">
+            <label for="contacto-q">Nombre o correo electrónico</label>
+            <div class="autocomplete-add-row">
+              <input
+                id="contacto-q"
+                v-model="filters.q"
+                :disabled="!filters.institucion_id"
+                placeholder="Selecciona una institución para buscar"
+              />
+              <button type="submit" :disabled="!filters.institucion_id || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
+          </div>
+        </form>
+
+        <p v-if="!filters.institucion_id" class="message">Selecciona una institución para buscar contactos.</p>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
                 <th>Nombre</th>
                 <th>Tipo</th>
-                <th>Medios</th>
+                <th>Correos</th>
                 <th>Campus</th>
+                <th>Torres</th>
               </tr>
             </thead>
             <tbody>
@@ -174,12 +526,14 @@ onMounted(async () => {
               >
                 <td>{{ contacto.nombre }}</td>
                 <td>{{ tipoContactoLabel(contacto) }}</td>
-                <td>{{ contacto.medios_contacto.map((item) => item.valor).join(', ') }}</td>
-                <td>{{ contacto.complejo_ids.length || 'Todos / sin asignar' }}</td>
+                <td>{{ contactoCorreos(contacto) }}</td>
+                <td>{{ contactoCampusLabel(contacto) }}</td>
+                <td>{{ contactoTorresLabel(contacto) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p v-if="filters.institucion_id && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
       </section>
     </div>
   </section>

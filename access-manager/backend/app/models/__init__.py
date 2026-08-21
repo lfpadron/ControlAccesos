@@ -1,6 +1,6 @@
 from app.models.auditoria import Auditoria
 from app.models.complejo import Complejo
-from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo
+from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo, ContactoInstitucionalTorre
 from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
 from app.models.kiosk import Kiosko, PuntoAcceso
@@ -29,6 +29,7 @@ __all__ = [
     "Complejo",
     "ContactoInstitucional",
     "ContactoInstitucionalComplejo",
+    "ContactoInstitucionalTorre",
     "ClusterTurnos",
     "Consultorio",
     "ConsultorioCluster",

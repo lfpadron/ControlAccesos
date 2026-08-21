@@ -364,8 +364,15 @@ export type ContactoInstitucional = {
   tipo_contacto_descripcion?: string | null;
   notas?: string | null;
   complejo_ids: string[];
+  torre_ids: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type ContactoInstitucionalCatalogos = {
+  instituciones: Institucion[];
+  complejos: Complejo[];
+  torres: Torre[];
 };
 
 export type Cita = {
@@ -703,7 +710,17 @@ export const listOperadores = () => listResource<Operador>('operadores');
 export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
 export const listKioskos = () => listResource<Kiosko>('kioskos');
 export const listPantallasTurnos = () => listResource<PantallaTurnos>('pantallas-turnos');
-export const listContactosInstitucionales = () => listResource<ContactoInstitucional>('contactos-institucionales');
+export type ContactoInstitucionalFilters = {
+  q?: string;
+  institucion_id?: string;
+  complejo_id?: string;
+  torre_id?: string;
+};
+
+export const listContactosInstitucionales = (params: ContactoInstitucionalFilters = {}) =>
+  apiFetch<ContactoInstitucional[]>(`/contactos-institucionales${queryString(params)}`);
+export const listContactosInstitucionalesCatalogos = () =>
+  apiFetch<ContactoInstitucionalCatalogos>('/contactos-institucionales/catalogos');
 export const listAsignacionesMedicoConsultorio = () =>
   listResource<AsignacionMedicoConsultorio>('asignaciones-medico-consultorio');
 export const listAsignacionesOperador = () =>

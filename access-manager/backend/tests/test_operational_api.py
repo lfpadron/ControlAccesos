@@ -1010,6 +1010,125 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
     assert public_response.json()["turnos"][0]["turno"] == llamado["turno"]
 
 
+def test_contactos_institucionales_filter_by_institution_and_tower(
+    client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    suffix = uuid4().hex[:8]
+
+    institucion_a = assert_created(
+        client.post(
+            "/api/instituciones",
+            headers=auth_headers,
+            json={"nombre": f"Institución Contacto A {suffix}"},
+        )
+    )
+    complejo_a = assert_created(
+        client.post(
+            "/api/complejos",
+            headers=auth_headers,
+            json={
+                "institucion_id": institucion_a["id"],
+                "nombre": f"Campus Contacto A {suffix}",
+                "zona_horaria": "America/Mexico_City",
+            },
+        )
+    )
+    torre_a = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={"complejo_id": complejo_a["id"], "nombre": f"Torre Contacto A {suffix}", "numero_pisos": 1},
+        )
+    )
+    institucion_b = assert_created(
+        client.post(
+            "/api/instituciones",
+            headers=auth_headers,
+            json={"nombre": f"Institución Contacto B {suffix}"},
+        )
+    )
+    complejo_b = assert_created(
+        client.post(
+            "/api/complejos",
+            headers=auth_headers,
+            json={
+                "institucion_id": institucion_b["id"],
+                "nombre": f"Campus Contacto B {suffix}",
+                "zona_horaria": "America/Mexico_City",
+            },
+        )
+    )
+    torre_b = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={"complejo_id": complejo_b["id"], "nombre": f"Torre Contacto B {suffix}", "numero_pisos": 1},
+        )
+    )
+
+    correo_a = f"contacto-a-{suffix}@example.com"
+    contacto_a = assert_created(
+        client.post(
+            "/api/contactos-institucionales",
+            headers=auth_headers,
+            json={
+                "nombre": f"Contacto A {suffix}",
+                "tipo_contacto": "PRIMARIO",
+                "medios_contacto": [{"tipo": "CELULAR", "valor": "5550000000"}, {"tipo": "CORREO", "valor": correo_a}],
+                "complejo_ids": [complejo_a["id"]],
+                "torre_ids": [torre_a["id"]],
+            },
+        )
+    )
+    contacto_b = assert_created(
+        client.post(
+            "/api/contactos-institucionales",
+            headers=auth_headers,
+            json={
+                "nombre": f"Contacto B {suffix}",
+                "tipo_contacto": "SECUNDARIO",
+                "medios_contacto": [
+                    {"tipo": "CELULAR", "valor": "5551111111"},
+                    {"tipo": "CORREO", "valor": f"contacto-b-{suffix}@example.com"},
+                ],
+                "complejo_ids": [complejo_b["id"]],
+                "torre_ids": [torre_b["id"]],
+            },
+        )
+    )
+
+    assert contacto_a["torre_ids"] == [torre_a["id"]]
+    assert contacto_b["torre_ids"] == [torre_b["id"]]
+
+    missing_scope = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
+    assert missing_scope.status_code == 422, missing_scope.text
+
+    scoped_search = client.get(
+        "/api/contactos-institucionales",
+        headers=auth_headers,
+        params={"institucion_id": institucion_a["id"], "q": correo_a},
+    )
+    assert scoped_search.status_code == 200, scoped_search.text
+    assert [item["id"] for item in scoped_search.json()] == [contacto_a["id"]]
+
+    other_institution_search = client.get(
+        "/api/contactos-institucionales",
+        headers=auth_headers,
+        params={"institucion_id": institucion_b["id"], "q": correo_a},
+    )
+    assert other_institution_search.status_code == 200, other_institution_search.text
+    assert other_institution_search.json() == []
+
+    tower_search = client.get(
+        "/api/contactos-institucionales",
+        headers=auth_headers,
+        params={"institucion_id": institucion_a["id"], "complejo_id": complejo_a["id"], "torre_id": torre_a["id"]},
+    )
+    assert tower_search.status_code == 200, tower_search.text
+    assert contacto_a["id"] in {item["id"] for item in tower_search.json()}
+
+
 def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 

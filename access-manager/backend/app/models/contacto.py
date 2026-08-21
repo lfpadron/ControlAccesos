@@ -39,3 +39,18 @@ class ContactoInstitucionalComplejo(Base):
         ForeignKey("complejos.id", name="fk_contacto_complejo_complejo"),
         primary_key=True,
     )
+
+
+class ContactoInstitucionalTorre(Base):
+    __tablename__ = "contactos_institucionales_torres"
+
+    contacto_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contactos_institucionales.id", name="fk_contacto_torre_contacto", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    torre_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("torres.id", name="fk_contacto_torre_torre"),
+        primary_key=True,
+    )

@@ -5,6 +5,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.complejo import ComplejoRead
+from app.schemas.institucion import InstitucionRead
+from app.schemas.operational import TorreRead
+
 MEDIO_TIPOS = {"CELULAR", "CORREO"}
 CONTACTO_TIPOS = {"PRIMARIO", "SECUNDARIO", "SOLO_EMERGENCIAS", "OTRO"}
 
@@ -27,6 +31,7 @@ class ContactoInstitucionalBase(BaseModel):
     tipo_contacto_descripcion: str | None = Field(default=None, max_length=50)
     notas: str | None = Field(default=None, max_length=1000)
     complejo_ids: list[UUID] = Field(default_factory=list)
+    torre_ids: list[UUID] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_tipo_contacto(self):
@@ -48,6 +53,7 @@ class ContactoInstitucionalUpdate(BaseModel):
     tipo_contacto_descripcion: str | None = Field(default=None, max_length=50)
     notas: str | None = Field(default=None, max_length=1000)
     complejo_ids: list[UUID] | None = None
+    torre_ids: list[UUID] | None = None
 
     @model_validator(mode="after")
     def validate_tipo_contacto(self):
@@ -66,7 +72,14 @@ class ContactoInstitucionalRead(BaseModel):
     tipo_contacto_descripcion: str | None
     notas: str | None
     complejo_ids: list[UUID]
+    torre_ids: list[UUID]
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ContactoInstitucionalCatalogosRead(BaseModel):
+    instituciones: list[InstitucionRead]
+    complejos: list[ComplejoRead]
+    torres: list[TorreRead]
