@@ -1,0 +1,12 @@
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 32f09bf..1ad2e6d 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -137,7 +137,6 @@ watch(
+         <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
+         <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
+         <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
+-        <RouterLink to="/asignaciones" :class="{ disabled: !canUse('/asignaciones') }" :aria-disabled="!canUse('/asignaciones')" @click="handleNav($event, '/asignaciones')">Asignaciones</RouterLink>
+         <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
+         <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+         <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
