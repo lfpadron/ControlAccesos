@@ -84,5 +84,6 @@ class ContactoInstitucionalRead(BaseModel):
 
 class ContactoInstitucionalCatalogosRead(BaseModel):
     instituciones: list[InstitucionRead]
+    instituciones_busqueda: list[InstitucionRead] = Field(default_factory=list)
     complejos: list[ComplejoRead]
     torres: list[TorreRead]

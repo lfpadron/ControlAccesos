@@ -1123,8 +1123,9 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
     assert invalid_scope.status_code == 422, invalid_scope.text
     assert "institución asignada" in invalid_scope.json()["detail"]
 
-    missing_scope = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
-    assert missing_scope.status_code == 422, missing_scope.text
+    global_search = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
+    assert global_search.status_code == 200, global_search.text
+    assert [item["id"] for item in global_search.json()] == [contacto_a["id"]]
 
     scoped_search = client.get(
         "/api/contactos-institucionales",

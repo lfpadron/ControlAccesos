@@ -14,6 +14,7 @@ from app.models.display import PantallaTurnos
 from app.models.flow import Cita, MedicoPaciente, Paciente
 from app.models.institucion import Institucion
 from app.models.operational import (
+    AsignacionMedicoConsultorio,
     AsignacionOperador,
     Consultorio,
     Medico,
@@ -24,6 +25,7 @@ from app.models.operational import (
     UsuarioRol,
 )
 from app.models.usuario import Usuario
+from app.api.contactos import search_institutions_for_user
 from app.services.access_scope import (
     cita_agenda_access_predicate,
     complejo_catalog_access_predicate,
@@ -50,6 +52,7 @@ def create_scope_test_tables(engine) -> None:
             Medico.__table__,
             Operador.__table__,
             UsuarioRol.__table__,
+            AsignacionMedicoConsultorio.__table__,
             AsignacionOperador.__table__,
             Paciente.__table__,
             MedicoPaciente.__table__,
@@ -154,6 +157,63 @@ def test_assistant_with_medico_scope_can_see_doctor_appointments_without_locatio
         citas = list(db.execute(select(Cita).where(cita_agenda_access_predicate(db, assistant, today))).scalars())
 
     assert len(citas) == 1
+
+
+def test_contact_search_institutions_for_assistant_use_assigned_medico_scope() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_scope_test_tables(engine)
+    today = date(2026, 8, 21)
+
+    with Session(engine) as db:
+        assistant = Usuario(
+            apellidos="Asistente",
+            nombre="Medica",
+            email="asistente-contactos@example.com",
+            password_hash="irrelevant",
+        )
+        assistant_role = Role(codigo="ASISTENTE_MEDICO", nombre="Asistente medico", permisos={})
+        medico_role = Role(codigo="MEDICO", nombre="Medico", permisos={})
+        medico = Medico(nombre="Medico", apellidos="Contactos")
+        institucion = Institucion(nombre="Institucion Contactos")
+        otra_institucion = Institucion(nombre="Otra Institucion")
+        db.add_all([assistant, assistant_role, medico_role, medico, institucion, otra_institucion])
+        db.flush()
+
+        complejo = Complejo(institucion_id=institucion.id, nombre="Campus Contactos", zona_horaria="America/Mexico_City")
+        otro_complejo = Complejo(
+            institucion_id=otra_institucion.id,
+            nombre="Campus Sin Medico",
+            zona_horaria="America/Mexico_City",
+        )
+        db.add_all([complejo, otro_complejo])
+        db.flush()
+        torre = Torre(complejo_id=complejo.id, nombre="Torre", numero_pisos=1)
+        db.add(torre)
+        db.flush()
+        piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
+        db.add(piso)
+        db.flush()
+        consultorio = Consultorio(complejo_id=complejo.id, piso_id=piso.id, codigo="101")
+        db.add(consultorio)
+        db.flush()
+
+        db.add_all(
+            [
+                UsuarioRol(usuario_id=assistant.id, rol_id=assistant_role.id, medico_id=medico.id, fecha_inicio=today),
+                UsuarioRol(usuario_id=assistant.id, rol_id=assistant_role.id, medico_id=medico.id, fecha_inicio=today),
+                UsuarioRol(usuario_id=uuid4(), rol_id=medico_role.id, medico_id=medico.id, complejo_id=complejo.id, fecha_inicio=today),
+                AsignacionMedicoConsultorio(
+                    medico_id=medico.id,
+                    consultorio_id=consultorio.id,
+                    fecha_inicio=today,
+                ),
+            ]
+        )
+        db.commit()
+
+        instituciones = search_institutions_for_user(db, assistant, today)
+
+    assert [item.id for item in instituciones] == [institucion.id]
 
 
 def test_location_catalog_scope_predicates_compile() -> None:

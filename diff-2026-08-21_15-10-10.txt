@@ -1,0 +1,572 @@
+diff --git a/access-manager/backend/app/api/contactos.py b/access-manager/backend/app/api/contactos.py
+index 7607908..ffb0b66 100644
+--- a/access-manager/backend/app/api/contactos.py
++++ b/access-manager/backend/app/api/contactos.py
+@@ -12,7 +12,7 @@ from app.core.security import require_role
+ from app.models.complejo import Complejo
+ from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo, ContactoInstitucionalTorre
+ from app.models.institucion import Institucion
+-from app.models.operational import Torre
++from app.models.operational import AsignacionMedicoConsultorio, Consultorio, Medico, Piso, Role, Torre, UsuarioRol
+ from app.models.usuario import Usuario
+ from app.schemas.contacto import (
+     ContactoInstitucionalCatalogosRead,
+@@ -28,7 +28,9 @@ from app.services.access_scope import (
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ router = APIRouter()
+-AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
++ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
++ContactosWriteUser = Depends(require_role("ADMIN_NEGOCIO"))
++ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+ 
+ 
+ def client_ip(request: Request) -> str | None:
+@@ -42,6 +44,136 @@ def exists_or_404(db: Session, item_id: UUID) -> ContactoInstitucional:
+     return item
+ 
+ 
++def active_user_role_conditions(user: Usuario, today: date):
++    return [
++        UsuarioRol.usuario_id == user.id,
++        UsuarioRol.activo.is_(True),
++        UsuarioRol.fecha_inicio <= today,
++        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++        Role.activo.is_(True),
++    ]
++
++
++def active_role_codes(db: Session, user: Usuario, today: date) -> set[str]:
++    return set(
++        db.execute(
++            select(Role.codigo)
++            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++            .where(*active_user_role_conditions(user, today))
++        ).scalars()
++    )
++
++
++def institution_ids_from_role_scopes(db: Session, conditions: list) -> set[UUID]:
++    role_query = select(UsuarioRol).join(Role, UsuarioRol.rol_id == Role.id).where(*conditions).subquery()
++    role = role_query.c
++    institution_ids: set[UUID] = set()
++    institution_ids.update(
++        db.execute(select(role.institucion_id).where(role.institucion_id.is_not(None))).scalars()
++    )
++    institution_ids.update(
++        db.execute(
++            select(Complejo.institucion_id).join(role_query, role.complejo_id == Complejo.id)
++        ).scalars()
++    )
++    institution_ids.update(
++        db.execute(
++            select(Complejo.institucion_id)
++            .join(Torre, Torre.complejo_id == Complejo.id)
++            .join(role_query, role.torre_id == Torre.id)
++        ).scalars()
++    )
++    institution_ids.update(
++        db.execute(
++            select(Complejo.institucion_id)
++            .join(Piso, Piso.complejo_id == Complejo.id)
++            .join(role_query, role.piso_id == Piso.id)
++        ).scalars()
++    )
++    institution_ids.update(
++        db.execute(
++            select(Complejo.institucion_id)
++            .join(Consultorio, Consultorio.complejo_id == Complejo.id)
++            .join(role_query, role.consultorio_id == Consultorio.id)
++        ).scalars()
++    )
++    return {item_id for item_id in institution_ids if item_id is not None}
++
++
++def medico_ids_assigned_to_assistant(db: Session, user: Usuario, today: date) -> list[UUID]:
++    return list(
++        dict.fromkeys(
++            db.execute(
++                select(UsuarioRol.medico_id)
++                .join(Role, UsuarioRol.rol_id == Role.id)
++                .where(
++                    *active_user_role_conditions(user, today),
++                    Role.codigo.in_(ASSISTANT_MEDICO_ROLE_CODES),
++                    UsuarioRol.medico_id.is_not(None),
++                )
++                .order_by(UsuarioRol.medico_id)
++            ).scalars()
++        )
++    )
++
++
++def institution_ids_assigned_to_medicos(db: Session, medico_ids: list[UUID], today: date) -> set[UUID]:
++    if not medico_ids:
++        return set()
++    medico_user_ids = list(
++        db.execute(select(Medico.usuario_id).where(Medico.id.in_(medico_ids), Medico.usuario_id.is_not(None))).scalars()
++    )
++    role_conditions = [
++        UsuarioRol.activo.is_(True),
++        UsuarioRol.fecha_inicio <= today,
++        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++        Role.activo.is_(True),
++        Role.codigo == "MEDICO",
++        or_(UsuarioRol.medico_id.in_(medico_ids), UsuarioRol.usuario_id.in_(medico_user_ids))
++        if medico_user_ids
++        else UsuarioRol.medico_id.in_(medico_ids),
++    ]
++    institution_ids = institution_ids_from_role_scopes(db, role_conditions)
++    institution_ids.update(
++        db.execute(
++            select(Complejo.institucion_id)
++            .join(Consultorio, Consultorio.complejo_id == Complejo.id)
++            .join(AsignacionMedicoConsultorio, AsignacionMedicoConsultorio.consultorio_id == Consultorio.id)
++            .where(
++                AsignacionMedicoConsultorio.medico_id.in_(medico_ids),
++                AsignacionMedicoConsultorio.activo.is_(True),
++                AsignacionMedicoConsultorio.fecha_inicio <= today,
++                or_(
++                    AsignacionMedicoConsultorio.fecha_fin.is_(None),
++                    AsignacionMedicoConsultorio.fecha_fin >= today,
++                ),
++            )
++        ).scalars()
++    )
++    return institution_ids
++
++
++def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
++    role_codes = active_role_codes(db, user, today)
++    medico_ids = medico_ids_assigned_to_assistant(db, user, today) if role_codes.intersection(ASSISTANT_MEDICO_ROLE_CODES) else []
++    if medico_ids:
++        return institution_ids_assigned_to_medicos(db, medico_ids, today)
++    return institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
++
++
++def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
++    institution_ids = search_institution_ids_for_user(db, user, today)
++    if not institution_ids:
++        return []
++    return list(
++        db.execute(
++            select(Institucion)
++            .where(Institucion.id.in_(institution_ids), Institucion.activo.is_(True))
++            .order_by(func.lower(Institucion.nombre), Institucion.id)
++        ).scalars()
++    )
++
++
+ def validate_institucion_access(db: Session, current_user: Usuario, today: date, institucion_id: UUID) -> None:
+     exists = (
+         db.execute(
+@@ -199,6 +331,17 @@ def contact_access_predicate(db: Session, user: Usuario, today: date):
+     )
+ 
+ 
++def contact_active_institution_predicate():
++    return (
++        select(Institucion.id)
++        .where(
++            Institucion.id == ContactoInstitucional.institucion_id,
++            Institucion.activo.is_(True),
++        )
++        .exists()
++    )
++
++
+ def contact_institution_predicate(institucion_id: UUID):
+     return ContactoInstitucional.institucion_id == institucion_id
+ 
+@@ -267,16 +410,19 @@ def ensure_accessible_filters(
+     institucion_id: UUID | None,
+     complejo_id: UUID | None,
+     torre_id: UUID | None,
++    allow_all_institutions: bool = False,
+ ) -> None:
+     if institucion_id is not None:
++        conditions = [
++            Institucion.id == institucion_id,
++            Institucion.activo.is_(True),
++        ]
++        if not allow_all_institutions:
++            conditions.append(institucion_catalog_access_predicate(db, current_user, today))
+         exists = (
+             db.execute(
+                 select(Institucion.id)
+-                .where(
+-                    Institucion.id == institucion_id,
+-                    Institucion.activo.is_(True),
+-                    institucion_catalog_access_predicate(db, current_user, today),
+-                )
++                .where(*conditions)
+                 .limit(1)
+             ).first()
+             is not None
+@@ -287,8 +433,9 @@ def ensure_accessible_filters(
+         conditions = [
+             Complejo.id == complejo_id,
+             Complejo.activo.is_(True),
+-            complejo_catalog_access_predicate(db, current_user, today),
+         ]
++        if not allow_all_institutions:
++            conditions.append(complejo_catalog_access_predicate(db, current_user, today))
+         if institucion_id is not None:
+             conditions.append(Complejo.institucion_id == institucion_id)
+         exists = db.execute(select(Complejo.id).where(*conditions).limit(1)).first() is not None
+@@ -298,8 +445,9 @@ def ensure_accessible_filters(
+         query = select(Torre.id).join(Complejo, Complejo.id == Torre.complejo_id).where(
+             Torre.id == torre_id,
+             Torre.activo.is_(True),
+-            torre_catalog_access_predicate(db, current_user, today),
+         )
++        if not allow_all_institutions:
++            query = query.where(torre_catalog_access_predicate(db, current_user, today))
+         if complejo_id is not None:
+             query = query.where(Torre.complejo_id == complejo_id)
+         if institucion_id is not None:
+@@ -311,7 +459,7 @@ def ensure_accessible_filters(
+ @router.get("/catalogos", response_model=ContactoInstitucionalCatalogosRead)
+ def list_catalogos_contactos(
+     db: Session = Depends(get_db),
+-    current_user: Usuario = AdminUser,
++    current_user: Usuario = ContactosReadUser,
+ ) -> ContactoInstitucionalCatalogosRead:
+     today = date.today()
+     instituciones = list(
+@@ -344,7 +492,12 @@ def list_catalogos_contactos(
+             .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
+         ).scalars()
+     )
+-    return ContactoInstitucionalCatalogosRead(instituciones=instituciones, complejos=complejos, torres=torres)
++    return ContactoInstitucionalCatalogosRead(
++        instituciones=instituciones,
++        instituciones_busqueda=search_institutions_for_user(db, current_user, today),
++        complejos=complejos,
++        torres=torres,
++    )
+ 
+ 
+ @router.get("", response_model=list[ContactoInstitucionalRead])
+@@ -354,17 +507,30 @@ def list_contactos(
+     complejo_id: UUID | None = Query(default=None),
+     torre_id: UUID | None = Query(default=None),
+     db: Session = Depends(get_db),
+-    current_user: Usuario = AdminUser,
++    current_user: Usuario = ContactosReadUser,
+ ) -> list[ContactoInstitucionalRead]:
+     term = (q or "").strip().lower()
+-    if term and institucion_id is None:
++    today = date.today()
++    search_all_institutions = not search_institution_ids_for_user(db, current_user, today)
++    if term and institucion_id is None and not search_all_institutions:
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+             detail="Seleccione una institución para buscar contactos.",
+         )
+-    today = date.today()
+-    ensure_accessible_filters(db, current_user, today, institucion_id, complejo_id, torre_id)
+-    query = select(ContactoInstitucional).where(contact_access_predicate(db, current_user, today))
++    ensure_accessible_filters(
++        db,
++        current_user,
++        today,
++        institucion_id,
++        complejo_id,
++        torre_id,
++        allow_all_institutions=search_all_institutions,
++    )
++    query = select(ContactoInstitucional).where(
++        contact_active_institution_predicate()
++        if search_all_institutions
++        else contact_access_predicate(db, current_user, today)
++    )
+     if institucion_id is not None:
+         query = query.where(contact_institution_predicate(institucion_id))
+     if complejo_id is not None:
+@@ -388,7 +554,7 @@ def create_contacto(
+     payload: ContactoInstitucionalCreate,
+     request: Request,
+     db: Session = Depends(get_db),
+-    current_user: Usuario = AdminUser,
++    current_user: Usuario = ContactosWriteUser,
+ ) -> ContactoInstitucionalRead:
+     today = date.today()
+     validate_contact_scope(
+@@ -439,7 +605,7 @@ def update_contacto(
+     payload: ContactoInstitucionalUpdate,
+     request: Request,
+     db: Session = Depends(get_db),
+-    current_user: Usuario = AdminUser,
++    current_user: Usuario = ContactosWriteUser,
+ ) -> ContactoInstitucionalRead:
+     item = exists_or_404(db, contacto_id)
+     today = date.today()
+diff --git a/access-manager/backend/app/schemas/contacto.py b/access-manager/backend/app/schemas/contacto.py
+index 1000ad8..22fbd0d 100644
+--- a/access-manager/backend/app/schemas/contacto.py
++++ b/access-manager/backend/app/schemas/contacto.py
+@@ -84,5 +84,6 @@ class ContactoInstitucionalRead(BaseModel):
+ 
+ class ContactoInstitucionalCatalogosRead(BaseModel):
+     instituciones: list[InstitucionRead]
++    instituciones_busqueda: list[InstitucionRead] = Field(default_factory=list)
+     complejos: list[ComplejoRead]
+     torres: list[TorreRead]
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index 0cc6fdb..1eb4070 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -14,6 +14,7 @@ from app.models.display import PantallaTurnos
+ from app.models.flow import Cita, MedicoPaciente, Paciente
+ from app.models.institucion import Institucion
+ from app.models.operational import (
++    AsignacionMedicoConsultorio,
+     AsignacionOperador,
+     Consultorio,
+     Medico,
+@@ -24,6 +25,7 @@ from app.models.operational import (
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
++from app.api.contactos import search_institutions_for_user
+ from app.services.access_scope import (
+     cita_agenda_access_predicate,
+     complejo_catalog_access_predicate,
+@@ -50,6 +52,7 @@ def create_scope_test_tables(engine) -> None:
+             Medico.__table__,
+             Operador.__table__,
+             UsuarioRol.__table__,
++            AsignacionMedicoConsultorio.__table__,
+             AsignacionOperador.__table__,
+             Paciente.__table__,
+             MedicoPaciente.__table__,
+@@ -156,6 +159,63 @@ def test_assistant_with_medico_scope_can_see_doctor_appointments_without_locatio
+     assert len(citas) == 1
+ 
+ 
++def test_contact_search_institutions_for_assistant_use_assigned_medico_scope() -> None:
++    engine = create_engine("sqlite+pysqlite:///:memory:")
++    create_scope_test_tables(engine)
++    today = date(2026, 8, 21)
++
++    with Session(engine) as db:
++        assistant = Usuario(
++            apellidos="Asistente",
++            nombre="Medica",
++            email="asistente-contactos@example.com",
++            password_hash="irrelevant",
++        )
++        assistant_role = Role(codigo="ASISTENTE_MEDICO", nombre="Asistente medico", permisos={})
++        medico_role = Role(codigo="MEDICO", nombre="Medico", permisos={})
++        medico = Medico(nombre="Medico", apellidos="Contactos")
++        institucion = Institucion(nombre="Institucion Contactos")
++        otra_institucion = Institucion(nombre="Otra Institucion")
++        db.add_all([assistant, assistant_role, medico_role, medico, institucion, otra_institucion])
++        db.flush()
++
++        complejo = Complejo(institucion_id=institucion.id, nombre="Campus Contactos", zona_horaria="America/Mexico_City")
++        otro_complejo = Complejo(
++            institucion_id=otra_institucion.id,
++            nombre="Campus Sin Medico",
++            zona_horaria="America/Mexico_City",
++        )
++        db.add_all([complejo, otro_complejo])
++        db.flush()
++        torre = Torre(complejo_id=complejo.id, nombre="Torre", numero_pisos=1)
++        db.add(torre)
++        db.flush()
++        piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
++        db.add(piso)
++        db.flush()
++        consultorio = Consultorio(complejo_id=complejo.id, piso_id=piso.id, codigo="101")
++        db.add(consultorio)
++        db.flush()
++
++        db.add_all(
++            [
++                UsuarioRol(usuario_id=assistant.id, rol_id=assistant_role.id, medico_id=medico.id, fecha_inicio=today),
++                UsuarioRol(usuario_id=assistant.id, rol_id=assistant_role.id, medico_id=medico.id, fecha_inicio=today),
++                UsuarioRol(usuario_id=uuid4(), rol_id=medico_role.id, medico_id=medico.id, complejo_id=complejo.id, fecha_inicio=today),
++                AsignacionMedicoConsultorio(
++                    medico_id=medico.id,
++                    consultorio_id=consultorio.id,
++                    fecha_inicio=today,
++                ),
++            ]
++        )
++        db.commit()
++
++        instituciones = search_institutions_for_user(db, assistant, today)
++
++    assert [item.id for item in instituciones] == [institucion.id]
++
++
+ def test_location_catalog_scope_predicates_compile() -> None:
+     db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+     user = Usuario(
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 19406cd..77c421a 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -1123,8 +1123,9 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
+     assert invalid_scope.status_code == 422, invalid_scope.text
+     assert "institución asignada" in invalid_scope.json()["detail"]
+ 
+-    missing_scope = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
+-    assert missing_scope.status_code == 422, missing_scope.text
++    global_search = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
++    assert global_search.status_code == 200, global_search.text
++    assert [item["id"] for item in global_search.json()] == [contacto_a["id"]]
+ 
+     scoped_search = client.get(
+         "/api/contactos-institucionales",
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 3f6c0fb..fc52eaf 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -372,6 +372,7 @@ export type ContactoInstitucional = {
+ 
+ export type ContactoInstitucionalCatalogos = {
+   instituciones: Institucion[];
++  instituciones_busqueda?: Institucion[];
+   complejos: Complejo[];
+   torres: Torre[];
+ };
+diff --git a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+index e06a286..2a99909 100644
+--- a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
++++ b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+@@ -16,6 +16,7 @@ type ContactoTipo = ContactoInstitucional['tipo_contacto'];
+ 
+ const contactos = ref<ContactoInstitucional[]>([]);
+ const instituciones = ref<Institucion[]>([]);
++const institucionesBusqueda = ref<Institucion[]>([]);
+ const complejos = ref<Complejo[]>([]);
+ const torres = ref<Torre[]>([]);
+ const selected = ref<ContactoInstitucional | null>(null);
+@@ -58,6 +59,9 @@ const form = reactive({
+ 
+ const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
+ const formInstitutionOptions = computed(() => sortByLabel(instituciones.value, formInstitucionLabel));
++const searchInstitutionOptions = computed(() => sortByLabel(institucionesBusqueda.value, formInstitucionLabel));
++const canSearchAllInstitutions = computed(() => searchInstitutionOptions.value.length === 0);
++const canSearchContactos = computed(() => canSearchAllInstitutions.value || Boolean(filters.institucion_id));
+ 
+ const filteredComplejos = computed(() => {
+   if (!filters.institucion_id) return [];
+@@ -198,22 +202,22 @@ function setForm(contacto?: ContactoInstitucional | null) {
+ function setFilterInstitution(item: Institucion | null, loadResults = true) {
+   const previousId = filters.institucion_id;
+   filters.institucion_id = item?.id ?? '';
+-  filterSearch.institucion = item ? institucionLabel(item) : '';
++  filterSearch.institucion = item ? formInstitucionLabel(item) : canSearchAllInstitutions.value ? 'Todas las instituciones' : '';
+   filters.complejo_id = '';
+   filters.torre_id = '';
+   filterSearch.campus = '';
+   filterSearch.torre = '';
+-  if (!filters.institucion_id) {
++  if (!canSearchContactos.value) {
+     contactos.value = [];
+     return;
+   }
+-  if (loadResults && previousId !== filters.institucion_id) {
++  if (loadResults && (previousId !== filters.institucion_id || canSearchAllInstitutions.value)) {
+     void loadContactos();
+   }
+ }
+ 
+ function syncFilterInstitution() {
+-  setFilterInstitution(matchByLabel(institutionOptions.value, filterSearch.institucion, institucionLabel) ?? null);
++  setFilterInstitution(matchByLabel(searchInstitutionOptions.value, filterSearch.institucion, formInstitucionLabel) ?? null);
+ }
+ 
+ function syncFilterCampus() {
+@@ -239,8 +243,8 @@ function syncFilterTorre() {
+ }
+ 
+ function applyDefaultInstitution(loadResults = true) {
+-  if (institutionOptions.value.length === 1) {
+-    setFilterInstitution(institutionOptions.value[0], loadResults);
++  if (searchInstitutionOptions.value.length === 1) {
++    setFilterInstitution(searchInstitutionOptions.value[0], loadResults);
+   } else {
+     setFilterInstitution(null, loadResults);
+   }
+@@ -252,11 +256,12 @@ async function load() {
+   try {
+     const catalogos = await listContactosInstitucionalesCatalogos();
+     instituciones.value = catalogos.instituciones;
++    institucionesBusqueda.value = catalogos.instituciones_busqueda ?? catalogos.instituciones;
+     complejos.value = catalogos.complejos;
+     torres.value = catalogos.torres;
+     setForm(null);
+     applyDefaultInstitution(false);
+-    if (filters.institucion_id) {
++    if (canSearchContactos.value) {
+       await loadContactos();
+     }
+   } catch (err) {
+@@ -267,7 +272,7 @@ async function load() {
+ }
+ 
+ async function loadContactos() {
+-  if (!filters.institucion_id) {
++  if (!canSearchContactos.value) {
+     contactos.value = [];
+     return;
+   }
+@@ -275,7 +280,7 @@ async function loadContactos() {
+   loading.value = true;
+   try {
+     contactos.value = await listContactosInstitucionales({
+-      institucion_id: filters.institucion_id,
++      institucion_id: filters.institucion_id || undefined,
+       complejo_id: filters.complejo_id,
+       torre_id: filters.torre_id,
+       q: filters.q.trim() || undefined,
+@@ -514,11 +519,12 @@ onMounted(load);
+                 id="contacto-institucion"
+                 v-model="filterSearch.institucion"
+                 list="contacto-institucion-options"
++                :disabled="canSearchAllInstitutions"
+                 @input="syncFilterInstitution"
+                 @change="syncFilterInstitution"
+               />
+               <datalist id="contacto-institucion-options">
+-                <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
++                <option v-for="institucion in searchInstitutionOptions" :key="institucion.id" :value="formInstitucionLabel(institucion)" />
+               </datalist>
+             </div>
+             <div class="form-row">
+@@ -556,10 +562,10 @@ onMounted(load);
+               <input
+                 id="contacto-q"
+                 v-model="filters.q"
+-                :disabled="!filters.institucion_id"
+-                placeholder="Selecciona una institución para buscar"
++                :disabled="!canSearchContactos"
++                :placeholder="canSearchAllInstitutions ? 'Buscar en todas las instituciones' : 'Selecciona una institución para buscar'"
+               />
+-              <button type="submit" :disabled="!filters.institucion_id || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
++              <button type="submit" :disabled="!canSearchContactos || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
+             </div>
+           </div>
+           <div class="actions-row">
+@@ -567,7 +573,7 @@ onMounted(load);
+           </div>
+         </form>
+ 
+-        <p v-if="!filters.institucion_id" class="message">Selecciona una institución para buscar contactos.</p>
++        <p v-if="!canSearchContactos" class="message">Selecciona una institución para buscar contactos.</p>
+         <div class="table-scroll">
+           <table>
+             <thead>
+@@ -596,7 +602,7 @@ onMounted(load);
+             </tbody>
+           </table>
+         </div>
+-        <p v-if="filters.institucion_id && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
++        <p v-if="canSearchContactos && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
+       </section>
+     </div>
+   </section>

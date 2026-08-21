@@ -16,6 +16,7 @@ type ContactoTipo = ContactoInstitucional['tipo_contacto'];
 
 const contactos = ref<ContactoInstitucional[]>([]);
 const instituciones = ref<Institucion[]>([]);
+const institucionesBusqueda = ref<Institucion[]>([]);
 const complejos = ref<Complejo[]>([]);
 const torres = ref<Torre[]>([]);
 const selected = ref<ContactoInstitucional | null>(null);
@@ -58,6 +59,9 @@ const form = reactive({
 
 const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
 const formInstitutionOptions = computed(() => sortByLabel(instituciones.value, formInstitucionLabel));
+const searchInstitutionOptions = computed(() => sortByLabel(institucionesBusqueda.value, formInstitucionLabel));
+const canSearchAllInstitutions = computed(() => searchInstitutionOptions.value.length === 0);
+const canSearchContactos = computed(() => canSearchAllInstitutions.value || Boolean(filters.institucion_id));
 
 const filteredComplejos = computed(() => {
   if (!filters.institucion_id) return [];
@@ -198,22 +202,22 @@ function setForm(contacto?: ContactoInstitucional | null) {
 function setFilterInstitution(item: Institucion | null, loadResults = true) {
   const previousId = filters.institucion_id;
   filters.institucion_id = item?.id ?? '';
-  filterSearch.institucion = item ? institucionLabel(item) : '';
+  filterSearch.institucion = item ? formInstitucionLabel(item) : canSearchAllInstitutions.value ? 'Todas las instituciones' : '';
   filters.complejo_id = '';
   filters.torre_id = '';
   filterSearch.campus = '';
   filterSearch.torre = '';
-  if (!filters.institucion_id) {
+  if (!canSearchContactos.value) {
     contactos.value = [];
     return;
   }
-  if (loadResults && previousId !== filters.institucion_id) {
+  if (loadResults && (previousId !== filters.institucion_id || canSearchAllInstitutions.value)) {
     void loadContactos();
   }
 }
 
 function syncFilterInstitution() {
-  setFilterInstitution(matchByLabel(institutionOptions.value, filterSearch.institucion, institucionLabel) ?? null);
+  setFilterInstitution(matchByLabel(searchInstitutionOptions.value, filterSearch.institucion, formInstitucionLabel) ?? null);
 }
 
 function syncFilterCampus() {
@@ -239,8 +243,8 @@ function syncFilterTorre() {
 }
 
 function applyDefaultInstitution(loadResults = true) {
-  if (institutionOptions.value.length === 1) {
-    setFilterInstitution(institutionOptions.value[0], loadResults);
+  if (searchInstitutionOptions.value.length === 1) {
+    setFilterInstitution(searchInstitutionOptions.value[0], loadResults);
   } else {
     setFilterInstitution(null, loadResults);
   }
@@ -252,11 +256,12 @@ async function load() {
   try {
     const catalogos = await listContactosInstitucionalesCatalogos();
     instituciones.value = catalogos.instituciones;
+    institucionesBusqueda.value = catalogos.instituciones_busqueda ?? catalogos.instituciones;
     complejos.value = catalogos.complejos;
     torres.value = catalogos.torres;
     setForm(null);
     applyDefaultInstitution(false);
-    if (filters.institucion_id) {
+    if (canSearchContactos.value) {
       await loadContactos();
     }
   } catch (err) {
@@ -267,7 +272,7 @@ async function load() {
 }
 
 async function loadContactos() {
-  if (!filters.institucion_id) {
+  if (!canSearchContactos.value) {
     contactos.value = [];
     return;
   }
@@ -275,7 +280,7 @@ async function loadContactos() {
   loading.value = true;
   try {
     contactos.value = await listContactosInstitucionales({
-      institucion_id: filters.institucion_id,
+      institucion_id: filters.institucion_id || undefined,
       complejo_id: filters.complejo_id,
       torre_id: filters.torre_id,
       q: filters.q.trim() || undefined,
@@ -514,11 +519,12 @@ onMounted(load);
                 id="contacto-institucion"
                 v-model="filterSearch.institucion"
                 list="contacto-institucion-options"
+                :disabled="canSearchAllInstitutions"
                 @input="syncFilterInstitution"
                 @change="syncFilterInstitution"
               />
               <datalist id="contacto-institucion-options">
-                <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
+                <option v-for="institucion in searchInstitutionOptions" :key="institucion.id" :value="formInstitucionLabel(institucion)" />
               </datalist>
             </div>
             <div class="form-row">
@@ -556,10 +562,10 @@ onMounted(load);
               <input
                 id="contacto-q"
                 v-model="filters.q"
-                :disabled="!filters.institucion_id"
-                placeholder="Selecciona una institución para buscar"
+                :disabled="!canSearchContactos"
+                :placeholder="canSearchAllInstitutions ? 'Buscar en todas las instituciones' : 'Selecciona una institución para buscar'"
               />
-              <button type="submit" :disabled="!filters.institucion_id || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
+              <button type="submit" :disabled="!canSearchContactos || loading">{{ loading ? 'Buscando...' : 'Buscar' }}</button>
             </div>
           </div>
           <div class="actions-row">
@@ -567,7 +573,7 @@ onMounted(load);
           </div>
         </form>
 
-        <p v-if="!filters.institucion_id" class="message">Selecciona una institución para buscar contactos.</p>
+        <p v-if="!canSearchContactos" class="message">Selecciona una institución para buscar contactos.</p>
         <div class="table-scroll">
           <table>
             <thead>
@@ -596,7 +602,7 @@ onMounted(load);
             </tbody>
           </table>
         </div>
-        <p v-if="filters.institucion_id && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
+        <p v-if="canSearchContactos && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
       </section>
     </div>
   </section>

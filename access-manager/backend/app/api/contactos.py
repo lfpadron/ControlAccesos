@@ -12,7 +12,7 @@ from app.core.security import require_role
 from app.models.complejo import Complejo
 from app.models.contacto import ContactoInstitucional, ContactoInstitucionalComplejo, ContactoInstitucionalTorre
 from app.models.institucion import Institucion
-from app.models.operational import Torre
+from app.models.operational import AsignacionMedicoConsultorio, Consultorio, Medico, Piso, Role, Torre, UsuarioRol
 from app.models.usuario import Usuario
 from app.schemas.contacto import (
     ContactoInstitucionalCatalogosRead,
@@ -28,7 +28,9 @@ from app.services.access_scope import (
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 router = APIRouter()
-AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
+ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
+ContactosWriteUser = Depends(require_role("ADMIN_NEGOCIO"))
+ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
 
 
 def client_ip(request: Request) -> str | None:
@@ -40,6 +42,136 @@ def exists_or_404(db: Session, item_id: UUID) -> ContactoInstitucional:
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto institucional no encontrado.")
     return item
+
+
+def active_user_role_conditions(user: Usuario, today: date):
+    return [
+        UsuarioRol.usuario_id == user.id,
+        UsuarioRol.activo.is_(True),
+        UsuarioRol.fecha_inicio <= today,
+        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+        Role.activo.is_(True),
+    ]
+
+
+def active_role_codes(db: Session, user: Usuario, today: date) -> set[str]:
+    return set(
+        db.execute(
+            select(Role.codigo)
+            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
+            .where(*active_user_role_conditions(user, today))
+        ).scalars()
+    )
+
+
+def institution_ids_from_role_scopes(db: Session, conditions: list) -> set[UUID]:
+    role_query = select(UsuarioRol).join(Role, UsuarioRol.rol_id == Role.id).where(*conditions).subquery()
+    role = role_query.c
+    institution_ids: set[UUID] = set()
+    institution_ids.update(
+        db.execute(select(role.institucion_id).where(role.institucion_id.is_not(None))).scalars()
+    )
+    institution_ids.update(
+        db.execute(
+            select(Complejo.institucion_id).join(role_query, role.complejo_id == Complejo.id)
+        ).scalars()
+    )
+    institution_ids.update(
+        db.execute(
+            select(Complejo.institucion_id)
+            .join(Torre, Torre.complejo_id == Complejo.id)
+            .join(role_query, role.torre_id == Torre.id)
+        ).scalars()
+    )
+    institution_ids.update(
+        db.execute(
+            select(Complejo.institucion_id)
+            .join(Piso, Piso.complejo_id == Complejo.id)
+            .join(role_query, role.piso_id == Piso.id)
+        ).scalars()
+    )
+    institution_ids.update(
+        db.execute(
+            select(Complejo.institucion_id)
+            .join(Consultorio, Consultorio.complejo_id == Complejo.id)
+            .join(role_query, role.consultorio_id == Consultorio.id)
+        ).scalars()
+    )
+    return {item_id for item_id in institution_ids if item_id is not None}
+
+
+def medico_ids_assigned_to_assistant(db: Session, user: Usuario, today: date) -> list[UUID]:
+    return list(
+        dict.fromkeys(
+            db.execute(
+                select(UsuarioRol.medico_id)
+                .join(Role, UsuarioRol.rol_id == Role.id)
+                .where(
+                    *active_user_role_conditions(user, today),
+                    Role.codigo.in_(ASSISTANT_MEDICO_ROLE_CODES),
+                    UsuarioRol.medico_id.is_not(None),
+                )
+                .order_by(UsuarioRol.medico_id)
+            ).scalars()
+        )
+    )
+
+
+def institution_ids_assigned_to_medicos(db: Session, medico_ids: list[UUID], today: date) -> set[UUID]:
+    if not medico_ids:
+        return set()
+    medico_user_ids = list(
+        db.execute(select(Medico.usuario_id).where(Medico.id.in_(medico_ids), Medico.usuario_id.is_not(None))).scalars()
+    )
+    role_conditions = [
+        UsuarioRol.activo.is_(True),
+        UsuarioRol.fecha_inicio <= today,
+        or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+        Role.activo.is_(True),
+        Role.codigo == "MEDICO",
+        or_(UsuarioRol.medico_id.in_(medico_ids), UsuarioRol.usuario_id.in_(medico_user_ids))
+        if medico_user_ids
+        else UsuarioRol.medico_id.in_(medico_ids),
+    ]
+    institution_ids = institution_ids_from_role_scopes(db, role_conditions)
+    institution_ids.update(
+        db.execute(
+            select(Complejo.institucion_id)
+            .join(Consultorio, Consultorio.complejo_id == Complejo.id)
+            .join(AsignacionMedicoConsultorio, AsignacionMedicoConsultorio.consultorio_id == Consultorio.id)
+            .where(
+                AsignacionMedicoConsultorio.medico_id.in_(medico_ids),
+                AsignacionMedicoConsultorio.activo.is_(True),
+                AsignacionMedicoConsultorio.fecha_inicio <= today,
+                or_(
+                    AsignacionMedicoConsultorio.fecha_fin.is_(None),
+                    AsignacionMedicoConsultorio.fecha_fin >= today,
+                ),
+            )
+        ).scalars()
+    )
+    return institution_ids
+
+
+def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
+    role_codes = active_role_codes(db, user, today)
+    medico_ids = medico_ids_assigned_to_assistant(db, user, today) if role_codes.intersection(ASSISTANT_MEDICO_ROLE_CODES) else []
+    if medico_ids:
+        return institution_ids_assigned_to_medicos(db, medico_ids, today)
+    return institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
+
+
+def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
+    institution_ids = search_institution_ids_for_user(db, user, today)
+    if not institution_ids:
+        return []
+    return list(
+        db.execute(
+            select(Institucion)
+            .where(Institucion.id.in_(institution_ids), Institucion.activo.is_(True))
+            .order_by(func.lower(Institucion.nombre), Institucion.id)
+        ).scalars()
+    )
 
 
 def validate_institucion_access(db: Session, current_user: Usuario, today: date, institucion_id: UUID) -> None:
@@ -199,6 +331,17 @@ def contact_access_predicate(db: Session, user: Usuario, today: date):
     )
 
 
+def contact_active_institution_predicate():
+    return (
+        select(Institucion.id)
+        .where(
+            Institucion.id == ContactoInstitucional.institucion_id,
+            Institucion.activo.is_(True),
+        )
+        .exists()
+    )
+
+
 def contact_institution_predicate(institucion_id: UUID):
     return ContactoInstitucional.institucion_id == institucion_id
 
@@ -267,16 +410,19 @@ def ensure_accessible_filters(
     institucion_id: UUID | None,
     complejo_id: UUID | None,
     torre_id: UUID | None,
+    allow_all_institutions: bool = False,
 ) -> None:
     if institucion_id is not None:
+        conditions = [
+            Institucion.id == institucion_id,
+            Institucion.activo.is_(True),
+        ]
+        if not allow_all_institutions:
+            conditions.append(institucion_catalog_access_predicate(db, current_user, today))
         exists = (
             db.execute(
                 select(Institucion.id)
-                .where(
-                    Institucion.id == institucion_id,
-                    Institucion.activo.is_(True),
-                    institucion_catalog_access_predicate(db, current_user, today),
-                )
+                .where(*conditions)
                 .limit(1)
             ).first()
             is not None
@@ -287,8 +433,9 @@ def ensure_accessible_filters(
         conditions = [
             Complejo.id == complejo_id,
             Complejo.activo.is_(True),
-            complejo_catalog_access_predicate(db, current_user, today),
         ]
+        if not allow_all_institutions:
+            conditions.append(complejo_catalog_access_predicate(db, current_user, today))
         if institucion_id is not None:
             conditions.append(Complejo.institucion_id == institucion_id)
         exists = db.execute(select(Complejo.id).where(*conditions).limit(1)).first() is not None
@@ -298,8 +445,9 @@ def ensure_accessible_filters(
         query = select(Torre.id).join(Complejo, Complejo.id == Torre.complejo_id).where(
             Torre.id == torre_id,
             Torre.activo.is_(True),
-            torre_catalog_access_predicate(db, current_user, today),
         )
+        if not allow_all_institutions:
+            query = query.where(torre_catalog_access_predicate(db, current_user, today))
         if complejo_id is not None:
             query = query.where(Torre.complejo_id == complejo_id)
         if institucion_id is not None:
@@ -311,7 +459,7 @@ def ensure_accessible_filters(
 @router.get("/catalogos", response_model=ContactoInstitucionalCatalogosRead)
 def list_catalogos_contactos(
     db: Session = Depends(get_db),
-    current_user: Usuario = AdminUser,
+    current_user: Usuario = ContactosReadUser,
 ) -> ContactoInstitucionalCatalogosRead:
     today = date.today()
     instituciones = list(
@@ -344,7 +492,12 @@ def list_catalogos_contactos(
             .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
         ).scalars()
     )
-    return ContactoInstitucionalCatalogosRead(instituciones=instituciones, complejos=complejos, torres=torres)
+    return ContactoInstitucionalCatalogosRead(
+        instituciones=instituciones,
+        instituciones_busqueda=search_institutions_for_user(db, current_user, today),
+        complejos=complejos,
+        torres=torres,
+    )
 
 
 @router.get("", response_model=list[ContactoInstitucionalRead])
@@ -354,17 +507,30 @@ def list_contactos(
     complejo_id: UUID | None = Query(default=None),
     torre_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    current_user: Usuario = AdminUser,
+    current_user: Usuario = ContactosReadUser,
 ) -> list[ContactoInstitucionalRead]:
     term = (q or "").strip().lower()
-    if term and institucion_id is None:
+    today = date.today()
+    search_all_institutions = not search_institution_ids_for_user(db, current_user, today)
+    if term and institucion_id is None and not search_all_institutions:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Seleccione una institución para buscar contactos.",
         )
-    today = date.today()
-    ensure_accessible_filters(db, current_user, today, institucion_id, complejo_id, torre_id)
-    query = select(ContactoInstitucional).where(contact_access_predicate(db, current_user, today))
+    ensure_accessible_filters(
+        db,
+        current_user,
+        today,
+        institucion_id,
+        complejo_id,
+        torre_id,
+        allow_all_institutions=search_all_institutions,
+    )
+    query = select(ContactoInstitucional).where(
+        contact_active_institution_predicate()
+        if search_all_institutions
+        else contact_access_predicate(db, current_user, today)
+    )
     if institucion_id is not None:
         query = query.where(contact_institution_predicate(institucion_id))
     if complejo_id is not None:
@@ -388,7 +554,7 @@ def create_contacto(
     payload: ContactoInstitucionalCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Usuario = AdminUser,
+    current_user: Usuario = ContactosWriteUser,
 ) -> ContactoInstitucionalRead:
     today = date.today()
     validate_contact_scope(
@@ -439,7 +605,7 @@ def update_contacto(
     payload: ContactoInstitucionalUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Usuario = AdminUser,
+    current_user: Usuario = ContactosWriteUser,
 ) -> ContactoInstitucionalRead:
     item = exists_or_404(db, contacto_id)
     today = date.today()

@@ -372,6 +372,7 @@ export type ContactoInstitucional = {
 
 export type ContactoInstitucionalCatalogos = {
   instituciones: Institucion[];
+  instituciones_busqueda?: Institucion[];
   complejos: Complejo[];
   torres: Torre[];
 };
