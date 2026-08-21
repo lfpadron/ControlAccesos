@@ -82,8 +82,16 @@ class ContactoInstitucionalRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ContactoInstitucionalListRead(BaseModel):
+    items: list[ContactoInstitucionalRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ContactoInstitucionalCatalogosRead(BaseModel):
     instituciones: list[InstitucionRead]
     instituciones_busqueda: list[InstitucionRead] = Field(default_factory=list)
+    busqueda_todas_instituciones: bool = False
     complejos: list[ComplejoRead]
     torres: list[TorreRead]

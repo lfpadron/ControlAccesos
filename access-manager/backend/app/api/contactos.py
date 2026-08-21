@@ -17,6 +17,7 @@ from app.models.usuario import Usuario
 from app.schemas.contacto import (
     ContactoInstitucionalCatalogosRead,
     ContactoInstitucionalCreate,
+    ContactoInstitucionalListRead,
     ContactoInstitucionalRead,
     ContactoInstitucionalUpdate,
 )
@@ -28,7 +29,7 @@ from app.services.access_scope import (
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 router = APIRouter()
-ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
+ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "MEDICO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
 ContactosWriteUser = Depends(require_role("ADMIN_NEGOCIO"))
 ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
 
@@ -60,6 +61,37 @@ def active_role_codes(db: Session, user: Usuario, today: date) -> set[str]:
             select(Role.codigo)
             .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
             .where(*active_user_role_conditions(user, today))
+        ).scalars()
+    )
+
+
+def has_unrestricted_institution_scope(db: Session, user: Usuario, today: date) -> bool:
+    return (
+        db.execute(
+            select(UsuarioRol.id)
+            .join(Role, UsuarioRol.rol_id == Role.id)
+            .where(
+                *active_user_role_conditions(user, today),
+                UsuarioRol.institucion_id.is_(None),
+                UsuarioRol.complejo_id.is_(None),
+                UsuarioRol.torre_id.is_(None),
+                UsuarioRol.piso_id.is_(None),
+                UsuarioRol.consultorio_id.is_(None),
+                UsuarioRol.medico_id.is_(None),
+                Role.codigo != "MEDICO",
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def all_active_institutions(db: Session) -> list[Institucion]:
+    return list(
+        db.execute(
+            select(Institucion)
+            .where(Institucion.activo.is_(True))
+            .order_by(func.lower(Institucion.nombre), Institucion.id)
         ).scalars()
     )
 
@@ -98,6 +130,22 @@ def institution_ids_from_role_scopes(db: Session, conditions: list) -> set[UUID]
         ).scalars()
     )
     return {item_id for item_id in institution_ids if item_id is not None}
+
+
+def medico_ids_assigned_to_medico_user(db: Session, user: Usuario, today: date) -> list[UUID]:
+    medico_ids = list(db.execute(select(Medico.id).where(Medico.usuario_id == user.id, Medico.activo.is_(True))).scalars())
+    medico_ids.extend(
+        db.execute(
+            select(UsuarioRol.medico_id)
+            .join(Role, UsuarioRol.rol_id == Role.id)
+            .where(
+                *active_user_role_conditions(user, today),
+                Role.codigo == "MEDICO",
+                UsuarioRol.medico_id.is_not(None),
+            )
+        ).scalars()
+    )
+    return list(dict.fromkeys(medico_ids))
 
 
 def medico_ids_assigned_to_assistant(db: Session, user: Usuario, today: date) -> list[UUID]:
@@ -153,18 +201,28 @@ def institution_ids_assigned_to_medicos(db: Session, medico_ids: list[UUID], tod
     return institution_ids
 
 
-def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
+def search_institution_scope_for_user(db: Session, user: Usuario, today: date) -> tuple[set[UUID], bool]:
     role_codes = active_role_codes(db, user, today)
     medico_ids = medico_ids_assigned_to_assistant(db, user, today) if role_codes.intersection(ASSISTANT_MEDICO_ROLE_CODES) else []
     if medico_ids:
-        return institution_ids_assigned_to_medicos(db, medico_ids, today)
-    return institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
+        institution_ids = institution_ids_assigned_to_medicos(db, medico_ids, today)
+        return institution_ids, not institution_ids
+    institution_ids = institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
+    if "MEDICO" in role_codes:
+        institution_ids.update(institution_ids_assigned_to_medicos(db, medico_ids_assigned_to_medico_user(db, user, today), today))
+    if institution_ids:
+        return institution_ids, False
+    return set(), has_unrestricted_institution_scope(db, user, today) or bool(role_codes)
 
 
-def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
-    institution_ids = search_institution_ids_for_user(db, user, today)
-    if not institution_ids:
-        return []
+def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
+    institution_ids, _allow_all = search_institution_scope_for_user(db, user, today)
+    return institution_ids
+
+
+def search_institutions_for_scope(db: Session, institution_ids: set[UUID], allow_all: bool) -> list[Institucion]:
+    if allow_all:
+        return all_active_institutions(db)
     return list(
         db.execute(
             select(Institucion)
@@ -172,6 +230,11 @@ def search_institutions_for_user(db: Session, user: Usuario, today: date) -> lis
             .order_by(func.lower(Institucion.nombre), Institucion.id)
         ).scalars()
     )
+
+
+def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
+    institution_ids, allow_all = search_institution_scope_for_user(db, user, today)
+    return search_institutions_for_scope(db, institution_ids, allow_all)
 
 
 def validate_institucion_access(db: Session, current_user: Usuario, today: date, institucion_id: UUID) -> None:
@@ -492,31 +555,42 @@ def list_catalogos_contactos(
             .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
         ).scalars()
     )
+    search_institution_ids, busqueda_todas_instituciones = search_institution_scope_for_user(db, current_user, today)
+    instituciones_busqueda = search_institutions_for_scope(
+        db,
+        search_institution_ids,
+        busqueda_todas_instituciones,
+    )
     return ContactoInstitucionalCatalogosRead(
         instituciones=instituciones,
-        instituciones_busqueda=search_institutions_for_user(db, current_user, today),
+        instituciones_busqueda=instituciones_busqueda,
+        busqueda_todas_instituciones=busqueda_todas_instituciones,
         complejos=complejos,
         torres=torres,
     )
 
 
-@router.get("", response_model=list[ContactoInstitucionalRead])
+@router.get("", response_model=ContactoInstitucionalListRead)
 def list_contactos(
     q: str | None = Query(default=None),
     institucion_id: UUID | None = Query(default=None),
     complejo_id: UUID | None = Query(default=None),
     torre_id: UUID | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=20),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: Usuario = ContactosReadUser,
-) -> list[ContactoInstitucionalRead]:
+) -> ContactoInstitucionalListRead:
     term = (q or "").strip().lower()
     today = date.today()
-    search_all_institutions = not search_institution_ids_for_user(db, current_user, today)
+    search_institution_ids, search_all_institutions = search_institution_scope_for_user(db, current_user, today)
     if term and institucion_id is None and not search_all_institutions:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Seleccione una institución para buscar contactos.",
         )
+    if institucion_id is not None and not search_all_institutions and institucion_id not in search_institution_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institución no encontrada.")
     ensure_accessible_filters(
         db,
         current_user,
@@ -545,8 +619,16 @@ def list_contactos(
                 func.lower(cast(ContactoInstitucional.medios_contacto, String)).like(like_term),
             )
         )
-    items = db.execute(query.order_by(ContactoInstitucional.nombre)).scalars()
-    return [response_for(db, item) for item in items]
+    total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
+    items = db.execute(
+        query.order_by(func.lower(ContactoInstitucional.nombre), ContactoInstitucional.id).offset(offset).limit(limit)
+    ).scalars()
+    return ContactoInstitucionalListRead(
+        items=[response_for(db, item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=ContactoInstitucionalRead, status_code=status.HTTP_201_CREATED)

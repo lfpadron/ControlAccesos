@@ -23,6 +23,7 @@ const selected = ref<ContactoInstitucional | null>(null);
 const error = ref('');
 const message = ref('');
 const loading = ref(false);
+const searchAllInstitutions = ref(false);
 const formInstitutionSearch = ref('');
 const campusAssignSearch = ref('');
 const torreAssignSearch = ref('');
@@ -38,6 +39,12 @@ const filterSearch = reactive({
   institucion: '',
   campus: '',
   torre: '',
+});
+
+const pagination = reactive({
+  limit: 20,
+  offset: 0,
+  total: 0,
 });
 
 const form = reactive({
@@ -60,8 +67,12 @@ const form = reactive({
 const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
 const formInstitutionOptions = computed(() => sortByLabel(instituciones.value, formInstitucionLabel));
 const searchInstitutionOptions = computed(() => sortByLabel(institucionesBusqueda.value, formInstitucionLabel));
-const canSearchAllInstitutions = computed(() => searchInstitutionOptions.value.length === 0);
+const canSearchAllInstitutions = computed(() => searchAllInstitutions.value);
 const canSearchContactos = computed(() => canSearchAllInstitutions.value || Boolean(filters.institucion_id));
+const currentPage = computed(() => Math.floor(pagination.offset / pagination.limit) + 1);
+const totalPages = computed(() => Math.max(1, Math.ceil(pagination.total / pagination.limit)));
+const canGoPrevious = computed(() => pagination.offset > 0 && !loading.value);
+const canGoNext = computed(() => pagination.offset + pagination.limit < pagination.total && !loading.value);
 
 const filteredComplejos = computed(() => {
   if (!filters.institucion_id) return [];
@@ -199,6 +210,12 @@ function setForm(contacto?: ContactoInstitucional | null) {
   form.medios = Array.from({ length: 5 }, (_, index) => medios[index] ?? { tipo: index % 2 === 0 ? 'CELULAR' : 'CORREO', valor: '' });
 }
 
+function clearSelectionIfMissing(rows: ContactoInstitucional[]) {
+  if (selected.value && !rows.some((item) => item.id === selected.value?.id)) {
+    setForm(null);
+  }
+}
+
 function setFilterInstitution(item: Institucion | null, loadResults = true) {
   const previousId = filters.institucion_id;
   filters.institucion_id = item?.id ?? '';
@@ -209,36 +226,43 @@ function setFilterInstitution(item: Institucion | null, loadResults = true) {
   filterSearch.torre = '';
   if (!canSearchContactos.value) {
     contactos.value = [];
+    pagination.total = 0;
+    setForm(null);
     return;
   }
   if (loadResults && (previousId !== filters.institucion_id || canSearchAllInstitutions.value)) {
-    void loadContactos();
+    void refreshSearch();
   }
 }
 
 function syncFilterInstitution() {
-  setFilterInstitution(matchByLabel(searchInstitutionOptions.value, filterSearch.institucion, formInstitucionLabel) ?? null);
+  const text = filterSearch.institucion.trim();
+  const match = matchByLabel(searchInstitutionOptions.value, text, formInstitucionLabel);
+  if (!match && text && text !== 'Todas las instituciones') return;
+  setFilterInstitution(match ?? null);
 }
 
 function syncFilterCampus() {
   const previousId = filters.complejo_id;
   const match = matchByLabel(filteredComplejos.value, filterSearch.campus, campusLabel);
+  if (!match && filterSearch.campus.trim()) return;
   filters.complejo_id = match?.id ?? '';
   filterSearch.campus = match ? campusLabel(match) : filterSearch.campus;
   filters.torre_id = '';
   filterSearch.torre = '';
   if (previousId !== filters.complejo_id) {
-    void loadContactos();
+    void refreshSearch();
   }
 }
 
 function syncFilterTorre() {
   const previousId = filters.torre_id;
   const match = matchByLabel(filteredTorres.value, filterSearch.torre, torreLabel);
+  if (!match && filterSearch.torre.trim()) return;
   filters.torre_id = match?.id ?? '';
   filterSearch.torre = match ? torreLabel(match) : filterSearch.torre;
   if (previousId !== filters.torre_id) {
-    void loadContactos();
+    void refreshSearch();
   }
 }
 
@@ -257,12 +281,13 @@ async function load() {
     const catalogos = await listContactosInstitucionalesCatalogos();
     instituciones.value = catalogos.instituciones;
     institucionesBusqueda.value = catalogos.instituciones_busqueda ?? catalogos.instituciones;
+    searchAllInstitutions.value = Boolean(catalogos.busqueda_todas_instituciones);
     complejos.value = catalogos.complejos;
     torres.value = catalogos.torres;
     setForm(null);
     applyDefaultInstitution(false);
     if (canSearchContactos.value) {
-      await loadContactos();
+      await loadContactos(true);
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar contactos.';
@@ -271,20 +296,31 @@ async function load() {
   }
 }
 
-async function loadContactos() {
+async function loadContactos(resetPage = false) {
   if (!canSearchContactos.value) {
     contactos.value = [];
+    pagination.total = 0;
     return;
+  }
+  if (resetPage) {
+    pagination.offset = 0;
   }
   error.value = '';
   loading.value = true;
   try {
-    contactos.value = await listContactosInstitucionales({
+    const response = await listContactosInstitucionales({
       institucion_id: filters.institucion_id || undefined,
       complejo_id: filters.complejo_id,
       torre_id: filters.torre_id,
       q: filters.q.trim() || undefined,
+      limit: pagination.limit,
+      offset: pagination.offset,
     });
+    contactos.value = response.items;
+    clearSelectionIfMissing(response.items);
+    pagination.total = response.total;
+    pagination.limit = response.limit;
+    pagination.offset = response.offset;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible buscar contactos.';
   } finally {
@@ -292,9 +328,28 @@ async function loadContactos() {
   }
 }
 
+function refreshSearch() {
+  void loadContactos(true);
+}
+
+function previousPage() {
+  if (!canGoPrevious.value) return;
+  pagination.offset = Math.max(0, pagination.offset - pagination.limit);
+  void loadContactos();
+}
+
+function nextPage() {
+  if (!canGoNext.value) return;
+  pagination.offset += pagination.limit;
+  void loadContactos();
+}
+
 function clearFilters() {
   filters.q = '';
-  applyDefaultInstitution();
+  applyDefaultInstitution(false);
+  if (canSearchContactos.value) {
+    refreshSearch();
+  }
 }
 
 function addComplejo() {
@@ -344,6 +399,14 @@ function tipoContactoLabel(contacto: ContactoInstitucional) {
 
 function contactoCorreos(contacto: ContactoInstitucional) {
   return contacto.medios_contacto.filter((item) => item.tipo === 'CORREO').map((item) => item.valor).join(', ') || '-';
+}
+
+function contactoCelulares(contacto: ContactoInstitucional) {
+  return contacto.medios_contacto.filter((item) => item.tipo === 'CELULAR').map((item) => item.valor).join(', ') || '-';
+}
+
+function medioTipoLabel(medio: MedioContacto) {
+  return medio.tipo === 'CELULAR' ? 'Celular' : 'Correo';
 }
 
 function contactoCampusLabel(contacto: ContactoInstitucional) {
@@ -510,7 +573,7 @@ onMounted(load);
       </form>
 
       <section class="panel table-panel">
-        <form class="form" @submit.prevent="loadContactos">
+        <form class="form" @submit.prevent="refreshSearch">
           <h2>Búsqueda</h2>
           <div class="form-grid">
             <div class="form-row">
@@ -519,7 +582,7 @@ onMounted(load);
                 id="contacto-institucion"
                 v-model="filterSearch.institucion"
                 list="contacto-institucion-options"
-                :disabled="canSearchAllInstitutions"
+                :disabled="searchInstitutionOptions.length === 0"
                 @input="syncFilterInstitution"
                 @change="syncFilterInstitution"
               />
@@ -580,6 +643,7 @@ onMounted(load);
               <tr>
                 <th>Nombre</th>
                 <th>Tipo</th>
+                <th>Celular</th>
                 <th>Correos</th>
                 <th>Campus</th>
                 <th>Torres</th>
@@ -595,6 +659,7 @@ onMounted(load);
               >
                 <td>{{ contacto.nombre }}</td>
                 <td>{{ tipoContactoLabel(contacto) }}</td>
+                <td>{{ contactoCelulares(contacto) }}</td>
                 <td>{{ contactoCorreos(contacto) }}</td>
                 <td>{{ contactoCampusLabel(contacto) }}</td>
                 <td>{{ contactoTorresLabel(contacto) }}</td>
@@ -603,6 +668,41 @@ onMounted(load);
           </table>
         </div>
         <p v-if="canSearchContactos && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
+        <div v-if="canSearchContactos && pagination.total > 0" class="actions-row">
+          <button class="secondary" type="button" :disabled="!canGoPrevious" @click="previousPage">Anterior</button>
+          <span class="message">Página {{ currentPage }} de {{ totalPages }} · {{ pagination.total }} registros</span>
+          <button class="secondary" type="button" :disabled="!canGoNext" @click="nextPage">Siguiente</button>
+        </div>
+
+        <section v-if="selected" class="contact-detail">
+          <h3>Detalle del contacto</h3>
+          <div class="form-grid">
+            <div class="form-row">
+              <label>Nombre</label>
+              <input :value="selected.nombre" disabled />
+            </div>
+            <div class="form-row">
+              <label>Tipo de contacto</label>
+              <input :value="tipoContactoLabel(selected)" disabled />
+            </div>
+            <div v-if="selected.tipo_contacto === 'OTRO'" class="form-row">
+              <label>Detalles</label>
+              <input :value="selected.tipo_contacto_descripcion || '-'" disabled />
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Contactos</label>
+            <div class="chip-list">
+              <span v-for="(medio, index) in selected.medios_contacto" :key="`${medio.tipo}-${medio.valor}-${index}`" class="chip">
+                {{ medioTipoLabel(medio) }}: {{ medio.valor }}
+              </span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Notas</label>
+            <textarea :value="selected.notas || '-'" rows="4" disabled />
+          </div>
+        </section>
       </section>
     </div>
   </section>

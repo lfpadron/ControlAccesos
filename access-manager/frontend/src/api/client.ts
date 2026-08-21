@@ -373,8 +373,16 @@ export type ContactoInstitucional = {
 export type ContactoInstitucionalCatalogos = {
   instituciones: Institucion[];
   instituciones_busqueda?: Institucion[];
+  busqueda_todas_instituciones?: boolean;
   complejos: Complejo[];
   torres: Torre[];
+};
+
+export type ContactoInstitucionalListResponse = {
+  items: ContactoInstitucional[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type Cita = {
@@ -717,10 +725,12 @@ export type ContactoInstitucionalFilters = {
   institucion_id?: string;
   complejo_id?: string;
   torre_id?: string;
+  limit?: number;
+  offset?: number;
 };
 
 export const listContactosInstitucionales = (params: ContactoInstitucionalFilters = {}) =>
-  apiFetch<ContactoInstitucional[]>(`/contactos-institucionales${queryString(params)}`);
+  apiFetch<ContactoInstitucionalListResponse>(`/contactos-institucionales${queryString(params)}`);
 export const listContactosInstitucionalesCatalogos = () =>
   apiFetch<ContactoInstitucionalCatalogos>('/contactos-institucionales/catalogos');
 export const listAsignacionesMedicoConsultorio = () =>

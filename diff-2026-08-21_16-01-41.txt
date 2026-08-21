@@ -1,0 +1,668 @@
+diff --git a/access-manager/backend/app/api/contactos.py b/access-manager/backend/app/api/contactos.py
+index ffb0b66..cce2bd4 100644
+--- a/access-manager/backend/app/api/contactos.py
++++ b/access-manager/backend/app/api/contactos.py
+@@ -17,6 +17,7 @@ from app.models.usuario import Usuario
+ from app.schemas.contacto import (
+     ContactoInstitucionalCatalogosRead,
+     ContactoInstitucionalCreate,
++    ContactoInstitucionalListRead,
+     ContactoInstitucionalRead,
+     ContactoInstitucionalUpdate,
+ )
+@@ -28,7 +29,7 @@ from app.services.access_scope import (
+ from app.services.audit_service import audit_safe_dict, record_audit_event
+ 
+ router = APIRouter()
+-ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
++ContactosReadUser = Depends(require_role("ADMIN_NEGOCIO", "MEDICO", "ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"))
+ ContactosWriteUser = Depends(require_role("ADMIN_NEGOCIO"))
+ ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+ 
+@@ -64,6 +65,37 @@ def active_role_codes(db: Session, user: Usuario, today: date) -> set[str]:
+     )
+ 
+ 
++def has_unrestricted_institution_scope(db: Session, user: Usuario, today: date) -> bool:
++    return (
++        db.execute(
++            select(UsuarioRol.id)
++            .join(Role, UsuarioRol.rol_id == Role.id)
++            .where(
++                *active_user_role_conditions(user, today),
++                UsuarioRol.institucion_id.is_(None),
++                UsuarioRol.complejo_id.is_(None),
++                UsuarioRol.torre_id.is_(None),
++                UsuarioRol.piso_id.is_(None),
++                UsuarioRol.consultorio_id.is_(None),
++                UsuarioRol.medico_id.is_(None),
++                Role.codigo != "MEDICO",
++            )
++            .limit(1)
++        ).first()
++        is not None
++    )
++
++
++def all_active_institutions(db: Session) -> list[Institucion]:
++    return list(
++        db.execute(
++            select(Institucion)
++            .where(Institucion.activo.is_(True))
++            .order_by(func.lower(Institucion.nombre), Institucion.id)
++        ).scalars()
++    )
++
++
+ def institution_ids_from_role_scopes(db: Session, conditions: list) -> set[UUID]:
+     role_query = select(UsuarioRol).join(Role, UsuarioRol.rol_id == Role.id).where(*conditions).subquery()
+     role = role_query.c
+@@ -100,6 +132,22 @@ def institution_ids_from_role_scopes(db: Session, conditions: list) -> set[UUID]
+     return {item_id for item_id in institution_ids if item_id is not None}
+ 
+ 
++def medico_ids_assigned_to_medico_user(db: Session, user: Usuario, today: date) -> list[UUID]:
++    medico_ids = list(db.execute(select(Medico.id).where(Medico.usuario_id == user.id, Medico.activo.is_(True))).scalars())
++    medico_ids.extend(
++        db.execute(
++            select(UsuarioRol.medico_id)
++            .join(Role, UsuarioRol.rol_id == Role.id)
++            .where(
++                *active_user_role_conditions(user, today),
++                Role.codigo == "MEDICO",
++                UsuarioRol.medico_id.is_not(None),
++            )
++        ).scalars()
++    )
++    return list(dict.fromkeys(medico_ids))
++
++
+ def medico_ids_assigned_to_assistant(db: Session, user: Usuario, today: date) -> list[UUID]:
+     return list(
+         dict.fromkeys(
+@@ -153,18 +201,28 @@ def institution_ids_assigned_to_medicos(db: Session, medico_ids: list[UUID], tod
+     return institution_ids
+ 
+ 
+-def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
++def search_institution_scope_for_user(db: Session, user: Usuario, today: date) -> tuple[set[UUID], bool]:
+     role_codes = active_role_codes(db, user, today)
+     medico_ids = medico_ids_assigned_to_assistant(db, user, today) if role_codes.intersection(ASSISTANT_MEDICO_ROLE_CODES) else []
+     if medico_ids:
+-        return institution_ids_assigned_to_medicos(db, medico_ids, today)
+-    return institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
++        institution_ids = institution_ids_assigned_to_medicos(db, medico_ids, today)
++        return institution_ids, not institution_ids
++    institution_ids = institution_ids_from_role_scopes(db, active_user_role_conditions(user, today))
++    if "MEDICO" in role_codes:
++        institution_ids.update(institution_ids_assigned_to_medicos(db, medico_ids_assigned_to_medico_user(db, user, today), today))
++    if institution_ids:
++        return institution_ids, False
++    return set(), has_unrestricted_institution_scope(db, user, today) or bool(role_codes)
+ 
+ 
+-def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
+-    institution_ids = search_institution_ids_for_user(db, user, today)
+-    if not institution_ids:
+-        return []
++def search_institution_ids_for_user(db: Session, user: Usuario, today: date) -> set[UUID]:
++    institution_ids, _allow_all = search_institution_scope_for_user(db, user, today)
++    return institution_ids
++
++
++def search_institutions_for_scope(db: Session, institution_ids: set[UUID], allow_all: bool) -> list[Institucion]:
++    if allow_all:
++        return all_active_institutions(db)
+     return list(
+         db.execute(
+             select(Institucion)
+@@ -174,6 +232,11 @@ def search_institutions_for_user(db: Session, user: Usuario, today: date) -> lis
+     )
+ 
+ 
++def search_institutions_for_user(db: Session, user: Usuario, today: date) -> list[Institucion]:
++    institution_ids, allow_all = search_institution_scope_for_user(db, user, today)
++    return search_institutions_for_scope(db, institution_ids, allow_all)
++
++
+ def validate_institucion_access(db: Session, current_user: Usuario, today: date, institucion_id: UUID) -> None:
+     exists = (
+         db.execute(
+@@ -492,31 +555,42 @@ def list_catalogos_contactos(
+             .order_by(Torre.complejo_id, func.lower(Torre.nombre), Torre.id)
+         ).scalars()
+     )
++    search_institution_ids, busqueda_todas_instituciones = search_institution_scope_for_user(db, current_user, today)
++    instituciones_busqueda = search_institutions_for_scope(
++        db,
++        search_institution_ids,
++        busqueda_todas_instituciones,
++    )
+     return ContactoInstitucionalCatalogosRead(
+         instituciones=instituciones,
+-        instituciones_busqueda=search_institutions_for_user(db, current_user, today),
++        instituciones_busqueda=instituciones_busqueda,
++        busqueda_todas_instituciones=busqueda_todas_instituciones,
+         complejos=complejos,
+         torres=torres,
+     )
+ 
+ 
+-@router.get("", response_model=list[ContactoInstitucionalRead])
++@router.get("", response_model=ContactoInstitucionalListRead)
+ def list_contactos(
+     q: str | None = Query(default=None),
+     institucion_id: UUID | None = Query(default=None),
+     complejo_id: UUID | None = Query(default=None),
+     torre_id: UUID | None = Query(default=None),
++    limit: int = Query(default=20, ge=1, le=20),
++    offset: int = Query(default=0, ge=0),
+     db: Session = Depends(get_db),
+     current_user: Usuario = ContactosReadUser,
+-) -> list[ContactoInstitucionalRead]:
++) -> ContactoInstitucionalListRead:
+     term = (q or "").strip().lower()
+     today = date.today()
+-    search_all_institutions = not search_institution_ids_for_user(db, current_user, today)
++    search_institution_ids, search_all_institutions = search_institution_scope_for_user(db, current_user, today)
+     if term and institucion_id is None and not search_all_institutions:
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+             detail="Seleccione una institución para buscar contactos.",
+         )
++    if institucion_id is not None and not search_all_institutions and institucion_id not in search_institution_ids:
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institución no encontrada.")
+     ensure_accessible_filters(
+         db,
+         current_user,
+@@ -545,8 +619,16 @@ def list_contactos(
+                 func.lower(cast(ContactoInstitucional.medios_contacto, String)).like(like_term),
+             )
+         )
+-    items = db.execute(query.order_by(ContactoInstitucional.nombre)).scalars()
+-    return [response_for(db, item) for item in items]
++    total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
++    items = db.execute(
++        query.order_by(func.lower(ContactoInstitucional.nombre), ContactoInstitucional.id).offset(offset).limit(limit)
++    ).scalars()
++    return ContactoInstitucionalListRead(
++        items=[response_for(db, item) for item in items],
++        total=total,
++        limit=limit,
++        offset=offset,
++    )
+ 
+ 
+ @router.post("", response_model=ContactoInstitucionalRead, status_code=status.HTTP_201_CREATED)
+diff --git a/access-manager/backend/app/schemas/contacto.py b/access-manager/backend/app/schemas/contacto.py
+index 22fbd0d..1f5e706 100644
+--- a/access-manager/backend/app/schemas/contacto.py
++++ b/access-manager/backend/app/schemas/contacto.py
+@@ -82,8 +82,16 @@ class ContactoInstitucionalRead(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+ 
++class ContactoInstitucionalListRead(BaseModel):
++    items: list[ContactoInstitucionalRead]
++    total: int
++    limit: int
++    offset: int
++
++
+ class ContactoInstitucionalCatalogosRead(BaseModel):
+     instituciones: list[InstitucionRead]
+     instituciones_busqueda: list[InstitucionRead] = Field(default_factory=list)
++    busqueda_todas_instituciones: bool = False
+     complejos: list[ComplejoRead]
+     torres: list[TorreRead]
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index 1eb4070..a6c9157 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -25,7 +25,7 @@ from app.models.operational import (
+     UsuarioRol,
+ )
+ from app.models.usuario import Usuario
+-from app.api.contactos import search_institutions_for_user
++from app.api.contactos import search_institution_scope_for_user, search_institutions_for_user
+ from app.services.access_scope import (
+     cita_agenda_access_predicate,
+     complejo_catalog_access_predicate,
+@@ -216,6 +216,66 @@ def test_contact_search_institutions_for_assistant_use_assigned_medico_scope() -
+     assert [item.id for item in instituciones] == [institucion.id]
+ 
+ 
++def test_contact_search_institutions_for_medico_use_assigned_scope_without_duplicates() -> None:
++    engine = create_engine("sqlite+pysqlite:///:memory:")
++    create_scope_test_tables(engine)
++    today = date(2026, 8, 21)
++
++    with Session(engine) as db:
++        medico_user = Usuario(
++            apellidos="Contactos",
++            nombre="Medico",
++            email="medico-contactos@example.com",
++            password_hash="irrelevant",
++        )
++        medico_role = Role(codigo="MEDICO", nombre="Medico", permisos={})
++        medico = Medico(nombre="Medico", apellidos="Contactos", usuario_id=medico_user.id)
++        institucion = Institucion(nombre="Institucion Medico")
++        otra_institucion = Institucion(nombre="Otra Institucion")
++        db.add_all([medico_user, medico_role, medico, institucion, otra_institucion])
++        db.flush()
++
++        db.add_all(
++            [
++                UsuarioRol(usuario_id=medico_user.id, rol_id=medico_role.id, institucion_id=institucion.id, fecha_inicio=today),
++                UsuarioRol(usuario_id=medico_user.id, rol_id=medico_role.id, institucion_id=institucion.id, fecha_inicio=today),
++            ]
++        )
++        db.commit()
++
++        instituciones = search_institutions_for_user(db, medico_user, today)
++
++    assert [item.id for item in instituciones] == [institucion.id]
++
++
++def test_contact_search_institutions_without_assigned_scope_allow_all() -> None:
++    engine = create_engine("sqlite+pysqlite:///:memory:")
++    create_scope_test_tables(engine)
++    today = date(2026, 8, 21)
++
++    with Session(engine) as db:
++        admin = Usuario(
++            apellidos="Negocio",
++            nombre="Admin",
++            email="admin-contactos@example.com",
++            password_hash="irrelevant",
++        )
++        admin_role = Role(codigo="ADMIN_NEGOCIO", nombre="Admin negocio", permisos={})
++        institucion_a = Institucion(nombre="Alpha")
++        institucion_b = Institucion(nombre="Beta")
++        db.add_all([admin, admin_role, institucion_a, institucion_b])
++        db.flush()
++        db.add(UsuarioRol(usuario_id=admin.id, rol_id=admin_role.id, fecha_inicio=today))
++        db.commit()
++
++        institution_ids, allow_all = search_institution_scope_for_user(db, admin, today)
++        instituciones = search_institutions_for_user(db, admin, today)
++
++    assert institution_ids == set()
++    assert allow_all is True
++    assert [item.nombre for item in instituciones] == ["Alpha", "Beta"]
++
++
+ def test_location_catalog_scope_predicates_compile() -> None:
+     db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+     user = Usuario(
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 77c421a..b7aa688 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -1125,7 +1125,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
+ 
+     global_search = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
+     assert global_search.status_code == 200, global_search.text
+-    assert [item["id"] for item in global_search.json()] == [contacto_a["id"]]
++    assert [item["id"] for item in global_search.json()["items"]] == [contacto_a["id"]]
+ 
+     scoped_search = client.get(
+         "/api/contactos-institucionales",
+@@ -1133,7 +1133,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
+         params={"institucion_id": institucion_a["id"], "q": correo_a},
+     )
+     assert scoped_search.status_code == 200, scoped_search.text
+-    assert [item["id"] for item in scoped_search.json()] == [contacto_a["id"]]
++    assert [item["id"] for item in scoped_search.json()["items"]] == [contacto_a["id"]]
+ 
+     other_institution_search = client.get(
+         "/api/contactos-institucionales",
+@@ -1141,7 +1141,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
+         params={"institucion_id": institucion_b["id"], "q": correo_a},
+     )
+     assert other_institution_search.status_code == 200, other_institution_search.text
+-    assert other_institution_search.json() == []
++    assert other_institution_search.json()["items"] == []
+ 
+     tower_search = client.get(
+         "/api/contactos-institucionales",
+@@ -1149,7 +1149,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
+         params={"institucion_id": institucion_a["id"], "complejo_id": complejo_a["id"], "torre_id": torre_a["id"]},
+     )
+     assert tower_search.status_code == 200, tower_search.text
+-    assert contacto_a["id"] in {item["id"] for item in tower_search.json()}
++    assert contacto_a["id"] in {item["id"] for item in tower_search.json()["items"]}
+ 
+ 
+ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index fc52eaf..92de8ab 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -373,10 +373,18 @@ export type ContactoInstitucional = {
+ export type ContactoInstitucionalCatalogos = {
+   instituciones: Institucion[];
+   instituciones_busqueda?: Institucion[];
++  busqueda_todas_instituciones?: boolean;
+   complejos: Complejo[];
+   torres: Torre[];
+ };
+ 
++export type ContactoInstitucionalListResponse = {
++  items: ContactoInstitucional[];
++  total: number;
++  limit: number;
++  offset: number;
++};
++
+ export type Cita = {
+   id: string;
+   tipo: string;
+@@ -717,10 +725,12 @@ export type ContactoInstitucionalFilters = {
+   institucion_id?: string;
+   complejo_id?: string;
+   torre_id?: string;
++  limit?: number;
++  offset?: number;
+ };
+ 
+ export const listContactosInstitucionales = (params: ContactoInstitucionalFilters = {}) =>
+-  apiFetch<ContactoInstitucional[]>(`/contactos-institucionales${queryString(params)}`);
++  apiFetch<ContactoInstitucionalListResponse>(`/contactos-institucionales${queryString(params)}`);
+ export const listContactosInstitucionalesCatalogos = () =>
+   apiFetch<ContactoInstitucionalCatalogos>('/contactos-institucionales/catalogos');
+ export const listAsignacionesMedicoConsultorio = () =>
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index d5ab61f..1b0a4de 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -546,6 +546,19 @@ input[readonly] {
+   padding-top: 0.75rem;
+ }
+ 
++.contact-detail {
++  border-top: 1px solid #e2e8f0;
++  display: grid;
++  gap: 0.8rem;
++  margin-top: 1rem;
++  padding-top: 1rem;
++}
++
++.contact-detail h3 {
++  font-size: 1rem;
++  margin: 0;
++}
++
+ table {
+   border-collapse: collapse;
+   width: 100%;
+diff --git a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+index 2a99909..696cd45 100644
+--- a/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
++++ b/access-manager/frontend/src/views/ContactosInstitucionalesView.vue
+@@ -23,6 +23,7 @@ const selected = ref<ContactoInstitucional | null>(null);
+ const error = ref('');
+ const message = ref('');
+ const loading = ref(false);
++const searchAllInstitutions = ref(false);
+ const formInstitutionSearch = ref('');
+ const campusAssignSearch = ref('');
+ const torreAssignSearch = ref('');
+@@ -40,6 +41,12 @@ const filterSearch = reactive({
+   torre: '',
+ });
+ 
++const pagination = reactive({
++  limit: 20,
++  offset: 0,
++  total: 0,
++});
++
+ const form = reactive({
+   institucion_id: '',
+   nombre: '',
+@@ -60,8 +67,12 @@ const form = reactive({
+ const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
+ const formInstitutionOptions = computed(() => sortByLabel(instituciones.value, formInstitucionLabel));
+ const searchInstitutionOptions = computed(() => sortByLabel(institucionesBusqueda.value, formInstitucionLabel));
+-const canSearchAllInstitutions = computed(() => searchInstitutionOptions.value.length === 0);
++const canSearchAllInstitutions = computed(() => searchAllInstitutions.value);
+ const canSearchContactos = computed(() => canSearchAllInstitutions.value || Boolean(filters.institucion_id));
++const currentPage = computed(() => Math.floor(pagination.offset / pagination.limit) + 1);
++const totalPages = computed(() => Math.max(1, Math.ceil(pagination.total / pagination.limit)));
++const canGoPrevious = computed(() => pagination.offset > 0 && !loading.value);
++const canGoNext = computed(() => pagination.offset + pagination.limit < pagination.total && !loading.value);
+ 
+ const filteredComplejos = computed(() => {
+   if (!filters.institucion_id) return [];
+@@ -199,6 +210,12 @@ function setForm(contacto?: ContactoInstitucional | null) {
+   form.medios = Array.from({ length: 5 }, (_, index) => medios[index] ?? { tipo: index % 2 === 0 ? 'CELULAR' : 'CORREO', valor: '' });
+ }
+ 
++function clearSelectionIfMissing(rows: ContactoInstitucional[]) {
++  if (selected.value && !rows.some((item) => item.id === selected.value?.id)) {
++    setForm(null);
++  }
++}
++
+ function setFilterInstitution(item: Institucion | null, loadResults = true) {
+   const previousId = filters.institucion_id;
+   filters.institucion_id = item?.id ?? '';
+@@ -209,36 +226,43 @@ function setFilterInstitution(item: Institucion | null, loadResults = true) {
+   filterSearch.torre = '';
+   if (!canSearchContactos.value) {
+     contactos.value = [];
++    pagination.total = 0;
++    setForm(null);
+     return;
+   }
+   if (loadResults && (previousId !== filters.institucion_id || canSearchAllInstitutions.value)) {
+-    void loadContactos();
++    void refreshSearch();
+   }
+ }
+ 
+ function syncFilterInstitution() {
+-  setFilterInstitution(matchByLabel(searchInstitutionOptions.value, filterSearch.institucion, formInstitucionLabel) ?? null);
++  const text = filterSearch.institucion.trim();
++  const match = matchByLabel(searchInstitutionOptions.value, text, formInstitucionLabel);
++  if (!match && text && text !== 'Todas las instituciones') return;
++  setFilterInstitution(match ?? null);
+ }
+ 
+ function syncFilterCampus() {
+   const previousId = filters.complejo_id;
+   const match = matchByLabel(filteredComplejos.value, filterSearch.campus, campusLabel);
++  if (!match && filterSearch.campus.trim()) return;
+   filters.complejo_id = match?.id ?? '';
+   filterSearch.campus = match ? campusLabel(match) : filterSearch.campus;
+   filters.torre_id = '';
+   filterSearch.torre = '';
+   if (previousId !== filters.complejo_id) {
+-    void loadContactos();
++    void refreshSearch();
+   }
+ }
+ 
+ function syncFilterTorre() {
+   const previousId = filters.torre_id;
+   const match = matchByLabel(filteredTorres.value, filterSearch.torre, torreLabel);
++  if (!match && filterSearch.torre.trim()) return;
+   filters.torre_id = match?.id ?? '';
+   filterSearch.torre = match ? torreLabel(match) : filterSearch.torre;
+   if (previousId !== filters.torre_id) {
+-    void loadContactos();
++    void refreshSearch();
+   }
+ }
+ 
+@@ -257,12 +281,13 @@ async function load() {
+     const catalogos = await listContactosInstitucionalesCatalogos();
+     instituciones.value = catalogos.instituciones;
+     institucionesBusqueda.value = catalogos.instituciones_busqueda ?? catalogos.instituciones;
++    searchAllInstitutions.value = Boolean(catalogos.busqueda_todas_instituciones);
+     complejos.value = catalogos.complejos;
+     torres.value = catalogos.torres;
+     setForm(null);
+     applyDefaultInstitution(false);
+     if (canSearchContactos.value) {
+-      await loadContactos();
++      await loadContactos(true);
+     }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar contactos.';
+@@ -271,20 +296,31 @@ async function load() {
+   }
+ }
+ 
+-async function loadContactos() {
++async function loadContactos(resetPage = false) {
+   if (!canSearchContactos.value) {
+     contactos.value = [];
++    pagination.total = 0;
+     return;
+   }
++  if (resetPage) {
++    pagination.offset = 0;
++  }
+   error.value = '';
+   loading.value = true;
+   try {
+-    contactos.value = await listContactosInstitucionales({
++    const response = await listContactosInstitucionales({
+       institucion_id: filters.institucion_id || undefined,
+       complejo_id: filters.complejo_id,
+       torre_id: filters.torre_id,
+       q: filters.q.trim() || undefined,
++      limit: pagination.limit,
++      offset: pagination.offset,
+     });
++    contactos.value = response.items;
++    clearSelectionIfMissing(response.items);
++    pagination.total = response.total;
++    pagination.limit = response.limit;
++    pagination.offset = response.offset;
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible buscar contactos.';
+   } finally {
+@@ -292,9 +328,28 @@ async function loadContactos() {
+   }
+ }
+ 
++function refreshSearch() {
++  void loadContactos(true);
++}
++
++function previousPage() {
++  if (!canGoPrevious.value) return;
++  pagination.offset = Math.max(0, pagination.offset - pagination.limit);
++  void loadContactos();
++}
++
++function nextPage() {
++  if (!canGoNext.value) return;
++  pagination.offset += pagination.limit;
++  void loadContactos();
++}
++
+ function clearFilters() {
+   filters.q = '';
+-  applyDefaultInstitution();
++  applyDefaultInstitution(false);
++  if (canSearchContactos.value) {
++    refreshSearch();
++  }
+ }
+ 
+ function addComplejo() {
+@@ -346,6 +401,14 @@ function contactoCorreos(contacto: ContactoInstitucional) {
+   return contacto.medios_contacto.filter((item) => item.tipo === 'CORREO').map((item) => item.valor).join(', ') || '-';
+ }
+ 
++function contactoCelulares(contacto: ContactoInstitucional) {
++  return contacto.medios_contacto.filter((item) => item.tipo === 'CELULAR').map((item) => item.valor).join(', ') || '-';
++}
++
++function medioTipoLabel(medio: MedioContacto) {
++  return medio.tipo === 'CELULAR' ? 'Celular' : 'Correo';
++}
++
+ function contactoCampusLabel(contacto: ContactoInstitucional) {
+   if (!contacto.complejo_ids.length && !contacto.torre_ids.length) return 'Toda la institución';
+   const names = contacto.complejo_ids
+@@ -510,7 +573,7 @@ onMounted(load);
+       </form>
+ 
+       <section class="panel table-panel">
+-        <form class="form" @submit.prevent="loadContactos">
++        <form class="form" @submit.prevent="refreshSearch">
+           <h2>Búsqueda</h2>
+           <div class="form-grid">
+             <div class="form-row">
+@@ -519,7 +582,7 @@ onMounted(load);
+                 id="contacto-institucion"
+                 v-model="filterSearch.institucion"
+                 list="contacto-institucion-options"
+-                :disabled="canSearchAllInstitutions"
++                :disabled="searchInstitutionOptions.length === 0"
+                 @input="syncFilterInstitution"
+                 @change="syncFilterInstitution"
+               />
+@@ -580,6 +643,7 @@ onMounted(load);
+               <tr>
+                 <th>Nombre</th>
+                 <th>Tipo</th>
++                <th>Celular</th>
+                 <th>Correos</th>
+                 <th>Campus</th>
+                 <th>Torres</th>
+@@ -595,6 +659,7 @@ onMounted(load);
+               >
+                 <td>{{ contacto.nombre }}</td>
+                 <td>{{ tipoContactoLabel(contacto) }}</td>
++                <td>{{ contactoCelulares(contacto) }}</td>
+                 <td>{{ contactoCorreos(contacto) }}</td>
+                 <td>{{ contactoCampusLabel(contacto) }}</td>
+                 <td>{{ contactoTorresLabel(contacto) }}</td>
+@@ -603,6 +668,41 @@ onMounted(load);
+           </table>
+         </div>
+         <p v-if="canSearchContactos && !loading && contactos.length === 0" class="message">No hay contactos para mostrar.</p>
++        <div v-if="canSearchContactos && pagination.total > 0" class="actions-row">
++          <button class="secondary" type="button" :disabled="!canGoPrevious" @click="previousPage">Anterior</button>
++          <span class="message">Página {{ currentPage }} de {{ totalPages }} · {{ pagination.total }} registros</span>
++          <button class="secondary" type="button" :disabled="!canGoNext" @click="nextPage">Siguiente</button>
++        </div>
++
++        <section v-if="selected" class="contact-detail">
++          <h3>Detalle del contacto</h3>
++          <div class="form-grid">
++            <div class="form-row">
++              <label>Nombre</label>
++              <input :value="selected.nombre" disabled />
++            </div>
++            <div class="form-row">
++              <label>Tipo de contacto</label>
++              <input :value="tipoContactoLabel(selected)" disabled />
++            </div>
++            <div v-if="selected.tipo_contacto === 'OTRO'" class="form-row">
++              <label>Detalles</label>
++              <input :value="selected.tipo_contacto_descripcion || '-'" disabled />
++            </div>
++          </div>
++          <div class="form-row">
++            <label>Contactos</label>
++            <div class="chip-list">
++              <span v-for="(medio, index) in selected.medios_contacto" :key="`${medio.tipo}-${medio.valor}-${index}`" class="chip">
++                {{ medioTipoLabel(medio) }}: {{ medio.valor }}
++              </span>
++            </div>
++          </div>
++          <div class="form-row">
++            <label>Notas</label>
++            <textarea :value="selected.notas || '-'" rows="4" disabled />
++          </div>
++        </section>
+       </section>
+     </div>
+   </section>

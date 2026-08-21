@@ -1125,7 +1125,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
 
     global_search = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
     assert global_search.status_code == 200, global_search.text
-    assert [item["id"] for item in global_search.json()] == [contacto_a["id"]]
+    assert [item["id"] for item in global_search.json()["items"]] == [contacto_a["id"]]
 
     scoped_search = client.get(
         "/api/contactos-institucionales",
@@ -1133,7 +1133,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
         params={"institucion_id": institucion_a["id"], "q": correo_a},
     )
     assert scoped_search.status_code == 200, scoped_search.text
-    assert [item["id"] for item in scoped_search.json()] == [contacto_a["id"]]
+    assert [item["id"] for item in scoped_search.json()["items"]] == [contacto_a["id"]]
 
     other_institution_search = client.get(
         "/api/contactos-institucionales",
@@ -1141,7 +1141,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
         params={"institucion_id": institucion_b["id"], "q": correo_a},
     )
     assert other_institution_search.status_code == 200, other_institution_search.text
-    assert other_institution_search.json() == []
+    assert other_institution_search.json()["items"] == []
 
     tower_search = client.get(
         "/api/contactos-institucionales",
@@ -1149,7 +1149,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
         params={"institucion_id": institucion_a["id"], "complejo_id": complejo_a["id"], "torre_id": torre_a["id"]},
     )
     assert tower_search.status_code == 200, tower_search.text
-    assert contacto_a["id"] in {item["id"] for item in tower_search.json()}
+    assert contacto_a["id"] in {item["id"] for item in tower_search.json()["items"]}
 
 
 def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_headers: dict[str, str]) -> None:

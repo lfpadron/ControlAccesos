@@ -25,7 +25,7 @@ from app.models.operational import (
     UsuarioRol,
 )
 from app.models.usuario import Usuario
-from app.api.contactos import search_institutions_for_user
+from app.api.contactos import search_institution_scope_for_user, search_institutions_for_user
 from app.services.access_scope import (
     cita_agenda_access_predicate,
     complejo_catalog_access_predicate,
@@ -214,6 +214,66 @@ def test_contact_search_institutions_for_assistant_use_assigned_medico_scope() -
         instituciones = search_institutions_for_user(db, assistant, today)
 
     assert [item.id for item in instituciones] == [institucion.id]
+
+
+def test_contact_search_institutions_for_medico_use_assigned_scope_without_duplicates() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_scope_test_tables(engine)
+    today = date(2026, 8, 21)
+
+    with Session(engine) as db:
+        medico_user = Usuario(
+            apellidos="Contactos",
+            nombre="Medico",
+            email="medico-contactos@example.com",
+            password_hash="irrelevant",
+        )
+        medico_role = Role(codigo="MEDICO", nombre="Medico", permisos={})
+        medico = Medico(nombre="Medico", apellidos="Contactos", usuario_id=medico_user.id)
+        institucion = Institucion(nombre="Institucion Medico")
+        otra_institucion = Institucion(nombre="Otra Institucion")
+        db.add_all([medico_user, medico_role, medico, institucion, otra_institucion])
+        db.flush()
+
+        db.add_all(
+            [
+                UsuarioRol(usuario_id=medico_user.id, rol_id=medico_role.id, institucion_id=institucion.id, fecha_inicio=today),
+                UsuarioRol(usuario_id=medico_user.id, rol_id=medico_role.id, institucion_id=institucion.id, fecha_inicio=today),
+            ]
+        )
+        db.commit()
+
+        instituciones = search_institutions_for_user(db, medico_user, today)
+
+    assert [item.id for item in instituciones] == [institucion.id]
+
+
+def test_contact_search_institutions_without_assigned_scope_allow_all() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_scope_test_tables(engine)
+    today = date(2026, 8, 21)
+
+    with Session(engine) as db:
+        admin = Usuario(
+            apellidos="Negocio",
+            nombre="Admin",
+            email="admin-contactos@example.com",
+            password_hash="irrelevant",
+        )
+        admin_role = Role(codigo="ADMIN_NEGOCIO", nombre="Admin negocio", permisos={})
+        institucion_a = Institucion(nombre="Alpha")
+        institucion_b = Institucion(nombre="Beta")
+        db.add_all([admin, admin_role, institucion_a, institucion_b])
+        db.flush()
+        db.add(UsuarioRol(usuario_id=admin.id, rol_id=admin_role.id, fecha_inicio=today))
+        db.commit()
+
+        institution_ids, allow_all = search_institution_scope_for_user(db, admin, today)
+        instituciones = search_institutions_for_user(db, admin, today)
+
+    assert institution_ids == set()
+    assert allow_all is True
+    assert [item.nombre for item in instituciones] == ["Alpha", "Beta"]
 
 
 def test_location_catalog_scope_predicates_compile() -> None:
