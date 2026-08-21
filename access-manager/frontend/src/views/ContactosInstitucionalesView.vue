@@ -57,6 +57,7 @@ const form = reactive({
 });
 
 const institutionOptions = computed(() => sortByLabel(instituciones.value, institucionLabel));
+const formInstitutionOptions = computed(() => sortByLabel(instituciones.value, formInstitucionLabel));
 
 const filteredComplejos = computed(() => {
   if (!filters.institucion_id) return [];
@@ -131,6 +132,10 @@ function institucionLabel(item: Institucion) {
   return item.razon_social ? `${item.nombre} · ${item.razon_social}` : item.nombre;
 }
 
+function formInstitucionLabel(item: Institucion) {
+  return item.nombre;
+}
+
 function campusLabel(item: Complejo) {
   return item.nombre;
 }
@@ -149,7 +154,7 @@ function torreFullLabel(item: Torre) {
 }
 
 function defaultFormInstitution() {
-  return institutionOptions.value.length === 1 ? institutionOptions.value[0] : null;
+  return formInstitutionOptions.value.length === 1 ? formInstitutionOptions.value[0] : null;
 }
 
 function clearFormLocations() {
@@ -161,10 +166,10 @@ function clearFormLocations() {
 
 function syncFormInstitution() {
   const previousId = form.institucion_id;
-  const match = matchByLabel(institutionOptions.value, formInstitutionSearch.value, institucionLabel);
+  const match = matchByLabel(formInstitutionOptions.value, formInstitutionSearch.value, formInstitucionLabel);
   form.institucion_id = match?.id ?? '';
   if (match) {
-    formInstitutionSearch.value = institucionLabel(match);
+    formInstitutionSearch.value = formInstitucionLabel(match);
   }
   if (previousId !== form.institucion_id) {
     clearFormLocations();
@@ -177,7 +182,7 @@ function setForm(contacto?: ContactoInstitucional | null) {
   const institutionId = contacto?.institucion_id ?? defaultInstitution?.id ?? '';
   const institution = institutionOptions.value.find((item) => item.id === institutionId) ?? null;
   form.institucion_id = institutionId;
-  formInstitutionSearch.value = institution ? institucionLabel(institution) : '';
+  formInstitutionSearch.value = institution ? formInstitucionLabel(institution) : '';
   form.nombre = contacto?.nombre ?? '';
   form.tipo_contacto = contacto?.tipo_contacto ?? 'PRIMARIO';
   form.tipo_contacto_descripcion = contacto?.tipo_contacto_descripcion ?? '';
@@ -403,35 +408,8 @@ onMounted(load);
             @change="syncFormInstitution"
           />
           <datalist id="contacto-institucion-asignada-options">
-            <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
+            <option v-for="institucion in formInstitutionOptions" :key="institucion.id" :value="formInstitucionLabel(institucion)" />
           </datalist>
-        </div>
-        <div class="form-row">
-          <label for="nombre">Nombre</label>
-          <input id="nombre" v-model="form.nombre" required maxlength="180" />
-        </div>
-        <div class="form-row">
-          <label for="tipo">Tipo de contacto</label>
-          <select id="tipo" v-model="form.tipo_contacto">
-            <option value="PRIMARIO">Primario</option>
-            <option value="SECUNDARIO">Secundario</option>
-            <option value="SOLO_EMERGENCIAS">Solo emergencias</option>
-            <option value="OTRO">Otro</option>
-          </select>
-        </div>
-        <div v-if="form.tipo_contacto === 'OTRO'" class="form-row">
-          <label for="tipo-descripcion">Describir tipo</label>
-          <input id="tipo-descripcion" v-model="form.tipo_contacto_descripcion" required maxlength="50" />
-        </div>
-        <div class="form-row">
-          <label>Medios de contacto</label>
-          <div v-for="(medio, index) in form.medios" :key="index" class="contact-medium">
-            <select v-model="medio.tipo">
-              <option value="CELULAR">Celular</option>
-              <option value="CORREO">Correo</option>
-            </select>
-            <input v-model="medio.valor" :placeholder="index < 2 ? 'Obligatorio' : 'Opcional'" maxlength="180" />
-          </div>
         </div>
 
         <div class="form-row">
@@ -483,6 +461,34 @@ onMounted(load);
             <button v-for="torre in selectedTorres" :key="torre.id" class="chip danger" type="button" @click="removeTorre(torre.id)">
               × {{ torreFullLabel(torre) }}
             </button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label for="nombre">Nombre</label>
+          <input id="nombre" v-model="form.nombre" required maxlength="180" />
+        </div>
+        <div class="form-row">
+          <label for="tipo">Tipo de contacto</label>
+          <select id="tipo" v-model="form.tipo_contacto">
+            <option value="PRIMARIO">Primario</option>
+            <option value="SECUNDARIO">Secundario</option>
+            <option value="SOLO_EMERGENCIAS">Solo emergencias</option>
+            <option value="OTRO">Otro</option>
+          </select>
+        </div>
+        <div v-if="form.tipo_contacto === 'OTRO'" class="form-row">
+          <label for="tipo-descripcion">Describir tipo</label>
+          <input id="tipo-descripcion" v-model="form.tipo_contacto_descripcion" required maxlength="50" />
+        </div>
+        <div class="form-row">
+          <label>Medios de contacto</label>
+          <div v-for="(medio, index) in form.medios" :key="index" class="contact-medium">
+            <select v-model="medio.tipo">
+              <option value="CELULAR">Celular</option>
+              <option value="CORREO">Correo</option>
+            </select>
+            <input v-model="medio.valor" :placeholder="index < 2 ? 'Obligatorio' : 'Opcional'" maxlength="180" />
           </div>
         </div>
 
