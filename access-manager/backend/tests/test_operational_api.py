@@ -1073,6 +1073,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
             "/api/contactos-institucionales",
             headers=auth_headers,
             json={
+                "institucion_id": institucion_a["id"],
                 "nombre": f"Contacto A {suffix}",
                 "tipo_contacto": "PRIMARIO",
                 "medios_contacto": [{"tipo": "CELULAR", "valor": "5550000000"}, {"tipo": "CORREO", "valor": correo_a}],
@@ -1086,6 +1087,7 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
             "/api/contactos-institucionales",
             headers=auth_headers,
             json={
+                "institucion_id": institucion_b["id"],
                 "nombre": f"Contacto B {suffix}",
                 "tipo_contacto": "SECUNDARIO",
                 "medios_contacto": [
@@ -1098,8 +1100,28 @@ def test_contactos_institucionales_filter_by_institution_and_tower(
         )
     )
 
+    assert contacto_a["institucion_id"] == institucion_a["id"]
+    assert contacto_b["institucion_id"] == institucion_b["id"]
     assert contacto_a["torre_ids"] == [torre_a["id"]]
     assert contacto_b["torre_ids"] == [torre_b["id"]]
+
+    invalid_scope = client.post(
+        "/api/contactos-institucionales",
+        headers=auth_headers,
+        json={
+            "institucion_id": institucion_a["id"],
+            "nombre": f"Contacto scope inválido {suffix}",
+            "tipo_contacto": "PRIMARIO",
+            "medios_contacto": [
+                {"tipo": "CELULAR", "valor": "5552222222"},
+                {"tipo": "CORREO", "valor": f"contacto-invalido-{suffix}@example.com"},
+            ],
+            "complejo_ids": [complejo_b["id"]],
+            "torre_ids": [torre_b["id"]],
+        },
+    )
+    assert invalid_scope.status_code == 422, invalid_scope.text
+    assert "institución asignada" in invalid_scope.json()["detail"]
 
     missing_scope = client.get("/api/contactos-institucionales", headers=auth_headers, params={"q": correo_a})
     assert missing_scope.status_code == 422, missing_scope.text

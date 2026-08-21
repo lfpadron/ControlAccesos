@@ -19,6 +19,12 @@ class ContactoInstitucional(TimestampMixin, Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    institucion_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("instituciones.id", name="fk_contactos_institucionales_institucion"),
+        nullable=False,
+        index=True,
+    )
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     medios_contacto: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
     tipo_contacto: Mapped[str] = mapped_column(String(32), nullable=False)

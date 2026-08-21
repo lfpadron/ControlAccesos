@@ -42,28 +42,76 @@ def exists_or_404(db: Session, item_id: UUID) -> ContactoInstitucional:
     return item
 
 
-def validate_complexes(db: Session, complejo_ids: list[UUID]) -> None:
-    if not complejo_ids:
-        return
-    found = set(db.execute(select(Complejo.id).where(Complejo.id.in_(complejo_ids))).scalars())
-    missing = [str(item_id) for item_id in complejo_ids if item_id not in found]
-    if missing:
+def validate_institucion_access(db: Session, current_user: Usuario, today: date, institucion_id: UUID) -> None:
+    exists = (
+        db.execute(
+            select(Institucion.id)
+            .where(
+                Institucion.id == institucion_id,
+                Institucion.activo.is_(True),
+                institucion_catalog_access_predicate(db, current_user, today),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+    if not exists:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Campus no encontrados: {', '.join(missing)}",
+            detail="Institución asignada no encontrada o no accesible.",
         )
 
 
-def validate_torres(db: Session, torre_ids: list[UUID]) -> None:
-    if not torre_ids:
-        return
-    found = set(db.execute(select(Torre.id).where(Torre.id.in_(torre_ids))).scalars())
-    missing = [str(item_id) for item_id in torre_ids if item_id not in found]
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Torres no encontradas: {', '.join(missing)}",
+def validate_contact_scope(
+    db: Session,
+    current_user: Usuario,
+    today: date,
+    institucion_id: UUID,
+    complejo_ids: list[UUID],
+    torre_ids: list[UUID],
+) -> None:
+    validate_institucion_access(db, current_user, today, institucion_id)
+
+    unique_complejo_ids = unique_uuid_list(complejo_ids)
+    if unique_complejo_ids:
+        found = set(
+            db.execute(
+                select(Complejo.id).where(
+                    Complejo.id.in_(unique_complejo_ids),
+                    Complejo.institucion_id == institucion_id,
+                    Complejo.activo.is_(True),
+                    complejo_catalog_access_predicate(db, current_user, today),
+                )
+            ).scalars()
         )
+        missing = [str(item_id) for item_id in unique_complejo_ids if item_id not in found]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Campus no encontrados en la institución asignada: {', '.join(missing)}",
+            )
+
+    unique_torre_ids = unique_uuid_list(torre_ids)
+    if unique_torre_ids:
+        found = set(
+            db.execute(
+                select(Torre.id)
+                .join(Complejo, Complejo.id == Torre.complejo_id)
+                .where(
+                    Torre.id.in_(unique_torre_ids),
+                    Torre.activo.is_(True),
+                    Complejo.activo.is_(True),
+                    Complejo.institucion_id == institucion_id,
+                    torre_catalog_access_predicate(db, current_user, today),
+                )
+            ).scalars()
+        )
+        missing = [str(item_id) for item_id in unique_torre_ids if item_id not in found]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Torres no encontradas en la institución asignada: {', '.join(missing)}",
+            )
 
 
 def unique_uuid_list(values: list[UUID]) -> list[UUID]:
@@ -100,6 +148,7 @@ def torre_ids_for(db: Session, contacto_id: UUID) -> list[UUID]:
 def response_for(db: Session, item: ContactoInstitucional) -> ContactoInstitucionalRead:
     return ContactoInstitucionalRead(
         id=item.id,
+        institucion_id=item.institucion_id,
         nombre=item.nombre,
         medios_contacto=item.medios_contacto,
         tipo_contacto=item.tipo_contacto,
@@ -139,51 +188,27 @@ def no_location_scope_predicate():
 
 
 def contact_access_predicate(db: Session, user: Usuario, today: date):
-    complex_access = (
-        select(ContactoInstitucionalComplejo.contacto_id)
-        .join(Complejo, Complejo.id == ContactoInstitucionalComplejo.complejo_id)
+    return (
+        select(Institucion.id)
         .where(
-            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
-            complejo_catalog_access_predicate(db, user, today),
+            Institucion.id == ContactoInstitucional.institucion_id,
+            Institucion.activo.is_(True),
+            institucion_catalog_access_predicate(db, user, today),
         )
         .exists()
     )
-    tower_access = (
-        select(ContactoInstitucionalTorre.contacto_id)
-        .join(Torre, Torre.id == ContactoInstitucionalTorre.torre_id)
-        .where(
-            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
-            torre_catalog_access_predicate(db, user, today),
-        )
-        .exists()
-    )
-    return or_(no_location_scope_predicate(), complex_access, tower_access)
 
 
 def contact_institution_predicate(institucion_id: UUID):
-    complex_in_institution = (
-        select(ContactoInstitucionalComplejo.contacto_id)
-        .join(Complejo, Complejo.id == ContactoInstitucionalComplejo.complejo_id)
-        .where(
-            ContactoInstitucionalComplejo.contacto_id == ContactoInstitucional.id,
-            Complejo.institucion_id == institucion_id,
-        )
-        .exists()
-    )
-    tower_in_institution = (
-        select(ContactoInstitucionalTorre.contacto_id)
-        .join(Torre, Torre.id == ContactoInstitucionalTorre.torre_id)
-        .join(Complejo, Complejo.id == Torre.complejo_id)
-        .where(
-            ContactoInstitucionalTorre.contacto_id == ContactoInstitucional.id,
-            Complejo.institucion_id == institucion_id,
-        )
-        .exists()
-    )
-    return or_(no_location_scope_predicate(), complex_in_institution, tower_in_institution)
+    return ContactoInstitucional.institucion_id == institucion_id
 
 
 def contact_complex_predicate(complejo_id: UUID):
+    complex_parent_institution = select(Complejo.institucion_id).where(Complejo.id == complejo_id).scalar_subquery()
+    institution_scope_match = and_(
+        no_location_scope_predicate(),
+        ContactoInstitucional.institucion_id == complex_parent_institution,
+    )
     complex_match = (
         select(ContactoInstitucionalComplejo.contacto_id)
         .where(
@@ -201,11 +226,21 @@ def contact_complex_predicate(complejo_id: UUID):
         )
         .exists()
     )
-    return or_(no_location_scope_predicate(), complex_match, tower_in_complex)
+    return or_(institution_scope_match, complex_match, tower_in_complex)
 
 
 def contact_tower_predicate(torre_id: UUID):
     tower_parent_complex = select(Torre.complejo_id).where(Torre.id == torre_id).scalar_subquery()
+    tower_parent_institution = (
+        select(Complejo.institucion_id)
+        .join(Torre, Torre.complejo_id == Complejo.id)
+        .where(Torre.id == torre_id)
+        .scalar_subquery()
+    )
+    institution_scope_match = and_(
+        no_location_scope_predicate(),
+        ContactoInstitucional.institucion_id == tower_parent_institution,
+    )
     complex_parent_match = (
         select(ContactoInstitucionalComplejo.contacto_id)
         .where(
@@ -222,7 +257,7 @@ def contact_tower_predicate(torre_id: UUID):
         )
         .exists()
     )
-    return or_(no_location_scope_predicate(), complex_parent_match, tower_match)
+    return or_(institution_scope_match, complex_parent_match, tower_match)
 
 
 def ensure_accessible_filters(
@@ -355,9 +390,17 @@ def create_contacto(
     db: Session = Depends(get_db),
     current_user: Usuario = AdminUser,
 ) -> ContactoInstitucionalRead:
-    validate_complexes(db, payload.complejo_ids)
-    validate_torres(db, payload.torre_ids)
+    today = date.today()
+    validate_contact_scope(
+        db,
+        current_user,
+        today,
+        payload.institucion_id,
+        payload.complejo_ids,
+        payload.torre_ids,
+    )
     item = ContactoInstitucional(
+        institucion_id=payload.institucion_id,
         nombre=payload.nombre,
         medios_contacto=[medio.model_dump() for medio in payload.medios_contacto],
         tipo_contacto=payload.tipo_contacto,
@@ -399,6 +442,16 @@ def update_contacto(
     current_user: Usuario = AdminUser,
 ) -> ContactoInstitucionalRead:
     item = exists_or_404(db, contacto_id)
+    today = date.today()
+    if (
+        db.execute(
+            select(ContactoInstitucional.id)
+            .where(ContactoInstitucional.id == item.id, contact_access_predicate(db, current_user, today))
+            .limit(1)
+        ).first()
+        is None
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto institucional no encontrado.")
     before = {
         **audit_safe_dict(item),
         "complejo_ids": [str(item_id) for item_id in complex_ids_for(db, item.id)],
@@ -407,6 +460,22 @@ def update_contacto(
     data = payload.model_dump(exclude_unset=True)
     complejo_ids = data.pop("complejo_ids", None)
     torre_ids = data.pop("torre_ids", None)
+    if "institucion_id" in data and data["institucion_id"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La institución asignada es obligatoria.",
+        )
+    target_institucion_id = data.get("institucion_id", item.institucion_id)
+    target_complejo_ids = complejo_ids if complejo_ids is not None else complex_ids_for(db, item.id)
+    target_torre_ids = torre_ids if torre_ids is not None else torre_ids_for(db, item.id)
+    validate_contact_scope(
+        db,
+        current_user,
+        today,
+        target_institucion_id,
+        target_complejo_ids,
+        target_torre_ids,
+    )
     if "medios_contacto" in data and data["medios_contacto"] is not None:
         data["medios_contacto"] = [medio.model_dump() for medio in payload.medios_contacto or []]
     if "tipo_contacto_descripcion" in data and data["tipo_contacto_descripcion"]:
@@ -416,10 +485,8 @@ def update_contacto(
     for key, value in data.items():
         setattr(item, key, value)
     if complejo_ids is not None:
-        validate_complexes(db, complejo_ids)
         replace_complexes(db, item.id, complejo_ids)
     if torre_ids is not None:
-        validate_torres(db, torre_ids)
         replace_torres(db, item.id, torre_ids)
     db.flush()
     record_audit_event(

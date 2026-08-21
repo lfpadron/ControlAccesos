@@ -358,6 +358,7 @@ export type MedioContacto = {
 
 export type ContactoInstitucional = {
   id: string;
+  institucion_id: string;
   nombre: string;
   medios_contacto: MedioContacto[];
   tipo_contacto: 'PRIMARIO' | 'SECUNDARIO' | 'SOLO_EMERGENCIAS' | 'OTRO';

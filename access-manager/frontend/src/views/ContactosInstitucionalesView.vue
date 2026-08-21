@@ -22,6 +22,7 @@ const selected = ref<ContactoInstitucional | null>(null);
 const error = ref('');
 const message = ref('');
 const loading = ref(false);
+const formInstitutionSearch = ref('');
 const campusAssignSearch = ref('');
 const torreAssignSearch = ref('');
 
@@ -39,6 +40,7 @@ const filterSearch = reactive({
 });
 
 const form = reactive({
+  institucion_id: '',
   nombre: '',
   tipo_contacto: 'PRIMARIO' as ContactoTipo,
   tipo_contacto_descripcion: '',
@@ -73,21 +75,22 @@ const filteredTorres = computed(() => {
 });
 
 const assignmentComplejos = computed(() => {
-  const rows = filters.institucion_id
-    ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id)
-    : complejos.value;
-  return sortByLabel(rows, campusLabel);
+  if (!form.institucion_id) return [];
+  return sortByLabel(
+    complejos.value.filter((item) => item.institucion_id === form.institucion_id),
+    campusLabel,
+  );
 });
 
 const assignmentTorres = computed(() => {
-  let rows = torres.value;
-  if (filters.complejo_id) {
-    rows = rows.filter((item) => item.complejo_id === filters.complejo_id);
-  } else if (filters.institucion_id) {
-    const campusIds = new Set(complejos.value.filter((item) => item.institucion_id === filters.institucion_id).map((item) => item.id));
-    rows = rows.filter((item) => campusIds.has(item.complejo_id));
-  }
-  return sortByLabel(rows, torreFullLabel);
+  if (!form.institucion_id) return [];
+  const campusIds = new Set(
+    complejos.value.filter((item) => item.institucion_id === form.institucion_id).map((item) => item.id),
+  );
+  return sortByLabel(
+    torres.value.filter((item) => campusIds.has(item.complejo_id)),
+    torreFullLabel,
+  );
 });
 
 const selectedComplejos = computed(() =>
@@ -145,8 +148,36 @@ function torreFullLabel(item: Torre) {
   return campus ? `${item.nombre} · ${campus.nombre}` : item.nombre;
 }
 
+function defaultFormInstitution() {
+  return institutionOptions.value.length === 1 ? institutionOptions.value[0] : null;
+}
+
+function clearFormLocations() {
+  form.complejo_ids = [];
+  form.torre_ids = [];
+  campusAssignSearch.value = '';
+  torreAssignSearch.value = '';
+}
+
+function syncFormInstitution() {
+  const previousId = form.institucion_id;
+  const match = matchByLabel(institutionOptions.value, formInstitutionSearch.value, institucionLabel);
+  form.institucion_id = match?.id ?? '';
+  if (match) {
+    formInstitutionSearch.value = institucionLabel(match);
+  }
+  if (previousId !== form.institucion_id) {
+    clearFormLocations();
+  }
+}
+
 function setForm(contacto?: ContactoInstitucional | null) {
   selected.value = contacto ?? null;
+  const defaultInstitution = defaultFormInstitution();
+  const institutionId = contacto?.institucion_id ?? defaultInstitution?.id ?? '';
+  const institution = institutionOptions.value.find((item) => item.id === institutionId) ?? null;
+  form.institucion_id = institutionId;
+  formInstitutionSearch.value = institution ? institucionLabel(institution) : '';
   form.nombre = contacto?.nombre ?? '';
   form.tipo_contacto = contacto?.tipo_contacto ?? 'PRIMARIO';
   form.tipo_contacto_descripcion = contacto?.tipo_contacto_descripcion ?? '';
@@ -257,6 +288,7 @@ function clearFilters() {
 }
 
 function addComplejo() {
+  if (!form.institucion_id) return;
   const match = matchByLabel(assignmentComplejos.value, campusAssignSearch.value, campusLabel);
   if (!match || form.complejo_ids.includes(match.id)) return;
   form.complejo_ids.push(match.id);
@@ -268,6 +300,7 @@ function removeComplejo(complejoId: string) {
 }
 
 function addTorre() {
+  if (!form.institucion_id) return;
   const match = matchByLabel(assignmentTorres.value, torreAssignSearch.value, torreFullLabel);
   if (!match || form.torre_ids.includes(match.id)) return;
   form.torre_ids.push(match.id);
@@ -281,6 +314,7 @@ function removeTorre(torreId: string) {
 function payload() {
   const medios_contacto = form.medios.filter((item) => item.valor.trim()).map((item) => ({ tipo: item.tipo, valor: item.valor.trim() }));
   return {
+    institucion_id: form.institucion_id,
     nombre: form.nombre.trim(),
     tipo_contacto: form.tipo_contacto,
     tipo_contacto_descripcion: form.tipo_contacto === 'OTRO' ? form.tipo_contacto_descripcion.trim() : null,
@@ -303,7 +337,7 @@ function contactoCorreos(contacto: ContactoInstitucional) {
 }
 
 function contactoCampusLabel(contacto: ContactoInstitucional) {
-  if (!contacto.complejo_ids.length && !contacto.torre_ids.length) return 'Todos / sin asignar';
+  if (!contacto.complejo_ids.length && !contacto.torre_ids.length) return 'Toda la institución';
   const names = contacto.complejo_ids
     .map((id) => complejos.value.find((item) => item.id === id))
     .filter((item): item is Complejo => Boolean(item))
@@ -323,6 +357,10 @@ function contactoTorresLabel(contacto: ContactoInstitucional) {
 async function submit() {
   error.value = '';
   message.value = '';
+  if (!form.institucion_id) {
+    error.value = 'Seleccione una institución asignada.';
+    return;
+  }
   try {
     if (selected.value) {
       await updateContactoInstitucional(selected.value.id, payload());
@@ -353,6 +391,21 @@ onMounted(load);
     <div class="grid catalog-grid">
       <form class="panel form" @submit.prevent="submit">
         <h2>{{ selected ? 'Editar contacto' : 'Crear contacto' }}</h2>
+        <div class="form-row">
+          <label for="contacto-institucion-asignada">Institución asignada</label>
+          <input
+            id="contacto-institucion-asignada"
+            v-model="formInstitutionSearch"
+            list="contacto-institucion-asignada-options"
+            required
+            placeholder="Selecciona una institución"
+            @input="syncFormInstitution"
+            @change="syncFormInstitution"
+          />
+          <datalist id="contacto-institucion-asignada-options">
+            <option v-for="institucion in institutionOptions" :key="institucion.id" :value="institucionLabel(institucion)" />
+          </datalist>
+        </div>
         <div class="form-row">
           <label for="nombre">Nombre</label>
           <input id="nombre" v-model="form.nombre" required maxlength="180" />
@@ -388,9 +441,11 @@ onMounted(load);
               id="contacto-campus-asignar"
               v-model="campusAssignSearch"
               list="contacto-campus-asignar-options"
+              :disabled="!form.institucion_id"
+              placeholder="Selecciona una institución"
               @keyup.enter.prevent="addComplejo"
             />
-            <button class="secondary" type="button" @click="addComplejo">Agregar</button>
+            <button class="secondary" type="button" :disabled="!form.institucion_id" @click="addComplejo">Agregar</button>
           </div>
           <datalist id="contacto-campus-asignar-options">
             <option v-for="complejo in assignmentComplejos" :key="complejo.id" :value="campusLabel(complejo)" />
@@ -415,9 +470,11 @@ onMounted(load);
               id="contacto-torre-asignar"
               v-model="torreAssignSearch"
               list="contacto-torre-asignar-options"
+              :disabled="!form.institucion_id"
+              placeholder="Selecciona una institución"
               @keyup.enter.prevent="addTorre"
             />
-            <button class="secondary" type="button" @click="addTorre">Agregar</button>
+            <button class="secondary" type="button" :disabled="!form.institucion_id" @click="addTorre">Agregar</button>
           </div>
           <datalist id="contacto-torre-asignar-options">
             <option v-for="torre in assignmentTorres" :key="torre.id" :value="torreFullLabel(torre)" />

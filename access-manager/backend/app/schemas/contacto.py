@@ -25,6 +25,7 @@ class MedioContacto(BaseModel):
 
 
 class ContactoInstitucionalBase(BaseModel):
+    institucion_id: UUID
     nombre: str = Field(min_length=1, max_length=180)
     medios_contacto: list[MedioContacto] = Field(min_length=2, max_length=5)
     tipo_contacto: str
@@ -47,6 +48,7 @@ class ContactoInstitucionalCreate(ContactoInstitucionalBase):
 
 
 class ContactoInstitucionalUpdate(BaseModel):
+    institucion_id: UUID | None = None
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     medios_contacto: list[MedioContacto] | None = Field(default=None, min_length=2, max_length=5)
     tipo_contacto: str | None = None
@@ -66,6 +68,7 @@ class ContactoInstitucionalUpdate(BaseModel):
 
 class ContactoInstitucionalRead(BaseModel):
     id: UUID
+    institucion_id: UUID
     nombre: str
     medios_contacto: list[MedioContacto]
     tipo_contacto: str
