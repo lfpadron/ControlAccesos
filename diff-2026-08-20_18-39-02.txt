@@ -1,0 +1,139 @@
+diff --git a/access-manager/backend/app/services/access_scope.py b/access-manager/backend/app/services/access_scope.py
+index df1ce99..d18f02a 100644
+--- a/access-manager/backend/app/services/access_scope.py
++++ b/access-manager/backend/app/services/access_scope.py
+@@ -643,7 +643,6 @@ def cita_agenda_access_predicate(db: Session, user: Usuario, today: date | None
+     staff_citas = and_(
+         patient_for_cita_medico,
+         _medico_access_predicate(user, Cita.medico_id, today),
+-        _location_access_predicate(user, Cita.consultorio_id, Cita.piso_id, Cita.complejo_id, today),
+     )
+     admin_scoped_citas = and_(
+         _role_scope_exists(user, Role.codigo == "ADMIN_NEGOCIO", today),
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index 9936e12..0cc6fdb 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -1,17 +1,28 @@
+ from __future__ import annotations
+ 
+-from datetime import date
++from datetime import date, time
+ from types import SimpleNamespace
+ from uuid import uuid4
+ 
++from sqlalchemy import create_engine
+ from sqlalchemy import select
+ from sqlalchemy.dialects import postgresql
++from sqlalchemy.orm import Session
+ 
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos
+ from app.models.flow import Cita, MedicoPaciente, Paciente
+ from app.models.institucion import Institucion
+-from app.models.operational import Consultorio, Piso, Torre
++from app.models.operational import (
++    AsignacionOperador,
++    Consultorio,
++    Medico,
++    Operador,
++    Piso,
++    Role,
++    Torre,
++    UsuarioRol,
++)
+ from app.models.usuario import Usuario
+ from app.services.access_scope import (
+     cita_agenda_access_predicate,
+@@ -25,6 +36,28 @@ from app.services.access_scope import (
+ )
+ 
+ 
++def create_scope_test_tables(engine) -> None:
++    Usuario.metadata.create_all(
++        engine,
++        tables=[
++            Usuario.__table__,
++            Role.__table__,
++            Institucion.__table__,
++            Complejo.__table__,
++            Torre.__table__,
++            Piso.__table__,
++            Consultorio.__table__,
++            Medico.__table__,
++            Operador.__table__,
++            UsuarioRol.__table__,
++            AsignacionOperador.__table__,
++            Paciente.__table__,
++            MedicoPaciente.__table__,
++            Cita.__table__,
++        ],
++    )
++
++
+ def test_patient_scope_compiles_with_medico_filter_join() -> None:
+     db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+     user = Usuario(
+@@ -67,6 +100,62 @@ def test_cita_agenda_scope_compiles_with_patient_medico_and_location() -> None:
+     assert "asignaciones_operador" in compiled
+ 
+ 
++def test_assistant_with_medico_scope_can_see_doctor_appointments_without_location_scope() -> None:
++    engine = create_engine("sqlite+pysqlite:///:memory:")
++    create_scope_test_tables(engine)
++    today = date(2026, 8, 20)
++
++    with Session(engine) as db:
++        assistant = Usuario(
++            apellidos="Asistente",
++            nombre="Medica",
++            email="asistente@example.com",
++            password_hash="irrelevant",
++        )
++        role = Role(codigo="ASISTENTE_MEDICO", nombre="Asistente medico", permisos={})
++        medico = Medico(nombre="Medico", apellidos="Agenda")
++        institucion = Institucion(nombre="Institucion")
++        db.add_all([assistant, role, medico, institucion])
++        db.flush()
++
++        complejo = Complejo(institucion_id=institucion.id, nombre="Campus", zona_horaria="America/Mexico_City")
++        db.add(complejo)
++        db.flush()
++        torre = Torre(complejo_id=complejo.id, nombre="Torre", numero_pisos=1)
++        db.add(torre)
++        db.flush()
++        piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
++        db.add(piso)
++        db.flush()
++        consultorio = Consultorio(complejo_id=complejo.id, piso_id=piso.id, codigo="101")
++        paciente = Paciente(folio_paciente="P0001", nombre="Paciente", apellido_paterno="Demo", celular="5550000000")
++        db.add_all([consultorio, paciente])
++        db.flush()
++
++        db.add_all(
++            [
++                UsuarioRol(usuario_id=assistant.id, rol_id=role.id, medico_id=medico.id, fecha_inicio=today),
++                MedicoPaciente(medico_id=medico.id, paciente_id=paciente.id),
++                Cita(
++                    tipo="PROGRAMADA",
++                    paciente_id=paciente.id,
++                    medico_id=medico.id,
++                    consultorio_id=consultorio.id,
++                    complejo_id=complejo.id,
++                    piso_id=piso.id,
++                    fecha_cita=today,
++                    hora_cita=time(10, 0),
++                    folio_turno="A001",
++                ),
++            ]
++        )
++        db.commit()
++
++        citas = list(db.execute(select(Cita).where(cita_agenda_access_predicate(db, assistant, today))).scalars())
++
++    assert len(citas) == 1
++
++
+ def test_location_catalog_scope_predicates_compile() -> None:
+     db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+     user = Usuario(

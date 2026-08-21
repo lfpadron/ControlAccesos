@@ -643,7 +643,6 @@ def cita_agenda_access_predicate(db: Session, user: Usuario, today: date | None 
     staff_citas = and_(
         patient_for_cita_medico,
         _medico_access_predicate(user, Cita.medico_id, today),
-        _location_access_predicate(user, Cita.consultorio_id, Cita.piso_id, Cita.complejo_id, today),
     )
     admin_scoped_citas = and_(
         _role_scope_exists(user, Role.codigo == "ADMIN_NEGOCIO", today),
