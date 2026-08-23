@@ -29,6 +29,8 @@ export const screens: ScreenDefinition[] = [
   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
   { key: 'citas', label: 'Citas', path: '/citas' },
   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
+  { key: 'recepcion', label: 'Recepción', path: '/recepcion' },
+  { key: 'checkin-qr', label: 'Checkin QR', path: '/checkin-qr' },
   { key: 'contactos-institucionales', label: 'Contactos institucionales', path: '/contactos-institucionales' },
   { key: 'asignaciones', label: 'Asignaciones', path: '/asignaciones' },
   { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },

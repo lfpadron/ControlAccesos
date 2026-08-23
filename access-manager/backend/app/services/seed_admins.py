@@ -43,6 +43,26 @@ ROLE_SEEDS = (
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
 )
+ROLE_DEFAULT_PERMISSIONS = {
+    "RECEPCIONISTA": {
+        "recepcion": "editar",
+        "checkin-qr": "editar",
+    },
+}
+
+
+def apply_default_role_permissions(role: Role) -> None:
+    defaults = ROLE_DEFAULT_PERMISSIONS.get(role.codigo)
+    if not defaults:
+        return
+    current = dict(role.permisos or {})
+    changed = False
+    for screen, access in defaults.items():
+        if screen not in current:
+            current[screen] = access
+            changed = True
+    if changed:
+        role.permisos = current
 
 
 def main() -> None:
@@ -62,6 +82,7 @@ def main() -> None:
                 db.add(role)
                 db.flush()
                 logger.info("seed_role_created", extra={"codigo": codigo})
+            apply_default_role_permissions(role)
             roles[codigo] = role
 
         for email in ADMIN_EMAILS:
@@ -128,11 +149,19 @@ def main() -> None:
 
         piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == 1)).scalar_one_or_none()
         if piso is None:
-            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
+            piso = Piso(
+                complejo_id=complejo.id,
+                torre_id=torre.id,
+                numero=1,
+                codigo="1",
+                nombre_visible="Piso 1",
+                cuenta_con_pantallas=True,
+            )
             db.add(piso)
             db.flush()
         elif piso.codigo is None:
             piso.codigo = "1"
+        piso.cuenta_con_pantallas = True
 
         punto_acceso = db.execute(
             select(PuntoAcceso).where(PuntoAcceso.piso_id == piso.id, PuntoAcceso.nombre == "Lobby principal")

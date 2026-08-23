@@ -1,0 +1,1213 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 169e928..c50162b 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -33,6 +33,8 @@ MENU_SCREEN_KEYS = [
+     "pacientes",
+     "citas",
+     "citas-hoy",
++    "recepcion",
++    "checkin-qr",
+     "contactos-institucionales",
+     "asignaciones",
+     "clusters-turnos",
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 77a42a6..c60e58e 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from datetime import date, datetime, time
++from datetime import UTC, date, datetime, time, timedelta
+ from typing import Any
+ from uuid import UUID
+ from zoneinfo import ZoneInfo
+@@ -46,6 +46,11 @@ from app.schemas.flow import (
+     QrRead,
+     QrValidarRequest,
+     QrValidarResponse,
++    ReceptionCheckinCancelResponse,
++    ReceptionCitaItem,
++    ReceptionCitasResponse,
++    ReceptionOption,
++    ReceptionOptions,
+     TicketResponse,
+ )
+ from app.schemas.institucion import InstitucionRead
+@@ -55,6 +60,7 @@ from app.services.access_scope import (
+     cita_agenda_access_predicate,
+     cita_access_predicate,
+     cita_payload_is_accessible,
++    can_access_cita,
+     complejo_catalog_access_predicate,
+     consultorio_catalog_access_predicate,
+     ensure_cita_access,
+@@ -76,11 +82,12 @@ citas_router = APIRouter()
+ qr_router = APIRouter()
+ mobile_router = APIRouter()
+ catalogos_operativos_router = APIRouter()
++recepcion_router = APIRouter()
+ 
+ ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
+ ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+ 
+-CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
++CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "recepcion", "checkin-qr", "turnos-llamados"))
+ PacientesReadUser = Depends(require_permission("pacientes"))
+ PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
+ CitasAgendaReadUser = Depends(require_permission("citas"))
+@@ -88,6 +95,9 @@ CitasAgendaWriteUser = Depends(require_permission("citas", minimum="editar"))
+ CitasTodayReadUser = Depends(require_permission("citas-hoy"))
+ CitasOperationalReadUser = Depends(require_permission("citas", "citas-hoy"))
+ CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", minimum="editar"))
++RecepcionReadUser = Depends(require_permission("recepcion"))
++RecepcionWriteUser = Depends(require_permission("recepcion", minimum="editar"))
++CheckinQrWriteUser = Depends(require_permission("checkin-qr", minimum="editar"))
+ MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
+ MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
+ 
+@@ -190,6 +200,16 @@ def patient_medical_name(paciente: Paciente | None) -> str | None:
+     return paciente.nombre_preferido or full_name
+ 
+ 
++def patient_last_first_name(paciente: Paciente | None) -> str:
++    if paciente is None:
++        return ""
++    last_names = " ".join(part for part in [paciente.apellido_paterno, paciente.apellido_materno] if part)
++    first_names = paciente.nombre_preferido or paciente.nombre or ""
++    if last_names and first_names:
++        return f"{last_names}, {first_names}"
++    return first_names or last_names or paciente.folio_paciente
++
++
+ def consultorio_label(consultorio: Consultorio | None) -> str | None:
+     if consultorio is None:
+         return None
+@@ -214,6 +234,12 @@ def medico_label(medico: Medico | None) -> str | None:
+     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
+ 
+ 
++def medico_last_first_name(medico: Medico | None) -> str:
++    if medico is None:
++        return ""
++    return f"{medico.apellidos}, {medico.nombre}".strip(", ")
++
++
+ def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> ConsultorioRead:
+     cluster_ids = list(
+         db.execute(
+@@ -726,6 +752,11 @@ def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
+     return active_display_exists_for_clusters(db, cluster_ids)
+ 
+ 
++def consultorio_requires_display_coverage(db: Session, consultorio: Consultorio) -> bool:
++    piso = db.get(Piso, consultorio.piso_id)
++    return bool(piso and piso.cuenta_con_pantallas)
++
++
+ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> None:
+     paciente_id = data.get("paciente_id", getattr(item, "paciente_id", None))
+     medico_id = data.get("medico_id", getattr(item, "medico_id", None))
+@@ -755,7 +786,7 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
+         if piso_id is not None and consultorio.piso_id != piso_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
+-        if not consultorio_has_display_coverage(db, consultorio.id):
++        if consultorio_requires_display_coverage(db, consultorio) and not consultorio_has_display_coverage(db, consultorio.id):
+             raise HTTPException(
+                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                 detail="El consultorio debe estar asociado a por lo menos un clúster con una pantalla de turnos activa.",
+@@ -964,6 +995,386 @@ def create_arrival_event(
+     return event
+ 
+ 
++CHECKIN_CANCEL_WINDOW = timedelta(minutes=30)
++
++
++def latest_lobby_checkin(db: Session, cita_id: UUID) -> EventoLlegada | None:
++    return db.execute(
++        select(EventoLlegada)
++        .where(EventoLlegada.cita_id == cita_id, EventoLlegada.tipo == "CHECKIN_LOBBY")
++        .order_by(EventoLlegada.created_at.desc())
++        .limit(1)
++    ).scalar_one_or_none()
++
++
++def event_created_at_utc(event: EventoLlegada) -> datetime:
++    created_at = event.created_at
++    return created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
++
++
++def can_cancel_lobby_checkin(event: EventoLlegada | None, timestamp: datetime | None = None) -> bool:
++    if event is None:
++        return False
++    return (timestamp or now_utc()) - event_created_at_utc(event) <= CHECKIN_CANCEL_WINDOW
++
++
++def restore_qr_if_needed(db: Session, cita_id: UUID, timestamp: datetime) -> bool:
++    qr_token = db.execute(
++        select(QrToken)
++        .where(QrToken.cita_id == cita_id, QrToken.estado == "USADO", QrToken.fecha_expiracion > timestamp)
++        .order_by(QrToken.updated_at.desc())
++        .limit(1)
++    ).scalar_one_or_none()
++    if qr_token is None:
++        return False
++    qr_token.estado = "GENERADO"
++    return True
++
++
++def state_after_checkin_cancel(db: Session, cita_id: UUID, timestamp: datetime) -> str:
++    remaining_event = latest_lobby_checkin(db, cita_id)
++    if remaining_event is not None:
++        return "LLEGO_LOBBY"
++    if restore_qr_if_needed(db, cita_id, timestamp):
++        return "QR_GENERADO"
++    generated_qr = db.execute(
++        select(QrToken.id)
++        .where(QrToken.cita_id == cita_id, QrToken.estado == "GENERADO", QrToken.fecha_expiracion > timestamp)
++        .limit(1)
++    ).first()
++    return "QR_GENERADO" if generated_qr is not None else "AGENDADA"
++
++
++def reception_base_query(
++    db: Session,
++    current_user: Usuario,
++    institucion_id: UUID | None = None,
++    complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
++    piso_id: UUID | None = None,
++    paciente_id: UUID | None = None,
++    paciente: str | None = None,
++    medico_id: UUID | None = None,
++    medico: str | None = None,
++    consultorio_id: UUID | None = None,
++    consultorio: str | None = None,
++    hora_inicio: time | None = None,
++):
++    query = (
++        select(Cita, Paciente, Medico, Consultorio, Piso, Torre)
++        .join(Paciente, Paciente.id == Cita.paciente_id)
++        .join(Medico, Medico.id == Cita.medico_id)
++        .join(Consultorio, Consultorio.id == Cita.consultorio_id)
++        .join(Piso, Piso.id == Cita.piso_id)
++        .join(Torre, Torre.id == Piso.torre_id)
++        .where(Cita.fecha_cita == business_today(), cita_access_predicate(db, current_user, business_today()))
++    )
++    if institucion_id is not None:
++        query = query.where(
++            select(Complejo.id)
++            .where(Complejo.id == Cita.complejo_id, Complejo.institucion_id == institucion_id)
++            .exists()
++        )
++    if complejo_id is not None:
++        query = query.where(Cita.complejo_id == complejo_id)
++    if torre_id is not None:
++        query = query.where(Piso.torre_id == torre_id)
++    if piso_id is not None:
++        query = query.where(Cita.piso_id == piso_id)
++    if paciente_id is not None:
++        query = query.where(Cita.paciente_id == paciente_id)
++    if paciente:
++        search_name = func.lower(
++            func.coalesce(Paciente.apellido_paterno, "")
++            + " "
++            + func.coalesce(Paciente.apellido_materno, "")
++            + " "
++            + func.coalesce(Paciente.nombre, "")
++            + " "
++            + func.coalesce(Paciente.nombre_preferido, "")
++            + " "
++            + func.coalesce(Paciente.folio_paciente, "")
++        )
++        for term_text in paciente.split():
++            query = query.where(search_name.like(normalize_search(term_text)))
++    if medico_id is not None:
++        query = query.where(Cita.medico_id == medico_id)
++    if medico:
++        search_medico = func.lower(
++            func.coalesce(Medico.apellidos, "")
++            + " "
++            + func.coalesce(Medico.nombre, "")
++            + " "
++            + func.coalesce(Medico.nombre_visible, "")
++        )
++        for term_text in medico.split():
++            query = query.where(search_medico.like(normalize_search(term_text)))
++    if consultorio_id is not None:
++        query = query.where(Cita.consultorio_id == consultorio_id)
++    if consultorio:
++        search_consultorio = func.lower(func.coalesce(Consultorio.codigo, "") + " " + func.coalesce(Consultorio.nombre_visible, ""))
++        for term_text in consultorio.split():
++            query = query.where(search_consultorio.like(normalize_search(term_text)))
++    if hora_inicio is not None:
++        query = query.where(Cita.hora_cita >= hora_inicio)
++    return query
++
++
++def unique_option(options: list[ReceptionOption], item_id: UUID, label: str) -> None:
++    if any(option.id == item_id for option in options):
++        return
++    options.append(ReceptionOption(id=item_id, label=label))
++
++
++def reception_cita_item(db: Session, row: tuple[Cita, Paciente, Medico, Consultorio, Piso, Torre]) -> ReceptionCitaItem:
++    cita, paciente, medico, consultorio, piso, torre = row
++    checkin_event = latest_lobby_checkin(db, cita.id)
++    return ReceptionCitaItem(
++        id=cita.id,
++        estado=cita.estado,
++        paciente_id=paciente.id,
++        paciente=patient_last_first_name(paciente),
++        fecha_cita=cita.fecha_cita,
++        hora_cita=cita.hora_cita,
++        consultorio_id=consultorio.id,
++        consultorio=consultorio_label(consultorio) or consultorio.codigo,
++        torre=torre_label(torre) or "",
++        piso_id=piso.id,
++        piso=piso_label(piso) or "",
++        medico_id=medico.id,
++        medico=medico_last_first_name(medico),
++        checkin_at=checkin_event.created_at if checkin_event else None,
++        can_cancel_checkin=can_cancel_lobby_checkin(checkin_event) and cita.estado == "LLEGO_LOBBY",
++    )
++
++
++@recepcion_router.get("/opciones", response_model=ReceptionOptions)
++def reception_options(
++    institucion_id: UUID | None = None,
++    complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
++    piso_id: UUID | None = None,
++    hora_inicio: time | None = None,
++    db: Session = Depends(get_db),
++    current_user: Usuario = RecepcionReadUser,
++) -> ReceptionOptions:
++    rows = db.execute(
++        reception_base_query(
++            db,
++            current_user,
++            institucion_id=institucion_id,
++            complejo_id=complejo_id,
++            torre_id=torre_id,
++            piso_id=piso_id,
++            hora_inicio=hora_inicio,
++        ).order_by(Cita.hora_cita)
++    ).all()
++    pacientes: list[ReceptionOption] = []
++    medicos: list[ReceptionOption] = []
++    consultorios: list[ReceptionOption] = []
++    for cita, paciente, medico, consultorio, _piso, _torre in rows:
++        unique_option(pacientes, cita.paciente_id, patient_last_first_name(paciente))
++        unique_option(medicos, cita.medico_id, medico_last_first_name(medico))
++        unique_option(consultorios, cita.consultorio_id, consultorio_label(consultorio) or consultorio.codigo)
++    pacientes.sort(key=lambda item: item.label.lower())
++    medicos.sort(key=lambda item: item.label.lower())
++    consultorios.sort(key=lambda item: item.label.lower())
++    return ReceptionOptions(pacientes=pacientes, medicos=medicos, consultorios=consultorios)
++
++
++@recepcion_router.get("/citas", response_model=ReceptionCitasResponse)
++def reception_citas(
++    institucion_id: UUID | None = None,
++    complejo_id: UUID | None = None,
++    torre_id: UUID | None = None,
++    piso_id: UUID | None = None,
++    paciente_id: UUID | None = None,
++    paciente: str | None = None,
++    medico_id: UUID | None = None,
++    medico: str | None = None,
++    consultorio_id: UUID | None = None,
++    consultorio: str | None = None,
++    hora_inicio: time | None = None,
++    sort_by: str = Query(default="fecha_hora", pattern="^(paciente|fecha_hora|medico)$"),
++    sort_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
++    limit: int = Query(default=20, ge=1, le=50),
++    offset: int = Query(default=0, ge=0),
++    db: Session = Depends(get_db),
++    current_user: Usuario = RecepcionReadUser,
++) -> ReceptionCitasResponse:
++    query = reception_base_query(
++        db,
++        current_user,
++        institucion_id=institucion_id,
++        complejo_id=complejo_id,
++        torre_id=torre_id,
++        piso_id=piso_id,
++        paciente_id=paciente_id,
++        paciente=paciente,
++        medico_id=medico_id,
++        medico=medico,
++        consultorio_id=consultorio_id,
++        consultorio=consultorio,
++        hora_inicio=hora_inicio,
++    )
++    total = int(db.execute(select(func.count()).select_from(query.subquery())).scalar_one())
++    order_columns = {
++        "paciente": patient_order_columns(),
++        "fecha_hora": (Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno),
++        "medico": (func.lower(func.coalesce(Medico.apellidos, "")), func.lower(func.coalesce(Medico.nombre, "")), Cita.hora_cita),
++    }[sort_by]
++    if sort_dir == "desc":
++        order_columns = tuple(column.desc() for column in order_columns)
++    rows = db.execute(query.order_by(*order_columns).offset(offset).limit(limit)).all()
++    return ReceptionCitasResponse(
++        items=[reception_cita_item(db, row) for row in rows],
++        total=total,
++        limit=limit,
++        offset=offset,
++    )
++
++
++@recepcion_router.post("/citas/{cita_id}/checkin", response_model=CheckinResponse)
++def reception_checkin_cita(
++    cita_id: UUID,
++    payload: CheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = RecepcionWriteUser,
++) -> CheckinResponse:
++    cita = exists_or_404(db, Cita, cita_id, "Cita")
++    if cita.fecha_cita != business_today():
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
++    ensure_cita_access(db, current_user, cita.id, business_today())
++    if cita.estado == "LLEGO_LOBBY":
++        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++    return authenticated_lobby_checkin(cita, payload, request, db, current_user)
++
++
++@recepcion_router.post("/citas/{cita_id}/checkin/cancelar", response_model=ReceptionCheckinCancelResponse)
++def reception_cancel_checkin(
++    cita_id: UUID,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = RecepcionWriteUser,
++) -> ReceptionCheckinCancelResponse:
++    cita = exists_or_404(db, Cita, cita_id, "Cita")
++    if cita.fecha_cita != business_today():
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
++    ensure_cita_access(db, current_user, cita.id, business_today())
++    event = latest_lobby_checkin(db, cita.id)
++    timestamp = now_utc()
++    if not can_cancel_lobby_checkin(event, timestamp):
++        return ReceptionCheckinCancelResponse(
++            cancelado=False,
++            mensaje="Ha excedido el tiempo. Checkin NO ha sido cancelado",
++            cita_id=cita.id,
++            estado_cita=cita.estado,
++        )
++    assert event is not None
++    before = audit_safe_dict(cita)
++    db.delete(event)
++    db.flush()
++    cita.estado = state_after_checkin_cancel(db, cita.id, timestamp)
++    db.flush()
++    record_audit_event(
++        db,
++        evento="CHECKIN_CANCELADO",
++        entidad="citas",
++        entidad_id=cita.id,
++        usuario_id=current_user.id,
++        canal="WEB",
++        ip_origen=client_ip(request),
++        valor_antes=before,
++        valor_despues=audit_safe_dict(cita),
++    )
++    db.commit()
++    return ReceptionCheckinCancelResponse(
++        cancelado=True,
++        mensaje="Checkin cancelado exitosamente",
++        cita_id=cita.id,
++        estado_cita=cita.estado,
++    )
++
++
++@recepcion_router.post("/qr/checkin", response_model=CheckinResponse)
++def reception_qr_checkin(
++    payload: QrCheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = CheckinQrWriteUser,
++) -> CheckinResponse:
++    result = validate_qr(db, payload.token)
++    if not result.valid or result.cita is None:
++        record_audit_event(
++            db,
++            evento="QR_VALIDADO",
++            entidad="qr_tokens",
++            entidad_id=result.qr_token.id if result.qr_token else None,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"valido": False, "resultado": result.status},
++        )
++        db.commit()
++        return CheckinResponse(resultado="ROJO", mensaje=result.message)
++
++    cita = result.cita
++    if cita.fecha_cita != business_today() or not can_access_cita(db, current_user, cita.id, business_today()):
++        record_audit_event(
++            db,
++            evento="QR_VALIDADO",
++            entidad="qr_tokens",
++            entidad_id=result.qr_token.id if result.qr_token else None,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"valido": False, "resultado": "FUERA_ALCANCE", "cita_id": str(cita.id)},
++        )
++        db.commit()
++        return CheckinResponse(resultado="ROJO", mensaje="Cita no encontrada para hoy o fuera de su alcance.")
++    if cita.estado == "LLEGO_LOBBY":
++        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++
++    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
++    if resultado != "ROJO":
++        event = create_arrival_event(
++            db,
++            cita,
++            "CHECKIN_LOBBY",
++            payload.canal,
++            request,
++            payload.sala_id,
++            current_user.id,
++            payload.dispositivo_id,
++        )
++        if result.qr_token is not None:
++            result.qr_token.estado = "USADO"
++        record_audit_event(
++            db,
++            evento="CHECKIN_LOBBY",
++            entidad="eventos_llegada",
++            entidad_id=event.id,
++            usuario_id=current_user.id,
++            canal=payload.canal,
++            ip_origen=client_ip(request),
++            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
++        )
++    record_audit_event(
++        db,
++        evento="QR_VALIDADO",
++        entidad="qr_tokens",
++        entidad_id=result.qr_token.id if result.qr_token else None,
++        usuario_id=current_user.id,
++        canal=payload.canal,
++        ip_origen=client_ip(request),
++        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
++    )
++    db.commit()
++    db.refresh(cita)
++    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++
++
+ @pacientes_router.get("/buscar", response_model=list[PacienteRead])
+ def buscar_pacientes(
+     q: str = Query(min_length=1),
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index bbbcd53..5d7803d 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -9,7 +9,7 @@ from uuid import UUID
+ 
+ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+ from pydantic import BaseModel, ValidationError
+-from sqlalchemy import func, or_, select
++from sqlalchemy import delete, func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+@@ -324,6 +324,13 @@ def post_save_torre(db: Session, item: object) -> None:
+         sync_torre_pisos(db, item)
+ 
+ 
++def post_save_piso(db: Session, item: object) -> None:
++    if not isinstance(item, Piso) or item.cuenta_con_pantallas:
++        return
++    consultorios_piso = select(Consultorio.id).where(Consultorio.piso_id == item.id)
++    db.execute(delete(ConsultorioCluster).where(ConsultorioCluster.consultorio_id.in_(consultorios_piso)))
++
++
+ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     if data.get("complejo_id") is not None:
+         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
+@@ -475,6 +482,11 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
+         )
+ 
+ 
++def piso_requires_display_clusters(db: Session, piso_id: UUID) -> bool:
++    piso = exists_or_404(db, Piso, piso_id, "Piso")
++    return bool(piso.cuenta_con_pantallas)
++
++
+ def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
+     cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
+     return active_display_exists_for_clusters(db, cluster_ids)
+@@ -531,9 +543,12 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None
+     cluster_ids = data.get("cluster_ids")
+     if codigo is None or complejo_id is None:
+         return
++    if piso_id is not None and not piso_requires_display_clusters(db, piso_id):
++        data["cluster_ids"] = []
++        cluster_ids = []
+     if cluster_ids is None and item is not None:
+         cluster_ids = cluster_ids_for_consultorio(db, item.id)
+-    if piso_id is not None:
++    if piso_id is not None and piso_requires_display_clusters(db, piso_id):
+         validate_clusters_for_scope(db, cluster_ids or [], complejo_id, piso_id)
+     query = select(Consultorio).where(Consultorio.complejo_id == complejo_id, Consultorio.codigo == codigo)
+     if item is not None:
+@@ -875,7 +890,18 @@ def generar_pisos_torre(
+ 
+ 
+ pisos_router = create_crud_router(
+-    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "codigo", validator=validate_piso)
++    CrudConfig(
++        Piso,
++        PisoCreate,
++        PisoUpdate,
++        PisoRead,
++        "pisos",
++        "PISO_CREADO",
++        "PISO_EDITADO",
++        "codigo",
++        validator=validate_piso,
++        post_save=post_save_piso,
++    )
+ )
+ clusters_turnos_router = create_crud_router(
+     CrudConfig(
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index e14d848..39b98f8 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -14,6 +14,7 @@ api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
+ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
+ api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
+ api_router.include_router(flow.catalogos_operativos_router, prefix="/catalogos-operativos", tags=["catalogos-operativos"])
++api_router.include_router(flow.recepcion_router, prefix="/recepcion", tags=["recepcion"])
+ api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
+ api_router.include_router(kiosks.router, tags=["kiosks"])
+ api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index 10fff50..c3e2c42 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -67,6 +67,7 @@ class Piso(TimestampMixin, Base):
+     codigo: Mapped[str | None] = mapped_column(String(40))
+     nombre_visible: Mapped[str] = mapped_column(String(20), nullable=False)
+     descripcion: Mapped[str | None] = mapped_column(Text)
++    cuenta_con_pantallas: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index c26236e..de0a3ee 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -238,6 +238,49 @@ class CheckinResponse(BaseModel):
+     estado_cita: str | None = None
+ 
+ 
++class ReceptionOption(BaseModel):
++    id: UUID
++    label: str
++
++
++class ReceptionOptions(BaseModel):
++    pacientes: list[ReceptionOption]
++    medicos: list[ReceptionOption]
++    consultorios: list[ReceptionOption]
++
++
++class ReceptionCitaItem(BaseModel):
++    id: UUID
++    estado: str
++    paciente_id: UUID
++    paciente: str
++    fecha_cita: date
++    hora_cita: time
++    consultorio_id: UUID
++    consultorio: str
++    torre: str
++    piso_id: UUID
++    piso: str
++    medico_id: UUID
++    medico: str
++    checkin_at: datetime | None = None
++    can_cancel_checkin: bool = False
++
++
++class ReceptionCitasResponse(BaseModel):
++    items: list[ReceptionCitaItem]
++    total: int
++    limit: int
++    offset: int
++
++
++class ReceptionCheckinCancelResponse(BaseModel):
++    cancelado: bool
++    mensaje: str
++    cita_id: UUID
++    estado_cita: str
++
++
+ class TicketResponse(BaseModel):
+     encabezado_fecha: str
+     leyenda: str
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 9f5056f..58b6db9 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -99,6 +99,7 @@ class PisoCreate(BaseModel):
+     codigo: str | None = Field(default=None, max_length=40)
+     nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
+     descripcion: str | None = Field(default=None, max_length=200)
++    cuenta_con_pantallas: bool = False
+     activo: bool = True
+ 
+ 
+@@ -108,6 +109,7 @@ class PisoUpdate(BaseModel):
+     codigo: str | None = Field(default=None, max_length=40)
+     nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
+     descripcion: str | None = Field(default=None, max_length=200)
++    cuenta_con_pantallas: bool | None = None
+     activo: bool | None = None
+ 
+ 
+@@ -119,6 +121,7 @@ class PisoRead(BaseModel):
+     codigo: str | None = None
+     nombre_visible: str
+     descripcion: str | None = None
++    cuenta_con_pantallas: bool
+     activo: bool
+     created_at: datetime
+     updated_at: datetime
+diff --git a/access-manager/backend/app/services/reset_data.py b/access-manager/backend/app/services/reset_data.py
+index 6b9860d..9c8caeb 100644
+--- a/access-manager/backend/app/services/reset_data.py
++++ b/access-manager/backend/app/services/reset_data.py
+@@ -42,6 +42,12 @@ ROLE_SEEDS = (
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
+ )
++ROLE_DEFAULT_PERMISSIONS = {
++    "RECEPCIONISTA": {
++        "recepcion": "editar",
++        "checkin-qr": "editar",
++    },
++}
+ 
+ 
+ def delete_all(db: Session, model: type) -> int:
+@@ -57,6 +63,16 @@ def ensure_roles(db: Session) -> dict[str, Role]:
+             role = Role(codigo=codigo, nombre=nombre, descripcion=descripcion)
+             db.add(role)
+             db.flush()
++        defaults = ROLE_DEFAULT_PERMISSIONS.get(codigo)
++        if defaults:
++            permisos = dict(role.permisos or {})
++            changed = False
++            for screen, access in defaults.items():
++                if screen not in permisos:
++                    permisos[screen] = access
++                    changed = True
++            if changed:
++                role.permisos = permisos
+         role.activo = True
+         roles[codigo] = role
+     return roles
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 5513fe6..f8be204 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -43,6 +43,26 @@ ROLE_SEEDS = (
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
+ )
++ROLE_DEFAULT_PERMISSIONS = {
++    "RECEPCIONISTA": {
++        "recepcion": "editar",
++        "checkin-qr": "editar",
++    },
++}
++
++
++def apply_default_role_permissions(role: Role) -> None:
++    defaults = ROLE_DEFAULT_PERMISSIONS.get(role.codigo)
++    if not defaults:
++        return
++    current = dict(role.permisos or {})
++    changed = False
++    for screen, access in defaults.items():
++        if screen not in current:
++            current[screen] = access
++            changed = True
++    if changed:
++        role.permisos = current
+ 
+ 
+ def main() -> None:
+@@ -62,6 +82,7 @@ def main() -> None:
+                 db.add(role)
+                 db.flush()
+                 logger.info("seed_role_created", extra={"codigo": codigo})
++            apply_default_role_permissions(role)
+             roles[codigo] = role
+ 
+         for email in ADMIN_EMAILS:
+@@ -128,11 +149,19 @@ def main() -> None:
+ 
+         piso = db.execute(select(Piso).where(Piso.torre_id == torre.id, Piso.numero == 1)).scalar_one_or_none()
+         if piso is None:
+-            piso = Piso(complejo_id=complejo.id, torre_id=torre.id, numero=1, codigo="1", nombre_visible="Piso 1")
++            piso = Piso(
++                complejo_id=complejo.id,
++                torre_id=torre.id,
++                numero=1,
++                codigo="1",
++                nombre_visible="Piso 1",
++                cuenta_con_pantallas=True,
++            )
+             db.add(piso)
+             db.flush()
+         elif piso.codigo is None:
+             piso.codigo = "1"
++        piso.cuenta_con_pantallas = True
+ 
+         punto_acceso = db.execute(
+             select(PuntoAcceso).where(PuntoAcceso.piso_id == piso.id, PuntoAcceso.nombre == "Lobby principal")
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 1ad2e6d..cad5fa1 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -136,6 +136,8 @@ watch(
+         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
+         <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
+         <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
++        <RouterLink to="/recepcion" :class="{ disabled: !canUse('/recepcion') }" :aria-disabled="!canUse('/recepcion')" @click="handleNav($event, '/recepcion')">Recepción</RouterLink>
++        <RouterLink to="/checkin-qr" :class="{ disabled: !canUse('/checkin-qr') }" :aria-disabled="!canUse('/checkin-qr')" @click="handleNav($event, '/checkin-qr')">Checkin QR</RouterLink>
+         <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
+         <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
+         <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index 1cb2779..ddd5e0f 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -29,6 +29,8 @@ export const screens: ScreenDefinition[] = [
+   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
+   { key: 'citas', label: 'Citas', path: '/citas' },
+   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
++  { key: 'recepcion', label: 'Recepción', path: '/recepcion' },
++  { key: 'checkin-qr', label: 'Checkin QR', path: '/checkin-qr' },
+   { key: 'contactos-institucionales', label: 'Contactos institucionales', path: '/contactos-institucionales' },
+   { key: 'asignaciones', label: 'Asignaciones', path: '/asignaciones' },
+   { key: 'clusters-turnos', label: 'Clústers', path: '/clusters-turnos' },
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 92de8ab..be4fd98 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -148,6 +148,7 @@ export type Piso = {
+   codigo?: string | null;
+   nombre_visible: string;
+   descripcion?: string | null;
++  cuenta_con_pantallas: boolean;
+   activo: boolean;
+   created_at: string;
+   updated_at: string;
+@@ -498,6 +499,49 @@ export type CheckinResponse = {
+   estado_cita?: string | null;
+ };
+ 
++export type ReceptionOption = {
++  id: string;
++  label: string;
++};
++
++export type ReceptionOptions = {
++  pacientes: ReceptionOption[];
++  medicos: ReceptionOption[];
++  consultorios: ReceptionOption[];
++};
++
++export type ReceptionCita = {
++  id: string;
++  estado: string;
++  paciente_id: string;
++  paciente: string;
++  fecha_cita: string;
++  hora_cita: string;
++  consultorio_id: string;
++  consultorio: string;
++  torre: string;
++  piso_id: string;
++  piso: string;
++  medico_id: string;
++  medico: string;
++  checkin_at?: string | null;
++  can_cancel_checkin: boolean;
++};
++
++export type ReceptionCitasResponse = {
++  items: ReceptionCita[];
++  total: number;
++  limit: number;
++  offset: number;
++};
++
++export type ReceptionCheckinCancelResponse = {
++  cancelado: boolean;
++  mensaje: string;
++  cita_id: string;
++  estado_cita: string;
++};
++
+ export type Auditoria = {
+   id: string;
+   evento: string;
+@@ -784,6 +828,24 @@ export type CitaFilters = {
+   offset?: number;
+ };
+ 
++export type ReceptionCitaFilters = {
++  institucion_id?: string;
++  complejo_id?: string;
++  torre_id?: string;
++  piso_id?: string;
++  paciente_id?: string;
++  paciente?: string;
++  medico_id?: string;
++  medico?: string;
++  consultorio_id?: string;
++  consultorio?: string;
++  hora_inicio?: string;
++  sort_by?: 'paciente' | 'fecha_hora' | 'medico';
++  sort_dir?: 'asc' | 'desc';
++  limit?: number;
++  offset?: number;
++};
++
+ function queryString(params: Record<string, string | number | boolean | null | undefined>) {
+   const query = new URLSearchParams();
+   for (const [key, value] of Object.entries(params)) {
+@@ -797,6 +859,22 @@ function queryString(params: Record<string, string | number | boolean | null | u
+ 
+ export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
+ export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
++export const listReceptionOptions = (params: ReceptionCitaFilters = {}) =>
++  apiFetch<ReceptionOptions>(`/recepcion/opciones${queryString(params)}`);
++export const listReceptionCitas = (params: ReceptionCitaFilters = {}) =>
++  apiFetch<ReceptionCitasResponse>(`/recepcion/citas${queryString(params)}`);
++export const receptionCheckin = (citaId: string) =>
++  apiFetch<CheckinResponse>(`/recepcion/citas/${citaId}/checkin`, {
++    method: 'POST',
++    body: JSON.stringify({ canal: 'RECEPCION' }),
++  });
++export const receptionCancelCheckin = (citaId: string) =>
++  apiFetch<ReceptionCheckinCancelResponse>(`/recepcion/citas/${citaId}/checkin/cancelar`, { method: 'POST' });
++export const receptionQrCheckin = (token: string) =>
++  apiFetch<CheckinResponse>('/recepcion/qr/checkin', {
++    method: 'POST',
++    body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
++  });
+ 
+ export function searchPacientes(q: string, medicoId?: string) {
+   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 4a24139..10908d1 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -169,6 +169,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'codigo', label: 'Código de piso', maxLength: 40 },
+       { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 20 },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea', maxLength: 200 },
++      { name: 'cuenta_con_pantallas', label: 'Cuenta con pantallas', type: 'checkbox', defaultValue: false },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+     columns: [
+@@ -177,6 +178,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'numero', label: 'Número de piso' },
+       { name: 'codigo', label: 'Código de piso' },
+       { name: 'nombre_visible', label: 'Nombre visible' },
++      { name: 'cuenta_con_pantallas', label: 'Cuenta con pantallas', boolean: true },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index bef4e8e..7d8353d 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -19,6 +19,8 @@ import TurnosLlamadosView from '../views/TurnosLlamadosView.vue';
+ import PacientesView from '../views/PacientesView.vue';
+ import CitasView from '../views/CitasView.vue';
+ import CitasHoyView from '../views/CitasHoyView.vue';
++import RecepcionView from '../views/RecepcionView.vue';
++import CheckinQrView from '../views/CheckinQrView.vue';
+ import PantallasTurnosView from '../views/PantallasTurnosView.vue';
+ import ContactosInstitucionalesView from '../views/ContactosInstitucionalesView.vue';
+ import ReportesView from '../views/ReportesView.vue';
+@@ -52,6 +54,8 @@ const router = createRouter({
+     { path: '/pacientes', component: PacientesView },
+     { path: '/citas', component: CitasView },
+     { path: '/citas/hoy', component: CitasHoyView },
++    { path: '/recepcion', component: RecepcionView },
++    { path: '/checkin-qr', component: CheckinQrView },
+     { path: '/busqueda-usuarios', component: BusquedaUsuariosView },
+     { path: '/reportes', component: ReportesView },
+     { path: '/contactos-institucionales', component: ContactosInstitucionalesView },
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 1b0a4de..35dc7f1 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -577,6 +577,15 @@ th {
+   text-transform: uppercase;
+ }
+ 
++.table-sort-button {
++  background: transparent;
++  color: inherit;
++  font-size: inherit;
++  padding: 0;
++  text-align: left;
++  text-transform: uppercase;
++}
++
+ .selectable-row {
+   cursor: pointer;
+ }
+@@ -859,6 +868,49 @@ pre {
+   width: 240px;
+ }
+ 
++.qr-reader-panel {
++  display: grid;
++  gap: 1rem;
++  max-width: 760px;
++}
++
++.qr-reader-form {
++  align-items: end;
++  display: grid;
++  gap: 0.8rem;
++  grid-template-columns: minmax(240px, 1fr) auto;
++}
++
++.qr-result {
++  border: 1px solid #d9e1ea;
++  border-radius: 8px;
++  display: grid;
++  gap: 0.25rem;
++  padding: 1rem;
++}
++
++.qr-result strong {
++  font-size: 1.5rem;
++}
++
++.qr-result.verde {
++  background: #ddf7ec;
++  border-color: #9de7c8;
++  color: #116345;
++}
++
++.qr-result.amarillo {
++  background: #fff7ed;
++  border-color: #fed7aa;
++  color: #9a3412;
++}
++
++.qr-result.rojo {
++  background: #fbe3df;
++  border-color: #ffc9c0;
++  color: #9f2015;
++}
++
+ .devices-table {
+   max-height: 560px;
+   overflow-y: auto;
+@@ -994,6 +1046,7 @@ pre {
+ 
+   .turno-preview-item,
+   .contact-medium,
++  .qr-reader-form,
+   .autocomplete-add-row {
+     grid-template-columns: 1fr;
+   }
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 0c9ab32..202511c 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -26,7 +26,15 @@ import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from
+ import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
+ 
+ type Row = Record<string, unknown> & { id: string };
+-type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
++type LookupOption = {
++  id: string;
++  label: string;
++  institucion_id?: string;
++  complejo_id?: string;
++  torre_id?: string;
++  piso_id?: string;
++  cuenta_con_pantallas?: boolean;
++};
+ type SelectOption = { value: string; label: string };
+ type PisoLookupSource = { [key: string]: unknown; numero?: unknown; codigo?: unknown; nombre_visible?: unknown };
+ 
+@@ -105,6 +113,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
+         label: torre ? `${torre.nombre} · ${pisoLookupLabel(item)}` : pisoLookupLabel(item),
+         complejo_id: item.complejo_id,
+         torre_id: item.torre_id,
++        cuenta_con_pantallas: item.cuenta_con_pantallas,
+       };
+     });
+   },
+@@ -251,6 +260,10 @@ function currentFloorOption() {
+ }
+ 
+ const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
++const currentFloorHasScreens = computed(() => {
++  const piso = currentFloorOption();
++  return Boolean(piso?.cuenta_con_pantallas);
++});
+ 
+ function setLocationFromForm() {
+   if (!isLocationScoped.value) return;
+@@ -364,6 +377,10 @@ function isScopedClusterField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
+ }
+ 
++function isClusterAssignmentBlocked(field: CatalogField) {
++  return Boolean(config.value.key === 'consultorios' && isScopedClusterField(field) && form.piso_id && !currentFloorHasScreens.value);
++}
++
+ function resetScopedTorre() {
+   if ('torre_id' in form) {
+     form.torre_id = '';
+@@ -381,6 +398,10 @@ function resetScopedPiso() {
+ function pruneScopedClusters() {
+   if (!Array.isArray(form.cluster_ids)) return;
+   const clusters = lookups['clusters-turnos'] ?? [];
++  if (config.value.key === 'consultorios' && form.piso_id && !currentFloorHasScreens.value) {
++    form.cluster_ids = [];
++    return;
++  }
+   if (!clusters.length) return;
+   if (!form.complejo_id || !form.piso_id) {
+     form.cluster_ids = [];
+@@ -635,6 +656,10 @@ function normalizePayload() {
+       continue;
+     }
+     if (field.type === 'multiselect') {
++      if (config.value.key === 'consultorios' && field.name === 'cluster_ids' && !currentFloorHasScreens.value) {
++        payload[field.name] = [];
++        continue;
++      }
+       payload[field.name] = Array.isArray(value) ? value : [];
+       continue;
+     }
+@@ -892,8 +917,8 @@ onMounted(loadData);
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
+-            :required="field.required"
+-            :disabled="!form.complejo_id || !form.piso_id"
++            :required="field.required && !isClusterAssignmentBlocked(field)"
++            :disabled="!form.complejo_id || !form.piso_id || isClusterAssignmentBlocked(field)"
+             multiple
+             size="5"
+             @change="updateMultiselect(field.name, $event)"
+@@ -902,6 +927,7 @@ onMounted(loadData);
+               {{ item.label }}
+             </option>
+           </select>
++          <p v-if="isClusterAssignmentBlocked(field)" class="message">Asignación a clústers bloqueada para pisos sin pantallas.</p>
+           <textarea
+             v-else-if="field.type === 'textarea'"
+             :id="fieldId(field)"
+diff --git a/access-manager/frontend/src/views/PisosView.vue b/access-manager/frontend/src/views/PisosView.vue
+index c276a3b..246da53 100644
+--- a/access-manager/frontend/src/views/PisosView.vue
++++ b/access-manager/frontend/src/views/PisosView.vue
+@@ -21,6 +21,7 @@ type PisoDraft = {
+   codigo: string;
+   nombre_visible: string;
+   descripcion: string;
++  cuenta_con_pantallas: boolean;
+ };
+ 
+ const instituciones = ref<Institucion[]>([]);
+@@ -72,17 +73,24 @@ function pisoDraft(piso: Piso): PisoDraft {
+       codigo: piso.codigo ?? '',
+       nombre_visible: piso.nombre_visible,
+       descripcion: piso.descripcion ?? '',
++      cuenta_con_pantallas: piso.cuenta_con_pantallas,
+     };
+   }
+   return drafts[piso.id];
+ }
+ 
+-function updateDraft(id: string, field: keyof PisoDraft, event: Event) {
++function updateDraft(id: string, field: Extract<keyof PisoDraft, 'codigo' | 'nombre_visible' | 'descripcion'>, event: Event) {
+   const target = event.target as HTMLInputElement | HTMLTextAreaElement | null;
+   if (!target || !drafts[id]) return;
+   drafts[id][field] = target.value;
+ }
+ 
++function updateDraftChecked(id: string, event: Event) {
++  const target = event.target as HTMLInputElement | null;
++  if (!target || !drafts[id]) return;
++  drafts[id].cuenta_con_pantallas = target.checked;
++}
++
+ function syncDrafts() {
+   const visibleIds = new Set(displayedPisos.value.map((item) => item.id));
+   for (const piso of displayedPisos.value) {
+@@ -90,6 +98,7 @@ function syncDrafts() {
+       codigo: piso.codigo ?? '',
+       nombre_visible: piso.nombre_visible,
+       descripcion: piso.descripcion ?? '',
++      cuenta_con_pantallas: piso.cuenta_con_pantallas,
+     };
+   }
+   for (const id of Object.keys(drafts)) {
+@@ -105,7 +114,8 @@ function isDirty(piso: Piso) {
+   return (
+     draft.codigo !== (piso.codigo ?? '') ||
+     draft.nombre_visible !== piso.nombre_visible ||
+-    draft.descripcion !== (piso.descripcion ?? '')
++    draft.descripcion !== (piso.descripcion ?? '') ||
++    draft.cuenta_con_pantallas !== piso.cuenta_con_pantallas
+   );
+ }
+ 
+@@ -196,6 +206,7 @@ async function saveChanges() {
+         codigo: draft.codigo.trim() || null,
+         nombre_visible: draft.nombre_visible.trim(),
+         descripcion: draft.descripcion.trim() || null,
++        cuenta_con_pantallas: draft.cuenta_con_pantallas,
+       });
+     }
+     await refreshPisos();
+@@ -300,6 +311,7 @@ onMounted(loadData);
+               <th>Código de piso</th>
+               <th>Nombre visible</th>
+               <th>Descripción</th>
++              <th>Cuenta con pantallas</th>
+               <th>Activar/desactivar</th>
+             </tr>
+           </thead>
+@@ -315,6 +327,12 @@ onMounted(loadData);
+               <td>
+                 <textarea :value="pisoDraft(piso).descripcion" maxlength="200" rows="2" @input="updateDraft(piso.id, 'descripcion', $event)"></textarea>
+               </td>
++              <td>
++                <label class="check-row">
++                  <input :checked="pisoDraft(piso).cuenta_con_pantallas" type="checkbox" @change="updateDraftChecked(piso.id, $event)" />
++                  Cierto
++                </label>
++              </td>
+               <td>
+                 <button v-if="piso.activo" class="small danger" type="button" :disabled="loading" @click="setPisoActive(piso, false)">Desactivar</button>
+                 <button v-else class="small secondary" type="button" :disabled="loading" @click="setPisoActive(piso, true)">Activar</button>

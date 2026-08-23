@@ -169,6 +169,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'codigo', label: 'Código de piso', maxLength: 40 },
       { name: 'nombre_visible', label: 'Nombre visible', required: true, maxLength: 20 },
       { name: 'descripcion', label: 'Descripción', type: 'textarea', maxLength: 200 },
+      { name: 'cuenta_con_pantallas', label: 'Cuenta con pantallas', type: 'checkbox', defaultValue: false },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
     columns: [
@@ -177,6 +178,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'numero', label: 'Número de piso' },
       { name: 'codigo', label: 'Código de piso' },
       { name: 'nombre_visible', label: 'Nombre visible' },
+      { name: 'cuenta_con_pantallas', label: 'Cuenta con pantallas', boolean: true },
       { name: 'activo', label: 'Estado', boolean: true },
     ],
   },

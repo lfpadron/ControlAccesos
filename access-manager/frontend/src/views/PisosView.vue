@@ -21,6 +21,7 @@ type PisoDraft = {
   codigo: string;
   nombre_visible: string;
   descripcion: string;
+  cuenta_con_pantallas: boolean;
 };
 
 const instituciones = ref<Institucion[]>([]);
@@ -72,15 +73,22 @@ function pisoDraft(piso: Piso): PisoDraft {
       codigo: piso.codigo ?? '',
       nombre_visible: piso.nombre_visible,
       descripcion: piso.descripcion ?? '',
+      cuenta_con_pantallas: piso.cuenta_con_pantallas,
     };
   }
   return drafts[piso.id];
 }
 
-function updateDraft(id: string, field: keyof PisoDraft, event: Event) {
+function updateDraft(id: string, field: Extract<keyof PisoDraft, 'codigo' | 'nombre_visible' | 'descripcion'>, event: Event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | null;
   if (!target || !drafts[id]) return;
   drafts[id][field] = target.value;
+}
+
+function updateDraftChecked(id: string, event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  if (!target || !drafts[id]) return;
+  drafts[id].cuenta_con_pantallas = target.checked;
 }
 
 function syncDrafts() {
@@ -90,6 +98,7 @@ function syncDrafts() {
       codigo: piso.codigo ?? '',
       nombre_visible: piso.nombre_visible,
       descripcion: piso.descripcion ?? '',
+      cuenta_con_pantallas: piso.cuenta_con_pantallas,
     };
   }
   for (const id of Object.keys(drafts)) {
@@ -105,7 +114,8 @@ function isDirty(piso: Piso) {
   return (
     draft.codigo !== (piso.codigo ?? '') ||
     draft.nombre_visible !== piso.nombre_visible ||
-    draft.descripcion !== (piso.descripcion ?? '')
+    draft.descripcion !== (piso.descripcion ?? '') ||
+    draft.cuenta_con_pantallas !== piso.cuenta_con_pantallas
   );
 }
 
@@ -196,6 +206,7 @@ async function saveChanges() {
         codigo: draft.codigo.trim() || null,
         nombre_visible: draft.nombre_visible.trim(),
         descripcion: draft.descripcion.trim() || null,
+        cuenta_con_pantallas: draft.cuenta_con_pantallas,
       });
     }
     await refreshPisos();
@@ -300,6 +311,7 @@ onMounted(loadData);
               <th>Código de piso</th>
               <th>Nombre visible</th>
               <th>Descripción</th>
+              <th>Cuenta con pantallas</th>
               <th>Activar/desactivar</th>
             </tr>
           </thead>
@@ -314,6 +326,12 @@ onMounted(loadData);
               </td>
               <td>
                 <textarea :value="pisoDraft(piso).descripcion" maxlength="200" rows="2" @input="updateDraft(piso.id, 'descripcion', $event)"></textarea>
+              </td>
+              <td>
+                <label class="check-row">
+                  <input :checked="pisoDraft(piso).cuenta_con_pantallas" type="checkbox" @change="updateDraftChecked(piso.id, $event)" />
+                  Cierto
+                </label>
               </td>
               <td>
                 <button v-if="piso.activo" class="small danger" type="button" :disabled="loading" @click="setPisoActive(piso, false)">Desactivar</button>

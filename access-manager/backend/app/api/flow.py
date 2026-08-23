@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -46,6 +46,11 @@ from app.schemas.flow import (
     QrRead,
     QrValidarRequest,
     QrValidarResponse,
+    ReceptionCheckinCancelResponse,
+    ReceptionCitaItem,
+    ReceptionCitasResponse,
+    ReceptionOption,
+    ReceptionOptions,
     TicketResponse,
 )
 from app.schemas.institucion import InstitucionRead
@@ -55,6 +60,7 @@ from app.services.access_scope import (
     cita_agenda_access_predicate,
     cita_access_predicate,
     cita_payload_is_accessible,
+    can_access_cita,
     complejo_catalog_access_predicate,
     consultorio_catalog_access_predicate,
     ensure_cita_access,
@@ -76,11 +82,12 @@ citas_router = APIRouter()
 qr_router = APIRouter()
 mobile_router = APIRouter()
 catalogos_operativos_router = APIRouter()
+recepcion_router = APIRouter()
 
 ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
 ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
 
-CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "turnos-llamados"))
+CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "recepcion", "checkin-qr", "turnos-llamados"))
 PacientesReadUser = Depends(require_permission("pacientes"))
 PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
 CitasAgendaReadUser = Depends(require_permission("citas"))
@@ -88,6 +95,9 @@ CitasAgendaWriteUser = Depends(require_permission("citas", minimum="editar"))
 CitasTodayReadUser = Depends(require_permission("citas-hoy"))
 CitasOperationalReadUser = Depends(require_permission("citas", "citas-hoy"))
 CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", minimum="editar"))
+RecepcionReadUser = Depends(require_permission("recepcion"))
+RecepcionWriteUser = Depends(require_permission("recepcion", minimum="editar"))
+CheckinQrWriteUser = Depends(require_permission("checkin-qr", minimum="editar"))
 MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
 MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
 
@@ -190,6 +200,16 @@ def patient_medical_name(paciente: Paciente | None) -> str | None:
     return paciente.nombre_preferido or full_name
 
 
+def patient_last_first_name(paciente: Paciente | None) -> str:
+    if paciente is None:
+        return ""
+    last_names = " ".join(part for part in [paciente.apellido_paterno, paciente.apellido_materno] if part)
+    first_names = paciente.nombre_preferido or paciente.nombre or ""
+    if last_names and first_names:
+        return f"{last_names}, {first_names}"
+    return first_names or last_names or paciente.folio_paciente
+
+
 def consultorio_label(consultorio: Consultorio | None) -> str | None:
     if consultorio is None:
         return None
@@ -212,6 +232,12 @@ def medico_label(medico: Medico | None) -> str | None:
     if medico is None:
         return None
     return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}"
+
+
+def medico_last_first_name(medico: Medico | None) -> str:
+    if medico is None:
+        return ""
+    return f"{medico.apellidos}, {medico.nombre}".strip(", ")
 
 
 def consultorio_catalog_read(db: Session, consultorio: Consultorio) -> ConsultorioRead:
@@ -726,6 +752,11 @@ def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
     return active_display_exists_for_clusters(db, cluster_ids)
 
 
+def consultorio_requires_display_coverage(db: Session, consultorio: Consultorio) -> bool:
+    piso = db.get(Piso, consultorio.piso_id)
+    return bool(piso and piso.cuenta_con_pantallas)
+
+
 def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> None:
     paciente_id = data.get("paciente_id", getattr(item, "paciente_id", None))
     medico_id = data.get("medico_id", getattr(item, "medico_id", None))
@@ -755,7 +786,7 @@ def validate_cita_scope(db: Session, data: dict, item: Cita | None = None) -> No
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al campus indicado.")
         if piso_id is not None and consultorio.piso_id != piso_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El consultorio no pertenece al piso indicado.")
-        if not consultorio_has_display_coverage(db, consultorio.id):
+        if consultorio_requires_display_coverage(db, consultorio) and not consultorio_has_display_coverage(db, consultorio.id):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="El consultorio debe estar asociado a por lo menos un clúster con una pantalla de turnos activa.",
@@ -962,6 +993,386 @@ def create_arrival_event(
         cita.estado = "LLEGO_LOBBY"
     db.flush()
     return event
+
+
+CHECKIN_CANCEL_WINDOW = timedelta(minutes=30)
+
+
+def latest_lobby_checkin(db: Session, cita_id: UUID) -> EventoLlegada | None:
+    return db.execute(
+        select(EventoLlegada)
+        .where(EventoLlegada.cita_id == cita_id, EventoLlegada.tipo == "CHECKIN_LOBBY")
+        .order_by(EventoLlegada.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def event_created_at_utc(event: EventoLlegada) -> datetime:
+    created_at = event.created_at
+    return created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
+
+
+def can_cancel_lobby_checkin(event: EventoLlegada | None, timestamp: datetime | None = None) -> bool:
+    if event is None:
+        return False
+    return (timestamp or now_utc()) - event_created_at_utc(event) <= CHECKIN_CANCEL_WINDOW
+
+
+def restore_qr_if_needed(db: Session, cita_id: UUID, timestamp: datetime) -> bool:
+    qr_token = db.execute(
+        select(QrToken)
+        .where(QrToken.cita_id == cita_id, QrToken.estado == "USADO", QrToken.fecha_expiracion > timestamp)
+        .order_by(QrToken.updated_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if qr_token is None:
+        return False
+    qr_token.estado = "GENERADO"
+    return True
+
+
+def state_after_checkin_cancel(db: Session, cita_id: UUID, timestamp: datetime) -> str:
+    remaining_event = latest_lobby_checkin(db, cita_id)
+    if remaining_event is not None:
+        return "LLEGO_LOBBY"
+    if restore_qr_if_needed(db, cita_id, timestamp):
+        return "QR_GENERADO"
+    generated_qr = db.execute(
+        select(QrToken.id)
+        .where(QrToken.cita_id == cita_id, QrToken.estado == "GENERADO", QrToken.fecha_expiracion > timestamp)
+        .limit(1)
+    ).first()
+    return "QR_GENERADO" if generated_qr is not None else "AGENDADA"
+
+
+def reception_base_query(
+    db: Session,
+    current_user: Usuario,
+    institucion_id: UUID | None = None,
+    complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
+    piso_id: UUID | None = None,
+    paciente_id: UUID | None = None,
+    paciente: str | None = None,
+    medico_id: UUID | None = None,
+    medico: str | None = None,
+    consultorio_id: UUID | None = None,
+    consultorio: str | None = None,
+    hora_inicio: time | None = None,
+):
+    query = (
+        select(Cita, Paciente, Medico, Consultorio, Piso, Torre)
+        .join(Paciente, Paciente.id == Cita.paciente_id)
+        .join(Medico, Medico.id == Cita.medico_id)
+        .join(Consultorio, Consultorio.id == Cita.consultorio_id)
+        .join(Piso, Piso.id == Cita.piso_id)
+        .join(Torre, Torre.id == Piso.torre_id)
+        .where(Cita.fecha_cita == business_today(), cita_access_predicate(db, current_user, business_today()))
+    )
+    if institucion_id is not None:
+        query = query.where(
+            select(Complejo.id)
+            .where(Complejo.id == Cita.complejo_id, Complejo.institucion_id == institucion_id)
+            .exists()
+        )
+    if complejo_id is not None:
+        query = query.where(Cita.complejo_id == complejo_id)
+    if torre_id is not None:
+        query = query.where(Piso.torre_id == torre_id)
+    if piso_id is not None:
+        query = query.where(Cita.piso_id == piso_id)
+    if paciente_id is not None:
+        query = query.where(Cita.paciente_id == paciente_id)
+    if paciente:
+        search_name = func.lower(
+            func.coalesce(Paciente.apellido_paterno, "")
+            + " "
+            + func.coalesce(Paciente.apellido_materno, "")
+            + " "
+            + func.coalesce(Paciente.nombre, "")
+            + " "
+            + func.coalesce(Paciente.nombre_preferido, "")
+            + " "
+            + func.coalesce(Paciente.folio_paciente, "")
+        )
+        for term_text in paciente.split():
+            query = query.where(search_name.like(normalize_search(term_text)))
+    if medico_id is not None:
+        query = query.where(Cita.medico_id == medico_id)
+    if medico:
+        search_medico = func.lower(
+            func.coalesce(Medico.apellidos, "")
+            + " "
+            + func.coalesce(Medico.nombre, "")
+            + " "
+            + func.coalesce(Medico.nombre_visible, "")
+        )
+        for term_text in medico.split():
+            query = query.where(search_medico.like(normalize_search(term_text)))
+    if consultorio_id is not None:
+        query = query.where(Cita.consultorio_id == consultorio_id)
+    if consultorio:
+        search_consultorio = func.lower(func.coalesce(Consultorio.codigo, "") + " " + func.coalesce(Consultorio.nombre_visible, ""))
+        for term_text in consultorio.split():
+            query = query.where(search_consultorio.like(normalize_search(term_text)))
+    if hora_inicio is not None:
+        query = query.where(Cita.hora_cita >= hora_inicio)
+    return query
+
+
+def unique_option(options: list[ReceptionOption], item_id: UUID, label: str) -> None:
+    if any(option.id == item_id for option in options):
+        return
+    options.append(ReceptionOption(id=item_id, label=label))
+
+
+def reception_cita_item(db: Session, row: tuple[Cita, Paciente, Medico, Consultorio, Piso, Torre]) -> ReceptionCitaItem:
+    cita, paciente, medico, consultorio, piso, torre = row
+    checkin_event = latest_lobby_checkin(db, cita.id)
+    return ReceptionCitaItem(
+        id=cita.id,
+        estado=cita.estado,
+        paciente_id=paciente.id,
+        paciente=patient_last_first_name(paciente),
+        fecha_cita=cita.fecha_cita,
+        hora_cita=cita.hora_cita,
+        consultorio_id=consultorio.id,
+        consultorio=consultorio_label(consultorio) or consultorio.codigo,
+        torre=torre_label(torre) or "",
+        piso_id=piso.id,
+        piso=piso_label(piso) or "",
+        medico_id=medico.id,
+        medico=medico_last_first_name(medico),
+        checkin_at=checkin_event.created_at if checkin_event else None,
+        can_cancel_checkin=can_cancel_lobby_checkin(checkin_event) and cita.estado == "LLEGO_LOBBY",
+    )
+
+
+@recepcion_router.get("/opciones", response_model=ReceptionOptions)
+def reception_options(
+    institucion_id: UUID | None = None,
+    complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
+    piso_id: UUID | None = None,
+    hora_inicio: time | None = None,
+    db: Session = Depends(get_db),
+    current_user: Usuario = RecepcionReadUser,
+) -> ReceptionOptions:
+    rows = db.execute(
+        reception_base_query(
+            db,
+            current_user,
+            institucion_id=institucion_id,
+            complejo_id=complejo_id,
+            torre_id=torre_id,
+            piso_id=piso_id,
+            hora_inicio=hora_inicio,
+        ).order_by(Cita.hora_cita)
+    ).all()
+    pacientes: list[ReceptionOption] = []
+    medicos: list[ReceptionOption] = []
+    consultorios: list[ReceptionOption] = []
+    for cita, paciente, medico, consultorio, _piso, _torre in rows:
+        unique_option(pacientes, cita.paciente_id, patient_last_first_name(paciente))
+        unique_option(medicos, cita.medico_id, medico_last_first_name(medico))
+        unique_option(consultorios, cita.consultorio_id, consultorio_label(consultorio) or consultorio.codigo)
+    pacientes.sort(key=lambda item: item.label.lower())
+    medicos.sort(key=lambda item: item.label.lower())
+    consultorios.sort(key=lambda item: item.label.lower())
+    return ReceptionOptions(pacientes=pacientes, medicos=medicos, consultorios=consultorios)
+
+
+@recepcion_router.get("/citas", response_model=ReceptionCitasResponse)
+def reception_citas(
+    institucion_id: UUID | None = None,
+    complejo_id: UUID | None = None,
+    torre_id: UUID | None = None,
+    piso_id: UUID | None = None,
+    paciente_id: UUID | None = None,
+    paciente: str | None = None,
+    medico_id: UUID | None = None,
+    medico: str | None = None,
+    consultorio_id: UUID | None = None,
+    consultorio: str | None = None,
+    hora_inicio: time | None = None,
+    sort_by: str = Query(default="fecha_hora", pattern="^(paciente|fecha_hora|medico)$"),
+    sort_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: Usuario = RecepcionReadUser,
+) -> ReceptionCitasResponse:
+    query = reception_base_query(
+        db,
+        current_user,
+        institucion_id=institucion_id,
+        complejo_id=complejo_id,
+        torre_id=torre_id,
+        piso_id=piso_id,
+        paciente_id=paciente_id,
+        paciente=paciente,
+        medico_id=medico_id,
+        medico=medico,
+        consultorio_id=consultorio_id,
+        consultorio=consultorio,
+        hora_inicio=hora_inicio,
+    )
+    total = int(db.execute(select(func.count()).select_from(query.subquery())).scalar_one())
+    order_columns = {
+        "paciente": patient_order_columns(),
+        "fecha_hora": (Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno),
+        "medico": (func.lower(func.coalesce(Medico.apellidos, "")), func.lower(func.coalesce(Medico.nombre, "")), Cita.hora_cita),
+    }[sort_by]
+    if sort_dir == "desc":
+        order_columns = tuple(column.desc() for column in order_columns)
+    rows = db.execute(query.order_by(*order_columns).offset(offset).limit(limit)).all()
+    return ReceptionCitasResponse(
+        items=[reception_cita_item(db, row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@recepcion_router.post("/citas/{cita_id}/checkin", response_model=CheckinResponse)
+def reception_checkin_cita(
+    cita_id: UUID,
+    payload: CheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = RecepcionWriteUser,
+) -> CheckinResponse:
+    cita = exists_or_404(db, Cita, cita_id, "Cita")
+    if cita.fecha_cita != business_today():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
+    ensure_cita_access(db, current_user, cita.id, business_today())
+    if cita.estado == "LLEGO_LOBBY":
+        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+    return authenticated_lobby_checkin(cita, payload, request, db, current_user)
+
+
+@recepcion_router.post("/citas/{cita_id}/checkin/cancelar", response_model=ReceptionCheckinCancelResponse)
+def reception_cancel_checkin(
+    cita_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = RecepcionWriteUser,
+) -> ReceptionCheckinCancelResponse:
+    cita = exists_or_404(db, Cita, cita_id, "Cita")
+    if cita.fecha_cita != business_today():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
+    ensure_cita_access(db, current_user, cita.id, business_today())
+    event = latest_lobby_checkin(db, cita.id)
+    timestamp = now_utc()
+    if not can_cancel_lobby_checkin(event, timestamp):
+        return ReceptionCheckinCancelResponse(
+            cancelado=False,
+            mensaje="Ha excedido el tiempo. Checkin NO ha sido cancelado",
+            cita_id=cita.id,
+            estado_cita=cita.estado,
+        )
+    assert event is not None
+    before = audit_safe_dict(cita)
+    db.delete(event)
+    db.flush()
+    cita.estado = state_after_checkin_cancel(db, cita.id, timestamp)
+    db.flush()
+    record_audit_event(
+        db,
+        evento="CHECKIN_CANCELADO",
+        entidad="citas",
+        entidad_id=cita.id,
+        usuario_id=current_user.id,
+        canal="WEB",
+        ip_origen=client_ip(request),
+        valor_antes=before,
+        valor_despues=audit_safe_dict(cita),
+    )
+    db.commit()
+    return ReceptionCheckinCancelResponse(
+        cancelado=True,
+        mensaje="Checkin cancelado exitosamente",
+        cita_id=cita.id,
+        estado_cita=cita.estado,
+    )
+
+
+@recepcion_router.post("/qr/checkin", response_model=CheckinResponse)
+def reception_qr_checkin(
+    payload: QrCheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = CheckinQrWriteUser,
+) -> CheckinResponse:
+    result = validate_qr(db, payload.token)
+    if not result.valid or result.cita is None:
+        record_audit_event(
+            db,
+            evento="QR_VALIDADO",
+            entidad="qr_tokens",
+            entidad_id=result.qr_token.id if result.qr_token else None,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"valido": False, "resultado": result.status},
+        )
+        db.commit()
+        return CheckinResponse(resultado="ROJO", mensaje=result.message)
+
+    cita = result.cita
+    if cita.fecha_cita != business_today() or not can_access_cita(db, current_user, cita.id, business_today()):
+        record_audit_event(
+            db,
+            evento="QR_VALIDADO",
+            entidad="qr_tokens",
+            entidad_id=result.qr_token.id if result.qr_token else None,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"valido": False, "resultado": "FUERA_ALCANCE", "cita_id": str(cita.id)},
+        )
+        db.commit()
+        return CheckinResponse(resultado="ROJO", mensaje="Cita no encontrada para hoy o fuera de su alcance.")
+    if cita.estado == "LLEGO_LOBBY":
+        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+
+    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+    if resultado != "ROJO":
+        event = create_arrival_event(
+            db,
+            cita,
+            "CHECKIN_LOBBY",
+            payload.canal,
+            request,
+            payload.sala_id,
+            current_user.id,
+            payload.dispositivo_id,
+        )
+        if result.qr_token is not None:
+            result.qr_token.estado = "USADO"
+        record_audit_event(
+            db,
+            evento="CHECKIN_LOBBY",
+            entidad="eventos_llegada",
+            entidad_id=event.id,
+            usuario_id=current_user.id,
+            canal=payload.canal,
+            ip_origen=client_ip(request),
+            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+        )
+    record_audit_event(
+        db,
+        evento="QR_VALIDADO",
+        entidad="qr_tokens",
+        entidad_id=result.qr_token.id if result.qr_token else None,
+        usuario_id=current_user.id,
+        canal=payload.canal,
+        ip_origen=client_ip(request),
+        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
+    )
+    db.commit()
+    db.refresh(cita)
+    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
 
 
 @pacientes_router.get("/buscar", response_model=list[PacienteRead])

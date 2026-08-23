@@ -99,6 +99,7 @@ class PisoCreate(BaseModel):
     codigo: str | None = Field(default=None, max_length=40)
     nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
     descripcion: str | None = Field(default=None, max_length=200)
+    cuenta_con_pantallas: bool = False
     activo: bool = True
 
 
@@ -108,6 +109,7 @@ class PisoUpdate(BaseModel):
     codigo: str | None = Field(default=None, max_length=40)
     nombre_visible: str | None = Field(default=None, min_length=1, max_length=20)
     descripcion: str | None = Field(default=None, max_length=200)
+    cuenta_con_pantallas: bool | None = None
     activo: bool | None = None
 
 
@@ -119,6 +121,7 @@ class PisoRead(BaseModel):
     codigo: str | None = None
     nombre_visible: str
     descripcion: str | None = None
+    cuenta_con_pantallas: bool
     activo: bool
     created_at: datetime
     updated_at: datetime

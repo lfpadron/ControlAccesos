@@ -33,6 +33,8 @@ MENU_SCREEN_KEYS = [
     "pacientes",
     "citas",
     "citas-hoy",
+    "recepcion",
+    "checkin-qr",
     "contactos-institucionales",
     "asignaciones",
     "clusters-turnos",

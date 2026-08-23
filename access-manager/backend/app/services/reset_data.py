@@ -42,6 +42,12 @@ ROLE_SEEDS = (
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
 )
+ROLE_DEFAULT_PERMISSIONS = {
+    "RECEPCIONISTA": {
+        "recepcion": "editar",
+        "checkin-qr": "editar",
+    },
+}
 
 
 def delete_all(db: Session, model: type) -> int:
@@ -57,6 +63,16 @@ def ensure_roles(db: Session) -> dict[str, Role]:
             role = Role(codigo=codigo, nombre=nombre, descripcion=descripcion)
             db.add(role)
             db.flush()
+        defaults = ROLE_DEFAULT_PERMISSIONS.get(codigo)
+        if defaults:
+            permisos = dict(role.permisos or {})
+            changed = False
+            for screen, access in defaults.items():
+                if screen not in permisos:
+                    permisos[screen] = access
+                    changed = True
+            if changed:
+                role.permisos = permisos
         role.activo = True
         roles[codigo] = role
     return roles

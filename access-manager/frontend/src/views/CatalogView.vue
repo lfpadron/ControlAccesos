@@ -26,7 +26,15 @@ import { CatalogColumn, CatalogConfig, CatalogField, catalogs, LookupKey } from 
 import { buildUserLocationScope, filterTorresByUserAssignment, loadCurrentUserLocationAssignments } from '../locationAssignmentScope';
 
 type Row = Record<string, unknown> & { id: string };
-type LookupOption = { id: string; label: string; institucion_id?: string; complejo_id?: string; torre_id?: string; piso_id?: string };
+type LookupOption = {
+  id: string;
+  label: string;
+  institucion_id?: string;
+  complejo_id?: string;
+  torre_id?: string;
+  piso_id?: string;
+  cuenta_con_pantallas?: boolean;
+};
 type SelectOption = { value: string; label: string };
 type PisoLookupSource = { [key: string]: unknown; numero?: unknown; codigo?: unknown; nombre_visible?: unknown };
 
@@ -105,6 +113,7 @@ const lookupLoaders: Record<LookupKey, () => Promise<LookupOption[]>> = {
         label: torre ? `${torre.nombre} · ${pisoLookupLabel(item)}` : pisoLookupLabel(item),
         complejo_id: item.complejo_id,
         torre_id: item.torre_id,
+        cuenta_con_pantallas: item.cuenta_con_pantallas,
       };
     });
   },
@@ -251,6 +260,10 @@ function currentFloorOption() {
 }
 
 const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
+const currentFloorHasScreens = computed(() => {
+  const piso = currentFloorOption();
+  return Boolean(piso?.cuenta_con_pantallas);
+});
 
 function setLocationFromForm() {
   if (!isLocationScoped.value) return;
@@ -364,6 +377,10 @@ function isScopedClusterField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
 }
 
+function isClusterAssignmentBlocked(field: CatalogField) {
+  return Boolean(config.value.key === 'consultorios' && isScopedClusterField(field) && form.piso_id && !currentFloorHasScreens.value);
+}
+
 function resetScopedTorre() {
   if ('torre_id' in form) {
     form.torre_id = '';
@@ -381,6 +398,10 @@ function resetScopedPiso() {
 function pruneScopedClusters() {
   if (!Array.isArray(form.cluster_ids)) return;
   const clusters = lookups['clusters-turnos'] ?? [];
+  if (config.value.key === 'consultorios' && form.piso_id && !currentFloorHasScreens.value) {
+    form.cluster_ids = [];
+    return;
+  }
   if (!clusters.length) return;
   if (!form.complejo_id || !form.piso_id) {
     form.cluster_ids = [];
@@ -635,6 +656,10 @@ function normalizePayload() {
       continue;
     }
     if (field.type === 'multiselect') {
+      if (config.value.key === 'consultorios' && field.name === 'cluster_ids' && !currentFloorHasScreens.value) {
+        payload[field.name] = [];
+        continue;
+      }
       payload[field.name] = Array.isArray(value) ? value : [];
       continue;
     }
@@ -892,8 +917,8 @@ onMounted(loadData);
             :id="fieldId(field)"
             :name="fieldName(field)"
             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
-            :required="field.required"
-            :disabled="!form.complejo_id || !form.piso_id"
+            :required="field.required && !isClusterAssignmentBlocked(field)"
+            :disabled="!form.complejo_id || !form.piso_id || isClusterAssignmentBlocked(field)"
             multiple
             size="5"
             @change="updateMultiselect(field.name, $event)"
@@ -902,6 +927,7 @@ onMounted(loadData);
               {{ item.label }}
             </option>
           </select>
+          <p v-if="isClusterAssignmentBlocked(field)" class="message">Asignación a clústers bloqueada para pisos sin pantallas.</p>
           <textarea
             v-else-if="field.type === 'textarea'"
             :id="fieldId(field)"

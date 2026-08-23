@@ -136,6 +136,8 @@ watch(
         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
         <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
         <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
+        <RouterLink to="/recepcion" :class="{ disabled: !canUse('/recepcion') }" :aria-disabled="!canUse('/recepcion')" @click="handleNav($event, '/recepcion')">Recepción</RouterLink>
+        <RouterLink to="/checkin-qr" :class="{ disabled: !canUse('/checkin-qr') }" :aria-disabled="!canUse('/checkin-qr')" @click="handleNav($event, '/checkin-qr')">Checkin QR</RouterLink>
         <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
         <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
         <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>

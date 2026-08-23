@@ -67,6 +67,7 @@ class Piso(TimestampMixin, Base):
     codigo: Mapped[str | None] = mapped_column(String(40))
     nombre_visible: Mapped[str] = mapped_column(String(20), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
+    cuenta_con_pantallas: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

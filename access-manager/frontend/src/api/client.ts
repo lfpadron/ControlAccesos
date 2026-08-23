@@ -148,6 +148,7 @@ export type Piso = {
   codigo?: string | null;
   nombre_visible: string;
   descripcion?: string | null;
+  cuenta_con_pantallas: boolean;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -498,6 +499,49 @@ export type CheckinResponse = {
   estado_cita?: string | null;
 };
 
+export type ReceptionOption = {
+  id: string;
+  label: string;
+};
+
+export type ReceptionOptions = {
+  pacientes: ReceptionOption[];
+  medicos: ReceptionOption[];
+  consultorios: ReceptionOption[];
+};
+
+export type ReceptionCita = {
+  id: string;
+  estado: string;
+  paciente_id: string;
+  paciente: string;
+  fecha_cita: string;
+  hora_cita: string;
+  consultorio_id: string;
+  consultorio: string;
+  torre: string;
+  piso_id: string;
+  piso: string;
+  medico_id: string;
+  medico: string;
+  checkin_at?: string | null;
+  can_cancel_checkin: boolean;
+};
+
+export type ReceptionCitasResponse = {
+  items: ReceptionCita[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ReceptionCheckinCancelResponse = {
+  cancelado: boolean;
+  mensaje: string;
+  cita_id: string;
+  estado_cita: string;
+};
+
 export type Auditoria = {
   id: string;
   evento: string;
@@ -784,6 +828,24 @@ export type CitaFilters = {
   offset?: number;
 };
 
+export type ReceptionCitaFilters = {
+  institucion_id?: string;
+  complejo_id?: string;
+  torre_id?: string;
+  piso_id?: string;
+  paciente_id?: string;
+  paciente?: string;
+  medico_id?: string;
+  medico?: string;
+  consultorio_id?: string;
+  consultorio?: string;
+  hora_inicio?: string;
+  sort_by?: 'paciente' | 'fecha_hora' | 'medico';
+  sort_dir?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+};
+
 function queryString(params: Record<string, string | number | boolean | null | undefined>) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -797,6 +859,22 @@ function queryString(params: Record<string, string | number | boolean | null | u
 
 export const listCitas = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas${queryString(params)}`);
 export const listCitasHoy = (params: CitaFilters = {}) => apiFetch<Cita[]>(`/citas/hoy${queryString(params)}`);
+export const listReceptionOptions = (params: ReceptionCitaFilters = {}) =>
+  apiFetch<ReceptionOptions>(`/recepcion/opciones${queryString(params)}`);
+export const listReceptionCitas = (params: ReceptionCitaFilters = {}) =>
+  apiFetch<ReceptionCitasResponse>(`/recepcion/citas${queryString(params)}`);
+export const receptionCheckin = (citaId: string) =>
+  apiFetch<CheckinResponse>(`/recepcion/citas/${citaId}/checkin`, {
+    method: 'POST',
+    body: JSON.stringify({ canal: 'RECEPCION' }),
+  });
+export const receptionCancelCheckin = (citaId: string) =>
+  apiFetch<ReceptionCheckinCancelResponse>(`/recepcion/citas/${citaId}/checkin/cancelar`, { method: 'POST' });
+export const receptionQrCheckin = (token: string) =>
+  apiFetch<CheckinResponse>('/recepcion/qr/checkin', {
+    method: 'POST',
+    body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
+  });
 
 export function searchPacientes(q: string, medicoId?: string) {
   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);

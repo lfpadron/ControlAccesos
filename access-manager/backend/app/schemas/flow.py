@@ -238,6 +238,49 @@ class CheckinResponse(BaseModel):
     estado_cita: str | None = None
 
 
+class ReceptionOption(BaseModel):
+    id: UUID
+    label: str
+
+
+class ReceptionOptions(BaseModel):
+    pacientes: list[ReceptionOption]
+    medicos: list[ReceptionOption]
+    consultorios: list[ReceptionOption]
+
+
+class ReceptionCitaItem(BaseModel):
+    id: UUID
+    estado: str
+    paciente_id: UUID
+    paciente: str
+    fecha_cita: date
+    hora_cita: time
+    consultorio_id: UUID
+    consultorio: str
+    torre: str
+    piso_id: UUID
+    piso: str
+    medico_id: UUID
+    medico: str
+    checkin_at: datetime | None = None
+    can_cancel_checkin: bool = False
+
+
+class ReceptionCitasResponse(BaseModel):
+    items: list[ReceptionCitaItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReceptionCheckinCancelResponse(BaseModel):
+    cancelado: bool
+    mensaje: str
+    cita_id: UUID
+    estado_cita: str
+
+
 class TicketResponse(BaseModel):
     encabezado_fecha: str
     leyenda: str

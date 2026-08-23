@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -324,6 +324,13 @@ def post_save_torre(db: Session, item: object) -> None:
         sync_torre_pisos(db, item)
 
 
+def post_save_piso(db: Session, item: object) -> None:
+    if not isinstance(item, Piso) or item.cuenta_con_pantallas:
+        return
+    consultorios_piso = select(Consultorio.id).where(Consultorio.piso_id == item.id)
+    db.execute(delete(ConsultorioCluster).where(ConsultorioCluster.consultorio_id.in_(consultorios_piso)))
+
+
 def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     if data.get("complejo_id") is not None:
         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
@@ -475,6 +482,11 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
         )
 
 
+def piso_requires_display_clusters(db: Session, piso_id: UUID) -> bool:
+    piso = exists_or_404(db, Piso, piso_id, "Piso")
+    return bool(piso.cuenta_con_pantallas)
+
+
 def consultorio_has_display_coverage(db: Session, consultorio_id: UUID) -> bool:
     cluster_ids = cluster_ids_for_consultorio(db, consultorio_id)
     return active_display_exists_for_clusters(db, cluster_ids)
@@ -531,9 +543,12 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None 
     cluster_ids = data.get("cluster_ids")
     if codigo is None or complejo_id is None:
         return
+    if piso_id is not None and not piso_requires_display_clusters(db, piso_id):
+        data["cluster_ids"] = []
+        cluster_ids = []
     if cluster_ids is None and item is not None:
         cluster_ids = cluster_ids_for_consultorio(db, item.id)
-    if piso_id is not None:
+    if piso_id is not None and piso_requires_display_clusters(db, piso_id):
         validate_clusters_for_scope(db, cluster_ids or [], complejo_id, piso_id)
     query = select(Consultorio).where(Consultorio.complejo_id == complejo_id, Consultorio.codigo == codigo)
     if item is not None:
@@ -875,7 +890,18 @@ def generar_pisos_torre(
 
 
 pisos_router = create_crud_router(
-    CrudConfig(Piso, PisoCreate, PisoUpdate, PisoRead, "pisos", "PISO_CREADO", "PISO_EDITADO", "codigo", validator=validate_piso)
+    CrudConfig(
+        Piso,
+        PisoCreate,
+        PisoUpdate,
+        PisoRead,
+        "pisos",
+        "PISO_CREADO",
+        "PISO_EDITADO",
+        "codigo",
+        validator=validate_piso,
+        post_save=post_save_piso,
+    )
 )
 clusters_turnos_router = create_crud_router(
     CrudConfig(
