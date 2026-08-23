@@ -78,6 +78,7 @@ const lockedTowerKeys = new Set(['pisos']);
 const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
 const isUserAssignmentScoped = computed(() => userAssignmentScopedKeys.has(config.value.key));
 const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
+const showLocationContextField = computed(() => isLocationScoped.value && config.value.key === 'pisos');
 const {
   clearCampus,
   clearFloor,
@@ -355,10 +356,6 @@ function rowMatchesLocation(row: Row) {
 
 function isScopedComplexField(field: CatalogField) {
   return Boolean(config.value.institutionScoped && field.name === 'complejo_id');
-}
-
-function isLockedComplexField(field: CatalogField) {
-  return Boolean(isLocationScoped.value && isScopedComplexField(field));
 }
 
 function isScopedPisoField(field: CatalogField) {
@@ -821,7 +818,7 @@ onMounted(loadData);
         <p>{{ config.description }}</p>
       </div>
     </header>
-    <LocationContextField v-if="isLocationScoped" />
+    <LocationContextField v-if="showLocationContextField" />
 
     <div class="grid catalog-grid">
       <form class="panel form" autocomplete="off" @submit.prevent="submit">
@@ -829,14 +826,6 @@ onMounted(loadData);
         <div v-if="config.institutionScoped" class="form-row">
           <label for="catalog-institution">Institución</label>
           <input
-            v-if="isLocationScoped"
-            id="catalog-institution"
-            :value="institutionSearch"
-            readonly
-            required
-          />
-          <input
-            v-else
             id="catalog-institution"
             v-model="institutionSearch"
             list="catalog-institution-options"
@@ -852,15 +841,6 @@ onMounted(loadData);
           <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
           <template v-if="isScopedComplexField(field)">
             <input
-              v-if="isLockedComplexField(field)"
-              :id="fieldId(field)"
-              :name="fieldName(field)"
-              :value="complexSearch"
-              :required="field.required"
-              readonly
-            />
-            <input
-              v-else
               :id="fieldId(field)"
               v-model="complexSearch"
               list="catalog-complex-options"

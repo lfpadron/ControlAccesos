@@ -64,7 +64,7 @@ const router = createRouter({
     { path: '/consulta-clusters-consultorios', component: ConsultaClustersConsultoriosView },
     { path: '/pantallas-turnos', component: PantallasTurnosView, meta: { hideUserBadge: true } },
     { path: '/consulta-clusters-pantallas', component: ConsultaClustersPantallasView },
-    { path: '/kioskos', component: KioskosView, meta: { hideUserBadge: true } },
+    { path: '/kioskos', component: KioskosView },
     { path: '/turnos-llamados', component: TurnosLlamadosView },
     { path: '/auditoria', component: AuditoriaView },
   ],
