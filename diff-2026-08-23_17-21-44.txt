@@ -1,0 +1,152 @@
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index c4728db..f1495a7 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -75,6 +75,7 @@ const config = computed<CatalogConfig>(() => catalogs[String(route.meta.catalog)
+ const locationScopedKeys = new Set(['torres', 'pisos', 'salas-espera', 'clusters-turnos', 'consultorios']);
+ const userAssignmentScopedKeys = new Set(['torres']);
+ const lockedTowerKeys = new Set(['pisos']);
++const genericLocationDropdownKeys = new Set(['torres', 'salas-espera', 'clusters-turnos', 'consultorios']);
+ const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
+ const isUserAssignmentScoped = computed(() => userAssignmentScopedKeys.has(config.value.key));
+ const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
+@@ -374,6 +375,24 @@ function isScopedClusterField(field: CatalogField) {
+   return Boolean(config.value.institutionScoped && field.lookup === 'clusters-turnos');
+ }
+ 
++function useGenericLocationDropdown(field: CatalogField) {
++  return Boolean(
++    genericLocationDropdownKeys.has(config.value.key) &&
++      (field.name === 'complejo_id' || field.name === 'torre_id' || field.name === 'piso_id'),
++  );
++}
++
++function usesCustomLocationControl(field: CatalogField) {
++  return Boolean(
++    (isScopedComplexField(field) || isScopedTorreField(field) || isScopedPisoField(field)) &&
++      !useGenericLocationDropdown(field),
++  );
++}
++
++function usesCustomField(field: CatalogField) {
++  return usesCustomLocationControl(field) || isScopedClusterField(field);
++}
++
+ function isClusterAssignmentBlocked(field: CatalogField) {
+   return Boolean(config.value.key === 'consultorios' && isScopedClusterField(field) && form.piso_id && !currentFloorHasScreens.value);
+ }
+@@ -593,6 +612,18 @@ function textAutocompleteOptions(field: CatalogField) {
+ 
+ function selectOptions(field: CatalogField): SelectOption[] {
+   if (field.options) return field.options;
++  if (config.value.institutionScoped && field.name === 'complejo_id') {
++    return scopedComplejos.value.map((item) => ({ value: item.id, label: item.label }));
++  }
++  if (config.value.institutionScoped && field.name === 'torre_id') {
++    return scopedTorres.value.map((item) => ({ value: item.id, label: item.label }));
++  }
++  if (config.value.institutionScoped && field.name === 'piso_id') {
++    return scopedPisos.value.map((item) => ({ value: item.id, label: item.label }));
++  }
++  if (config.value.institutionScoped && field.lookup === 'clusters-turnos') {
++    return scopedClusters.value.map((item) => ({ value: item.id, label: item.label }));
++  }
+   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
+ }
+ 
+@@ -603,6 +634,23 @@ function fieldValue(name: string) {
+ 
+ function updateField(name: string, event: Event) {
+   form[name] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
++  if (config.value.institutionScoped && name === 'complejo_id') {
++    const campus = campusForId(form.complejo_id);
++    complexSearch.value = campus?.label ?? '';
++    if (isLocationScoped.value) {
++      if (campus) {
++        setCampus(toSelection(campus), toSelection(institutionForCampus(campus)));
++      } else {
++        clearCampus();
++      }
++    }
++    if ('torre_id' in form && !scopedTorres.value.some((item) => item.id === form.torre_id)) {
++      resetScopedTorre();
++    }
++    if (!scopedPisos.value.some((item) => item.id === form.piso_id)) {
++      resetScopedPiso();
++    }
++  }
+   if (config.value.institutionScoped && name === 'torre_id' && !scopedPisos.value.some((item) => item.id === form.piso_id)) {
+     resetScopedPiso();
+   }
+@@ -839,7 +887,7 @@ onMounted(loadData);
+         </div>
+         <div v-for="field in config.fields" :key="field.name" class="form-row">
+           <label v-if="field.type !== 'checkbox'" :for="fieldId(field)">{{ field.label }}</label>
+-          <template v-if="isScopedComplexField(field)">
++          <template v-if="isScopedComplexField(field) && !useGenericLocationDropdown(field)">
+             <input
+               :id="fieldId(field)"
+               v-model="complexSearch"
+@@ -854,7 +902,7 @@ onMounted(loadData);
+               <option v-for="item in scopedComplejos" :key="item.id" :value="item.label" />
+             </datalist>
+           </template>
+-          <template v-else-if="isScopedTorreField(field)">
++          <template v-else-if="isScopedTorreField(field) && !useGenericLocationDropdown(field)">
+             <input
+               v-if="isLockedTorreField(field)"
+               :id="fieldId(field)"
+@@ -879,7 +927,7 @@ onMounted(loadData);
+             </select>
+           </template>
+           <select
+-            v-else-if="isScopedPisoField(field)"
++            v-else-if="isScopedPisoField(field) && !useGenericLocationDropdown(field)"
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+@@ -909,7 +957,7 @@ onMounted(loadData);
+           </select>
+           <p v-if="isClusterAssignmentBlocked(field)" class="message">Asignación a clústers bloqueada para pisos sin pantallas.</p>
+           <textarea
+-            v-else-if="field.type === 'textarea'"
++            v-else-if="!usesCustomField(field) && field.type === 'textarea'"
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+@@ -919,7 +967,7 @@ onMounted(loadData);
+             @input="updateField(field.name, $event)"
+           />
+           <select
+-            v-else-if="field.type === 'select'"
++            v-else-if="!usesCustomField(field) && field.type === 'select'"
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="fieldValue(field.name)"
+@@ -932,7 +980,7 @@ onMounted(loadData);
+             </option>
+           </select>
+           <select
+-            v-else-if="field.type === 'multiselect'"
++            v-else-if="!usesCustomField(field) && field.type === 'multiselect'"
+             :id="fieldId(field)"
+             :name="fieldName(field)"
+             :value="Array.isArray(form[field.name]) ? form[field.name] : []"
+@@ -945,7 +993,7 @@ onMounted(loadData);
+               {{ item.label }}
+             </option>
+           </select>
+-          <label v-else-if="field.type === 'checkbox'" class="check-row">
++          <label v-else-if="!usesCustomField(field) && field.type === 'checkbox'" class="check-row">
+             <input
+               :checked="Boolean(form[field.name])"
+               :name="fieldName(field)"
+@@ -955,7 +1003,7 @@ onMounted(loadData);
+             {{ field.label }}
+           </label>
+           <input
+-            v-else
++            v-else-if="!usesCustomField(field)"
+             :id="fieldId(field)"
+             :autocomplete="fieldAutocomplete(field)"
+             :list="fieldDatalistId(field)"
