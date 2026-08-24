@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import hash_password, require_role
+from app.api.flow import business_today, cita_search_item, normalized_digits, query_citas
+from app.models.flow import Cita
 from app.models.complejo import Complejo
 from app.models.kiosk import Kiosko, PuntoAcceso
 from app.models.operational import Piso
 from app.models.usuario import Usuario
-from app.schemas.kiosk import KioskoCreate, KioskoRead, KioskoUpdate, PuntoAccesoCreate, PuntoAccesoRead, PuntoAccesoUpdate
+from app.schemas.flow import CitaSearchResult
+from app.schemas.kiosk import (
+    KioskoCreate,
+    KioskoPublicConfig,
+    KioskoRead,
+    KioskoUpdate,
+    PuntoAccesoCreate,
+    PuntoAccesoRead,
+    PuntoAccesoUpdate,
+)
 from app.services.audit_service import audit_safe_dict, record_audit_event
 
 router = APIRouter()
@@ -69,6 +81,74 @@ def apply_kiosko_token(data: dict) -> dict:
     if token:
         data["token_hash"] = hash_password(token)
     return data
+
+
+def active_kiosko_or_404(db: Session, codigo_dispositivo: str) -> Kiosko:
+    kiosko = db.execute(
+        select(Kiosko).where(
+            Kiosko.codigo_dispositivo == codigo_dispositivo,
+            Kiosko.activo.is_(True),
+        )
+    ).scalar_one_or_none()
+    if kiosko is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kiosko no encontrado o inactivo.")
+    return kiosko
+
+
+def touch_kiosko(db: Session, kiosko: Kiosko) -> None:
+    kiosko.ultima_conexion = datetime.now(UTC)
+    db.commit()
+    db.refresh(kiosko)
+
+
+@router.get("/kioskos/public/{codigo_dispositivo}/config", response_model=KioskoPublicConfig)
+def public_kiosko_config(codigo_dispositivo: str, db: Session = Depends(get_db)) -> KioskoPublicConfig:
+    kiosko = active_kiosko_or_404(db, codigo_dispositivo)
+    touch_kiosko(db, kiosko)
+    return KioskoPublicConfig(
+        codigo_dispositivo=kiosko.codigo_dispositivo,
+        nombre=kiosko.nombre,
+        polling_interval_seconds=kiosko.polling_interval_seconds,
+        color_fondo=kiosko.color_fondo,
+        color_texto=kiosko.color_texto,
+        color_primario=kiosko.color_primario,
+        color_acento=kiosko.color_acento,
+    )
+
+
+@router.get("/kioskos/public/{codigo_dispositivo}/citas/buscar", response_model=list[CitaSearchResult])
+def public_kiosko_buscar_citas(
+    codigo_dispositivo: str,
+    paciente: str = Query(min_length=1),
+    celular: str | None = None,
+    fecha_nacimiento: date | None = None,
+    fecha: date | None = None,
+    db: Session = Depends(get_db),
+) -> list[CitaSearchResult]:
+    if not normalized_digits(celular) and fecha_nacimiento is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Indique celular o fecha de nacimiento para buscar la cita.",
+        )
+    kiosko = active_kiosko_or_404(db, codigo_dispositivo)
+    rows = list(
+        db.execute(
+            query_citas(
+                db,
+                fecha=fecha or business_today(),
+                complejo_id=kiosko.complejo_id,
+                piso_id=kiosko.piso_id,
+                paciente=paciente,
+                celular=celular,
+                fecha_nacimiento=fecha_nacimiento,
+            )
+            .where(Cita.estado.notin_(("CANCELADA", "EXPIRADA", "NO_LLEGO")))
+            .limit(20)
+        )
+        .scalars()
+    )
+    touch_kiosko(db, kiosko)
+    return [cita_search_item(db, row) for row in rows]
 
 
 @router.get("/puntos-acceso", response_model=list[PuntoAccesoRead])

@@ -48,6 +48,23 @@ button {
   z-index: 2;
 }
 
+.kiosk-name {
+  background: #ffffff;
+  border: 1px solid #d6e0e8;
+  border-radius: 999px;
+  color: #16212c;
+  font-weight: 850;
+  left: 1.25rem;
+  max-width: min(44vw, 520px);
+  overflow: hidden;
+  padding: 0.55rem 0.9rem;
+  position: fixed;
+  text-overflow: ellipsis;
+  top: 1.25rem;
+  white-space: nowrap;
+  z-index: 2;
+}
+
 .kiosk-stage {
   display: grid;
   gap: 2rem;
@@ -131,6 +148,12 @@ button {
   width: 100%;
 }
 
+.search-actions {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .result-list {
   display: grid;
   gap: 0.75rem;
@@ -189,15 +212,24 @@ button {
 
 @media (max-width: 640px) {
   .kiosk-shell {
-    padding: 4.5rem 1rem 1rem;
+    padding: 7.5rem 1rem 1rem;
   }
 
-  .actions {
+  .actions,
+  .search-actions {
     grid-template-columns: 1fr;
   }
 
   .kiosk-clock {
     left: 1rem;
+    right: 1rem;
+    text-align: center;
+    top: 4rem;
+  }
+
+  .kiosk-name {
+    left: 1rem;
+    max-width: none;
     right: 1rem;
     text-align: center;
   }

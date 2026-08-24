@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 type Mode = 'home' | 'search' | 'scan' | 'result';
 
@@ -19,13 +19,25 @@ type CheckinResponse = {
   estado_cita?: string | null;
 };
 
+type KioskoConfig = {
+  codigo_dispositivo: string;
+  nombre?: string | null;
+  polling_interval_seconds: number;
+  color_fondo?: string | null;
+  color_texto?: string | null;
+  color_primario?: string | null;
+  color_acento?: string | null;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 const urlParams = new URLSearchParams(window.location.search);
 const dispositivoId = urlParams.get('device') || 'kiosk-web';
+const kioskToken = urlParams.get('token') || '';
 const mode = ref<Mode>('home');
 const status = ref('');
 const apiStatus = ref('Verificando API...');
 const version = import.meta.env.VITE_APP_VERSION ?? 'v0.2.0';
+const kioskoConfig = ref<KioskoConfig | null>(null);
 const nombreApellido = ref('');
 const celular = ref('');
 const fechaNacimiento = ref('');
@@ -36,6 +48,8 @@ const error = ref('');
 const loading = ref(false);
 const currentDateTime = ref('');
 let clockTimer: number | undefined;
+
+const kioskoNombre = computed(() => kioskoConfig.value?.nombre?.trim() || kioskoConfig.value?.codigo_dispositivo || dispositivoId);
 
 function todayLocalIso() {
   const now = new Date();
@@ -66,11 +80,26 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+function clearSearchFields() {
+  nombreApellido.value = '';
+  celular.value = '';
+  fechaNacimiento.value = '';
+  citas.value = [];
+  status.value = '';
+  error.value = '';
+}
+
 function openMode(next: Mode) {
   mode.value = next;
   status.value = '';
   error.value = '';
   result.value = null;
+  if (next === 'search') {
+    clearSearchFields();
+  }
+  if (next === 'scan') {
+    qrToken.value = '';
+  }
 }
 
 function backHome() {
@@ -94,7 +123,10 @@ async function searchCitas() {
     });
     if (celular.value.trim()) query.set('celular', celular.value.trim());
     if (fechaNacimiento.value) query.set('fecha_nacimiento', fechaNacimiento.value);
-    citas.value = await apiFetch<CitaSearchResult[]>(`/citas/buscar?${query.toString()}`);
+    if (kioskToken) query.set('token', kioskToken);
+    citas.value = await apiFetch<CitaSearchResult[]>(
+      `/kioskos/public/${encodeURIComponent(dispositivoId)}/citas/buscar?${query.toString()}`,
+    );
     status.value = citas.value.length === 1 ? 'Una cita encontrada.' : `${citas.value.length} citas encontradas para hoy.`;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible buscar citas.';
@@ -136,6 +168,17 @@ async function checkinQr() {
   }
 }
 
+async function loadKioskoConfig() {
+  const query = new URLSearchParams();
+  if (kioskToken) query.set('token', kioskToken);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  try {
+    kioskoConfig.value = await apiFetch<KioskoConfig>(`/kioskos/public/${encodeURIComponent(dispositivoId)}/config${suffix}`);
+  } catch (err) {
+    status.value = err instanceof Error ? err.message : 'No fue posible cargar el kiosko.';
+  }
+}
+
 onMounted(async () => {
   updateClock();
   clockTimer = window.setInterval(updateClock, 1000);
@@ -146,6 +189,7 @@ onMounted(async () => {
   } catch {
     apiStatus.value = 'API no disponible';
   }
+  await loadKioskoConfig();
 });
 
 onBeforeUnmount(() => {
@@ -157,6 +201,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="kiosk-shell">
+    <div class="kiosk-name">{{ kioskoNombre }}</div>
     <div class="kiosk-clock">{{ currentDateTime }}</div>
     <section class="kiosk-stage">
       <div>
@@ -180,8 +225,11 @@ onBeforeUnmount(() => {
         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
         <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
         <input id="search-birthdate" v-model="fechaNacimiento" type="date" />
-        <button class="primary" type="submit" :disabled="loading">Buscar</button>
-        <button class="secondary" type="button" @click="backHome">Volver</button>
+        <div class="search-actions">
+          <button class="primary" type="submit" :disabled="loading">Buscar</button>
+          <button class="secondary" type="button" @click="clearSearchFields">Limpiar</button>
+          <button class="secondary" type="button" @click="backHome">Volver</button>
+        </div>
         <div v-if="citas.length" class="result-list">
           <button v-for="cita in citas" :key="cita.id" class="result-item" type="button" @click="checkinCita(cita.id)">
             <strong>{{ cita.folio_turno }}</strong>

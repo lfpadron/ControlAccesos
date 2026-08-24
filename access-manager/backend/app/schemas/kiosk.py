@@ -79,3 +79,8 @@ class KioskoRead(KioskoConfigMixin):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class KioskoPublicConfig(KioskoConfigMixin):
+    codigo_dispositivo: str
+    nombre: str | None = None
