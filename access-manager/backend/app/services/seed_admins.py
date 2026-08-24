@@ -169,12 +169,15 @@ def main() -> None:
         if punto_acceso is None:
             punto_acceso = PuntoAcceso(
                 complejo_id=complejo.id,
+                torre_id=torre.id,
                 piso_id=piso.id,
                 nombre="Lobby principal",
                 descripcion="Punto de acceso demo para kioskos.",
             )
             db.add(punto_acceso)
             db.flush()
+        elif punto_acceso.torre_id is None:
+            punto_acceso.torre_id = torre.id
 
         sala = db.execute(select(SalaEspera).where(SalaEspera.piso_id == piso.id, SalaEspera.nombre == "Sala Principal")).scalar_one_or_none()
         if sala is None:

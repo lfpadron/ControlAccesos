@@ -214,7 +214,8 @@ export type Operador = {
 export type PuntoAcceso = {
   id: string;
   complejo_id: string;
-  piso_id: string;
+  torre_id?: string | null;
+  piso_id?: string | null;
   nombre: string;
   descripcion?: string | null;
   activo: boolean;

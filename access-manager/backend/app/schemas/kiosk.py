@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class PuntoAccesoCreate(BaseModel):
     complejo_id: UUID
-    piso_id: UUID
+    torre_id: UUID | None = None
+    piso_id: UUID | None = None
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = None
     activo: bool = True
@@ -16,6 +17,7 @@ class PuntoAccesoCreate(BaseModel):
 
 class PuntoAccesoUpdate(BaseModel):
     complejo_id: UUID | None = None
+    torre_id: UUID | None = None
     piso_id: UUID | None = None
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = None
@@ -84,3 +86,9 @@ class KioskoRead(KioskoConfigMixin):
 class KioskoPublicConfig(KioskoConfigMixin):
     codigo_dispositivo: str
     nombre: str | None = None
+
+
+class KioskoPacienteOption(BaseModel):
+    id: UUID
+    label: str
+    homonimo: bool = False

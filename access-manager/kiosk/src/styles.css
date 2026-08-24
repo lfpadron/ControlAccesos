@@ -148,6 +148,48 @@ button {
   width: 100%;
 }
 
+.patient-search {
+  position: relative;
+}
+
+.patient-options {
+  background: #ffffff;
+  border: 1px solid #b9c8d4;
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(22, 33, 44, 0.16);
+  display: grid;
+  left: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 5;
+}
+
+.patient-option {
+  background: #ffffff;
+  border-bottom: 1px solid #d6e0e8;
+  border-radius: 0;
+  color: #16212c;
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+  min-height: 64px;
+  padding: 0.8rem 1rem;
+  text-align: left;
+}
+
+.patient-option:last-child {
+  border-bottom: 0;
+}
+
+.patient-option small {
+  color: #607486;
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
 .search-actions {
   display: grid;
   gap: 0.75rem;

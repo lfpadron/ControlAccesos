@@ -29,6 +29,12 @@ type KioskoConfig = {
   color_acento?: string | null;
 };
 
+type PacienteOption = {
+  id: string;
+  label: string;
+  homonimo: boolean;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 const urlParams = new URLSearchParams(window.location.search);
 const dispositivoId = urlParams.get('device') || 'kiosk-web';
@@ -39,6 +45,9 @@ const apiStatus = ref('Verificando API...');
 const version = import.meta.env.VITE_APP_VERSION ?? 'v0.2.0';
 const kioskoConfig = ref<KioskoConfig | null>(null);
 const nombreApellido = ref('');
+const pacienteOptions = ref<PacienteOption[]>([]);
+const selectedPaciente = ref<PacienteOption | null>(null);
+const showPacienteOptions = ref(false);
 const celular = ref('');
 const fechaNacimiento = ref('');
 const qrToken = ref('');
@@ -48,14 +57,9 @@ const error = ref('');
 const loading = ref(false);
 const currentDateTime = ref('');
 let clockTimer: number | undefined;
+let pacienteSearchRequest = 0;
 
 const kioskoNombre = computed(() => kioskoConfig.value?.nombre?.trim() || kioskoConfig.value?.codigo_dispositivo || dispositivoId);
-
-function todayLocalIso() {
-  const now = new Date();
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
 
 function updateClock() {
   currentDateTime.value = new Intl.DateTimeFormat('es-MX', {
@@ -80,13 +84,87 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+function removeAccents(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function patientLookupLetterCount(value: string) {
+  return (removeAccents(value).match(/[A-Za-z]/g) ?? []).length;
+}
+
 function clearSearchFields() {
+  pacienteSearchRequest += 1;
   nombreApellido.value = '';
+  selectedPaciente.value = null;
+  pacienteOptions.value = [];
+  showPacienteOptions.value = false;
   celular.value = '';
   fechaNacimiento.value = '';
   citas.value = [];
   status.value = '';
   error.value = '';
+}
+
+async function loadPacienteOptions() {
+  const queryText = nombreApellido.value.trim();
+  const requestId = ++pacienteSearchRequest;
+  if (patientLookupLetterCount(queryText) < 4) {
+    pacienteOptions.value = [];
+    showPacienteOptions.value = false;
+    return;
+  }
+  try {
+    const query = new URLSearchParams({ q: queryText });
+    if (kioskToken) query.set('token', kioskToken);
+    const options = await apiFetch<PacienteOption[]>(
+      `/kioskos/public/${encodeURIComponent(dispositivoId)}/pacientes/buscar?${query.toString()}`,
+    );
+    if (requestId !== pacienteSearchRequest) return;
+    pacienteOptions.value = options;
+    showPacienteOptions.value = options.length > 0;
+  } catch (err) {
+    if (requestId !== pacienteSearchRequest) return;
+    pacienteOptions.value = [];
+    showPacienteOptions.value = false;
+    error.value = err instanceof Error ? err.message : 'No fue posible buscar pacientes.';
+  }
+}
+
+function onPacienteInput() {
+  if (selectedPaciente.value && nombreApellido.value !== selectedPaciente.value.label) {
+    selectedPaciente.value = null;
+  }
+  citas.value = [];
+  if (patientLookupLetterCount(nombreApellido.value) < 4) {
+    pacienteSearchRequest += 1;
+    pacienteOptions.value = [];
+    showPacienteOptions.value = false;
+    return;
+  }
+  void loadPacienteOptions();
+}
+
+function onPacienteFocus() {
+  if (pacienteOptions.value.length) {
+    showPacienteOptions.value = true;
+    return;
+  }
+  void loadPacienteOptions();
+}
+
+function hidePacienteOptionsSoon() {
+  window.setTimeout(() => {
+    showPacienteOptions.value = false;
+  }, 150);
+}
+
+function selectPaciente(option: PacienteOption) {
+  selectedPaciente.value = option;
+  nombreApellido.value = option.label;
+  pacienteOptions.value = [];
+  showPacienteOptions.value = false;
+  error.value = '';
+  status.value = option.homonimo ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Paciente seleccionado.';
 }
 
 function openMode(next: Mode) {
@@ -114,13 +192,17 @@ async function searchCitas() {
     error.value = 'Capture nombre y apellido.';
     return;
   }
+  if (selectedPaciente.value?.homonimo && !celular.value.trim() && !fechaNacimiento.value) {
+    error.value = 'Capture celular o fecha de nacimiento para confirmar al paciente.';
+    return;
+  }
   loading.value = true;
   error.value = '';
   try {
     const query = new URLSearchParams({
       paciente: nombreApellido.value.trim(),
-      fecha: todayLocalIso(),
     });
+    if (selectedPaciente.value) query.set('paciente_id', selectedPaciente.value.id);
     if (celular.value.trim()) query.set('celular', celular.value.trim());
     if (fechaNacimiento.value) query.set('fecha_nacimiento', fechaNacimiento.value);
     if (kioskToken) query.set('token', kioskToken);
@@ -139,7 +221,7 @@ async function checkinCita(citaId: string) {
   loading.value = true;
   error.value = '';
   try {
-    result.value = await apiFetch<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
+    result.value = await apiFetch<CheckinResponse>(`/kioskos/public/${encodeURIComponent(dispositivoId)}/citas/${citaId}/checkin-lobby`, {
       method: 'POST',
       body: JSON.stringify({ canal: 'KIOSKO', dispositivo_id: dispositivoId }),
     });
@@ -156,7 +238,7 @@ async function checkinQr() {
   loading.value = true;
   error.value = '';
   try {
-    result.value = await apiFetch<CheckinResponse>('/qr/checkin', {
+    result.value = await apiFetch<CheckinResponse>(`/kioskos/public/${encodeURIComponent(dispositivoId)}/qr/checkin`, {
       method: 'POST',
       body: JSON.stringify({ token: qrToken.value.trim(), canal: 'KIOSKO', dispositivo_id: dispositivoId }),
     });
@@ -220,7 +302,30 @@ onBeforeUnmount(() => {
 
       <form v-else-if="mode === 'search'" class="kiosk-card" @submit.prevent="searchCitas">
         <label for="search-name">Nombre y apellido</label>
-        <input id="search-name" v-model="nombreApellido" autocomplete="name" autofocus required />
+        <div class="patient-search">
+          <input
+            id="search-name"
+            v-model="nombreApellido"
+            autocomplete="name"
+            autofocus
+            required
+            @blur="hidePacienteOptionsSoon"
+            @focus="onPacienteFocus"
+            @input="onPacienteInput"
+          />
+          <div v-if="showPacienteOptions" class="patient-options">
+            <button
+              v-for="option in pacienteOptions"
+              :key="option.id"
+              class="patient-option"
+              type="button"
+              @mousedown.prevent="selectPaciente(option)"
+            >
+              <span>{{ option.label }}</span>
+              <small v-if="option.homonimo">Requiere celular o fecha de nacimiento</small>
+            </button>
+          </div>
+        </div>
         <label for="search-phone">Celular (opcional)</label>
         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
         <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
