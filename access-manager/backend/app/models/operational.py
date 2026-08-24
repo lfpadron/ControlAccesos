@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.constants import TURNO_TEMPLATE_DEFAULT
+from app.constants import DEFAULT_INITIAL_SCREEN, TURNO_TEMPLATE_DEFAULT
 from app.models.base import Base, TimestampMixin
 
 
@@ -19,6 +19,12 @@ class Role(TimestampMixin, Base):
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
     permisos: Mapped[dict | None] = mapped_column(JSON, default=dict, server_default="{}")
+    pantalla_inicial: Mapped[str] = mapped_column(
+        String(80),
+        default=DEFAULT_INITIAL_SCREEN,
+        server_default=DEFAULT_INITIAL_SCREEN,
+        nullable=False,
+    )
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

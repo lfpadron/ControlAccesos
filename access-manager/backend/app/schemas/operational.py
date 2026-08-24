@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.constants import TURNO_TEMPLATE_CHOICES, TURNO_TEMPLATE_DEFAULT
+from app.constants import DEFAULT_INITIAL_SCREEN, TURNO_TEMPLATE_CHOICES, TURNO_TEMPLATE_DEFAULT
 
 
 class RoleCreate(BaseModel):
@@ -13,6 +13,7 @@ class RoleCreate(BaseModel):
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = None
     permisos: dict[str, str] = Field(default_factory=dict)
+    pantalla_inicial: str = Field(default=DEFAULT_INITIAL_SCREEN, min_length=1, max_length=80)
     activo: bool = True
 
 
@@ -21,6 +22,7 @@ class RoleUpdate(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = None
     permisos: dict[str, str] | None = None
+    pantalla_inicial: str | None = Field(default=None, min_length=1, max_length=80)
     activo: bool | None = None
 
 

@@ -312,6 +312,59 @@ def test_user_password_requires_number(client: TestClient, auth_headers: dict[st
     assert "al menos 1 número" in invalid_self_change.text
 
 
+def test_role_initial_screen_is_saved_and_exposed_in_session(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+    password = "Temporal123!"
+
+    role = assert_created(
+        client.post(
+            "/api/roles",
+            headers=auth_headers,
+            json={
+                "codigo": f"INICIAL_{suffix}",
+                "nombre": f"Rol inicial {suffix}",
+                "pantalla_inicial": "turnos-llamados",
+                "permisos": {"turnos-llamados": "consultar"},
+            },
+        )
+    )
+    assert role["pantalla_inicial"] == "turnos-llamados"
+
+    invalid_update = client.patch(
+        f"/api/roles/{role['id']}",
+        headers=auth_headers,
+        json={"pantalla_inicial": "no-existe"},
+    )
+    assert invalid_update.status_code == 422, invalid_update.text
+
+    user = assert_created(
+        client.post(
+            "/api/usuarios",
+            headers=auth_headers,
+            json={
+                "apellidos": f"Inicial {suffix}",
+                "nombre": f"Usuario inicial {suffix}",
+                "email": f"inicial-{suffix}@example.com",
+                "password": password,
+            },
+        )
+    )
+    assert_created(
+        client.post(
+            "/api/usuario-roles",
+            headers=auth_headers,
+            json={"usuario_id": user["id"], "rol_id": role["id"]},
+        )
+    )
+
+    login_response = client.post("/api/auth/login", json={"email": user["email"], "password": password})
+    assert login_response.status_code == 200, login_response.text
+    user_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+    me_response = client.get("/api/auth/me", headers=user_headers)
+    assert me_response.status_code == 200, me_response.text
+    assert me_response.json()["pantalla_inicial"] == "turnos-llamados"
+
+
 def test_usuario_rol_rejects_self_medico_assignment(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
 
@@ -943,6 +996,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     public_response = client.get(f"/api/public-display/display-{suffix}/turnos")
     assert public_response.status_code == 200, public_response.text
     public_payload = public_response.json()
+    assert public_payload["nombre"] == pantalla["nombre"]
     assert public_payload["config"]["polling_interval_seconds"] == 2
     assert public_payload["turnos"][0]["turno"] == llamado["turno"]
     assert public_payload["turnos"][0]["texto"] == llamado["texto"]

@@ -112,6 +112,7 @@ class PublicTurnoDisplay(BaseModel):
 
 class PublicDisplayResponse(BaseModel):
     codigo_dispositivo: str
+    nombre: str | None = None
     ultima_conexion: datetime
     config: PantallaTurnosPublicConfig
     turnos: list[PublicTurnoDisplay]

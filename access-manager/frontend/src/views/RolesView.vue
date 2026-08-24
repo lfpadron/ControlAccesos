@@ -14,6 +14,7 @@ const form = reactive({
   codigo: '',
   nombre: '',
   descripcion: '',
+  pantalla_inicial: 'perfil',
   activo: true,
   permisos: {} as Record<string, AccessLevel>,
 });
@@ -41,6 +42,7 @@ function setForm(role: Role | null) {
   form.codigo = role?.codigo ?? '';
   form.nombre = role?.nombre ?? '';
   form.descripcion = role?.descripcion ?? '';
+  form.pantalla_inicial = role?.pantalla_inicial ?? 'perfil';
   form.activo = role?.activo ?? true;
   form.permisos = role ? { ...defaultPermissions(role), ...(role.permisos ?? {}) } : {};
   message.value = '';
@@ -53,6 +55,7 @@ function newRole() {
   form.codigo = '';
   form.nombre = '';
   form.descripcion = '';
+  form.pantalla_inicial = 'perfil';
   form.activo = true;
   form.permisos = blankPermissions();
   message.value = '';
@@ -87,6 +90,7 @@ async function submit() {
     codigo: form.codigo.trim(),
     nombre: form.nombre.trim(),
     descripcion: form.descripcion.trim() || null,
+    pantalla_inicial: form.pantalla_inicial,
     permisos: form.permisos,
     activo: form.activo,
   };
@@ -182,6 +186,12 @@ onMounted(loadData);
           <div class="form-row">
             <label for="role-description">Descripción</label>
             <textarea id="role-description" v-model="form.descripcion" rows="3" />
+          </div>
+          <div class="form-row">
+            <label for="role-initial-screen">Pantalla inicial</label>
+            <select id="role-initial-screen" v-model="form.pantalla_inicial" required>
+              <option v-for="screen in screens" :key="screen.key" :value="screen.key">{{ screen.label }}</option>
+            </select>
           </div>
           <label class="check-row">
             <input v-model="form.activo" type="checkbox" />

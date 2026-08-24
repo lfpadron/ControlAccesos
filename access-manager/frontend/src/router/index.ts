@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { getCurrentUser, getToken } from '../api/client';
+import { initialPathForUser } from '../accessControl';
 import { clearSession, setCurrentSessionUser } from '../authSession';
 import LoginView from '../views/LoginView.vue';
 import DashboardView from '../views/DashboardView.vue';
@@ -87,7 +88,7 @@ router.beforeEach(async (to) => {
       return '/perfil';
     }
     if (to.path === '/login') {
-      return user.force_password_change ? '/perfil' : '/instituciones';
+      return user.force_password_change ? '/perfil' : initialPathForUser(user);
     }
   } catch {
     clearSession();

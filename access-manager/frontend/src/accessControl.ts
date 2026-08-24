@@ -44,6 +44,13 @@ export const screens: ScreenDefinition[] = [
 ];
 
 export const screenByPath = new Map(screens.map((screen) => [screen.path, screen]));
+export const screenByKey = new Map(screens.map((screen) => [screen.key, screen]));
+export const DEFAULT_INITIAL_SCREEN = 'perfil';
+
+export function initialPathForUser(user: Usuario | null) {
+  const screen = screenByKey.get(user?.pantalla_inicial || DEFAULT_INITIAL_SCREEN);
+  return screen?.path ?? '/perfil';
+}
 
 export function accessForPath(user: Usuario | null, path: string): AccessLevel {
   if (!user?.permisos) return 'editar';

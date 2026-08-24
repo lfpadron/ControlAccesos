@@ -20,6 +20,7 @@ const connected = ref(false);
 const lastUpdate = ref('');
 const error = ref('');
 const displayQr = ref('');
+const displayName = ref('');
 const voiceSupported = ref(false);
 const voiceEnabled = ref(false);
 let timer: number | undefined;
@@ -132,6 +133,7 @@ async function loadData() {
     );
     config.value = response.config;
     turnos.value = response.turnos;
+    displayName.value = response.nombre || response.codigo_dispositivo;
     if (hasLoadedTurnos) {
       announceTurnos(newHighlightedTurnos);
     }
@@ -170,7 +172,7 @@ onUnmounted(() => {
   <main class="display-shell" :style="screenStyle">
     <aside class="display-identity">
       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
-      <span>{{ codigoDispositivo }}</span>
+      <span>{{ displayName || codigoDispositivo }}</span>
     </aside>
     <header class="display-status">
       <span :class="{ connected }">{{ connected ? 'Conectada' : 'Sin conexión' }}</span>

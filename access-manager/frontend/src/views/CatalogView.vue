@@ -79,7 +79,8 @@ const genericLocationDropdownKeys = new Set(['torres', 'salas-espera', 'clusters
 const isLocationScoped = computed(() => locationScopedKeys.has(config.value.key));
 const isUserAssignmentScoped = computed(() => userAssignmentScopedKeys.has(config.value.key));
 const isTowerLocked = computed(() => lockedTowerKeys.has(config.value.key));
-const showLocationContextField = computed(() => isLocationScoped.value && config.value.key === 'pisos');
+const showLocationContextFieldKeys = new Set(['torres', 'pisos', 'salas-espera', 'consultorios']);
+const showLocationContextField = computed(() => isLocationScoped.value && showLocationContextFieldKeys.has(config.value.key));
 const {
   clearCampus,
   clearFloor,

@@ -625,6 +625,7 @@ def public_display_turnos(
     db.commit()
     return PublicDisplayResponse(
         codigo_dispositivo=screen.codigo_dispositivo,
+        nombre=screen.nombre,
         ultima_conexion=timestamp,
         config=config,
         turnos=[

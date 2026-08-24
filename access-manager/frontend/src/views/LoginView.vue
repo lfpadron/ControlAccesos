@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCurrentUser, login } from '../api/client';
+import { initialPathForUser } from '../accessControl';
 import { setCurrentSessionUser, setSessionToken } from '../authSession';
 
 const router = useRouter();
@@ -18,7 +19,7 @@ async function submit() {
     setSessionToken(response.access_token);
     const user = await getCurrentUser();
     setCurrentSessionUser(user);
-    await router.push(user.force_password_change ? '/perfil' : '/instituciones');
+    await router.push(user.force_password_change ? '/perfil' : initialPathForUser(user));
     window.dispatchEvent(new CustomEvent('current-user-updated', { detail: user }));
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible iniciar sesión.';

@@ -95,6 +95,7 @@ export type Usuario = {
   roles?: string[];
   role_codes?: string[];
   permisos?: Record<string, AccessLevel>;
+  pantalla_inicial?: string;
   created_at: string;
   updated_at: string;
 };
@@ -107,6 +108,7 @@ export type Role = {
   nombre: string;
   descripcion?: string | null;
   permisos: Record<string, AccessLevel>;
+  pantalla_inicial: string;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -320,6 +322,7 @@ export type PublicDisplayTurno = {
 
 export type PublicDisplayResponse = {
   codigo_dispositivo: string;
+  nombre?: string | null;
   ultima_conexion: string;
   config: PublicDisplayConfig;
   turnos: PublicDisplayTurno[];

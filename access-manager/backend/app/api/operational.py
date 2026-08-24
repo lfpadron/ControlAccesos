@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
 from app.core.database import get_db
 from app.core.security import hash_password, require_role
 from app.models.auditoria import Auditoria
@@ -81,6 +82,7 @@ from app.services.medico_sync import refresh_turnos_for_citas, sync_medicos_for_
 
 AdminUser = Depends(require_role("ADMIN_SISTEMA", "ADMIN_NEGOCIO"))
 ACCESS_LEVELS = {"sin", "consultar", "editar"}
+MENU_SCREEN_KEY_SET = set(MENU_SCREEN_KEYS)
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,11 @@ def prepare_role_payload(data: dict[str, Any]) -> dict[str, Any]:
             for screen, access in data["permisos"].items()
             if str(access) in ACCESS_LEVELS
         }
+    if "pantalla_inicial" in data:
+        pantalla_inicial = str(data["pantalla_inicial"] or DEFAULT_INITIAL_SCREEN)
+        if pantalla_inicial not in MENU_SCREEN_KEY_SET:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="pantalla_inicial no es válida.")
+        data["pantalla_inicial"] = pantalla_inicial
     return data
 
 

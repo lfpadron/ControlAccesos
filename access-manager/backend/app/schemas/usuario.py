@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.constants import DEFAULT_INITIAL_SCREEN
 from app.schemas.password_policy import validate_user_password
 
 
@@ -119,6 +120,7 @@ class UsuarioRead(BaseModel):
     roles: list[str] = Field(default_factory=list)
     role_codes: list[str] = Field(default_factory=list)
     permisos: dict[str, str] = Field(default_factory=dict)
+    pantalla_inicial: str = DEFAULT_INITIAL_SCREEN
     created_at: datetime
     updated_at: datetime
 

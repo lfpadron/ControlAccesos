@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
 from app.core.database import get_db
 from app.core.security import create_access_token, get_current_user, hash_password, verify_password
 from app.models.operational import Role, UsuarioRol
@@ -15,38 +16,6 @@ from app.services.audit_service import record_audit_event
 router = APIRouter()
 
 ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
-
-MENU_SCREEN_KEYS = [
-    "dashboard",
-    "perfil",
-    "instituciones",
-    "campus",
-    "torres",
-    "pisos",
-    "salas-espera",
-    "consultorios",
-    "usuarios",
-    "busqueda-usuarios",
-    "roles",
-    "usuario-roles",
-    "plantilla-turnos",
-    "pacientes",
-    "citas",
-    "citas-hoy",
-    "recepcion",
-    "checkin-qr",
-    "contactos-institucionales",
-    "asignaciones",
-    "clusters-turnos",
-    "consulta-clusters-consultorios",
-    "pantallas-turnos",
-    "consulta-clusters-pantallas",
-    "kioskos",
-    "turnos-llamados",
-    "reportes",
-    "auditoria",
-]
-
 
 def default_permissions_for_role(codigo: str) -> dict[str, str]:
     if codigo == "ADMIN_SISTEMA":
@@ -106,6 +75,14 @@ def merge_permissions(roles: list[Role]) -> dict[str, str]:
     return merged
 
 
+def initial_screen_for_roles(roles: list[Role]) -> str:
+    for role in roles:
+        pantalla_inicial = role.pantalla_inicial or DEFAULT_INITIAL_SCREEN
+        if pantalla_inicial in MENU_SCREEN_KEYS:
+            return pantalla_inicial
+    return DEFAULT_INITIAL_SCREEN
+
+
 def active_role_labels(db: Session, user: Usuario) -> list[str]:
     rows = db.execute(
         select(Role.nombre, Role.codigo)
@@ -135,6 +112,7 @@ def user_read(db: Session, user: Usuario) -> UsuarioRead:
             "roles": labels,
             "role_codes": codes,
             "permisos": merge_permissions(roles),
+            "pantalla_inicial": initial_screen_for_roles(roles),
         }
     )
 
