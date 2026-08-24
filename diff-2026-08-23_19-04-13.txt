@@ -1,0 +1,250 @@
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index b7aa688..573b8f7 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -65,6 +65,76 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
+     assert paciente["nombre_preferido"] == f"Alias {suffix}"
+ 
+ 
++def test_recepcion_loads_location_catalogs_and_today_options(client: TestClient, auth_headers: dict[str, str]) -> None:
++    admin_pacientes_response = client.get("/api/pacientes", headers=auth_headers)
++    admin_medicos_response = client.get("/api/medicos", headers=auth_headers)
++    admin_consultorios_response = client.get("/api/consultorios", headers=auth_headers)
++    for response in (admin_pacientes_response, admin_medicos_response, admin_consultorios_response):
++        assert response.status_code == 200, response.text
++
++    paciente = next(item for item in admin_pacientes_response.json() if item["folio_paciente"] == "PDEMO246")
++    medico = next(item for item in admin_medicos_response.json() if item["nombre"] == "Médico" and item["apellidos"] == "Demo")
++    consultorio = next(item for item in admin_consultorios_response.json() if item["codigo"] == "C-101")
++    today = datetime.now(ZoneInfo("America/Mexico_City")).date().isoformat()
++    now_local = datetime.now(ZoneInfo("America/Mexico_City"))
++    cita_response = client.post(
++        "/api/citas?confirmar_duplicado=true",
++        headers=auth_headers,
++        json={
++            "tipo": "PROGRAMADA",
++            "paciente_id": paciente["id"],
++            "medico_id": medico["id"],
++            "consultorio_id": consultorio["id"],
++            "complejo_id": consultorio["complejo_id"],
++            "piso_id": consultorio["piso_id"],
++            "fecha_cita": today,
++            "hora_cita": now_local.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
++            "duracion_estimada": 30,
++            "origen": "TEST_RECEPCION",
++        },
++    )
++    assert cita_response.status_code == 201, cita_response.text
++
++    password = os.getenv("SEED_ADMIN_PASSWORD", "change-me-temporary-admin-password")
++    login_response = client.post(
++        "/api/auth/login",
++        json={"email": "recepcion-demo@example.com", "password": password},
++    )
++    assert login_response.status_code == 200, login_response.text
++    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
++
++    instituciones_response = client.get("/api/catalogos-operativos/instituciones", headers=headers)
++    complejos_response = client.get("/api/catalogos-operativos/complejos", headers=headers)
++    torres_response = client.get("/api/catalogos-operativos/torres", headers=headers)
++    pisos_response = client.get("/api/catalogos-operativos/pisos", headers=headers)
++    for response in (instituciones_response, complejos_response, torres_response, pisos_response):
++        assert response.status_code == 200, response.text
++        assert response.json()
++
++    institucion = instituciones_response.json()[0]
++    complejo = next(item for item in complejos_response.json() if item["institucion_id"] == institucion["id"])
++    torre = next(item for item in torres_response.json() if item["complejo_id"] == complejo["id"])
++    piso = next(item for item in pisos_response.json() if item["complejo_id"] == complejo["id"] and item["torre_id"] == torre["id"])
++
++    params = {
++        "institucion_id": institucion["id"],
++        "complejo_id": complejo["id"],
++        "torre_id": torre["id"],
++        "piso_id": piso["id"],
++        "hora_inicio": "00:00",
++    }
++    options_response = client.get("/api/recepcion/opciones", headers=headers, params=params)
++    assert options_response.status_code == 200, options_response.text
++    options = options_response.json()
++    assert options["pacientes"]
++    assert options["medicos"]
++    assert options["consultorios"]
++
++    citas_response = client.get("/api/recepcion/citas", headers=headers, params=params)
++    assert citas_response.status_code == 200, citas_response.text
++    assert citas_response.json()["total"] >= 1
++
++
+ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+     initial_password = "Temporal123!"
+diff --git a/access-manager/frontend/src/views/RecepcionView.vue b/access-manager/frontend/src/views/RecepcionView.vue
+index 92f145f..d3f1986 100644
+--- a/access-manager/frontend/src/views/RecepcionView.vue
++++ b/access-manager/frontend/src/views/RecepcionView.vue
+@@ -31,7 +31,9 @@ const rows = ref<ReceptionCita[]>([]);
+ const total = ref(0);
+ const loading = ref(false);
+ const error = ref('');
++const optionsError = ref('');
+ const message = ref('');
++let optionsRequestToken = 0;
+ 
+ const search = reactive({
+   institucion: '',
+@@ -56,13 +58,15 @@ const filters = reactive({
+ });
+ 
+ const scopedComplejos = computed(() =>
+-  filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : [],
++  filters.institucion_id ? sortByLabel(uniqueById(complejos.value.filter((item) => item.institucion_id === filters.institucion_id)), (item) => item.nombre) : [],
+ );
+ const scopedTorres = computed(() =>
+-  filters.complejo_id ? torres.value.filter((item) => item.complejo_id === filters.complejo_id) : [],
++  filters.complejo_id ? sortByLabel(uniqueById(torres.value.filter((item) => item.complejo_id === filters.complejo_id)), torreLabel) : [],
+ );
+ const scopedPisos = computed(() =>
+-  filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : [],
++  filters.complejo_id && filters.torre_id
++    ? sortPisosByCodigo(uniqueById(pisos.value.filter((item) => item.complejo_id === filters.complejo_id && item.torre_id === filters.torre_id)))
++    : [],
+ );
+ const currentPage = computed(() => Math.floor(filters.offset / filters.limit) + 1);
+ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / filters.limit)));
+@@ -78,6 +82,21 @@ function optionId(options: ReceptionOption[], text: string) {
+   return matchByLabel(options, text, (item) => item.label)?.id ?? '';
+ }
+ 
++function uniqueById<T extends { id: string }>(rows: T[]) {
++  const seen = new Set<string>();
++  const result: T[] = [];
++  for (const row of rows) {
++    if (seen.has(row.id)) continue;
++    seen.add(row.id);
++    result.push(row);
++  }
++  return result;
++}
++
++function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
++  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
++}
++
+ function institucionLabel(item: Institucion) {
+   return item.nombre;
+ }
+@@ -109,16 +128,33 @@ function applySingleDefaults() {
+   }
+ }
+ 
++function clearAppointmentSearch() {
++  search.paciente = '';
++  search.medico = '';
++  search.consultorio = '';
++}
++
++function clearReceptionOptions() {
++  pacientes.value = [];
++  medicos.value = [];
++  consultorios.value = [];
++}
++
+ function syncInstitucion() {
+   const match = matchByLabel(instituciones.value, search.institucion, institucionLabel);
+   filters.institucion_id = match?.id ?? '';
+   search.campus = '';
+   search.torre = '';
+   search.piso = '';
++  clearAppointmentSearch();
+   filters.complejo_id = '';
+   filters.torre_id = '';
+   filters.piso_id = '';
+   applySingleDefaults();
++  if (search.institucion.trim() && !match) {
++    clearReceptionOptions();
++    return;
++  }
+   void refreshOptions();
+ }
+ 
+@@ -127,9 +163,14 @@ function syncCampus() {
+   filters.complejo_id = match?.id ?? '';
+   search.torre = '';
+   search.piso = '';
++  clearAppointmentSearch();
+   filters.torre_id = '';
+   filters.piso_id = '';
+   applySingleDefaults();
++  if (search.campus.trim() && !match) {
++    clearReceptionOptions();
++    return;
++  }
+   void refreshOptions();
+ }
+ 
+@@ -137,14 +178,24 @@ function syncTorre() {
+   const match = matchByLabel(scopedTorres.value, search.torre, torreLabel);
+   filters.torre_id = match?.id ?? '';
+   search.piso = '';
++  clearAppointmentSearch();
+   filters.piso_id = '';
+   applySingleDefaults();
++  if (search.torre.trim() && !match) {
++    clearReceptionOptions();
++    return;
++  }
+   void refreshOptions();
+ }
+ 
+ function syncPiso() {
+   const match = matchByLabel(scopedPisos.value, search.piso, pisoLabel);
+   filters.piso_id = match?.id ?? '';
++  clearAppointmentSearch();
++  if (search.piso.trim() && !match) {
++    clearReceptionOptions();
++    return;
++  }
+   void refreshOptions();
+ }
+ 
+@@ -178,10 +229,19 @@ function requestParams(): ReceptionCitaFilters {
+ }
+ 
+ async function refreshOptions() {
+-  const data = await listReceptionOptions(locationParams());
+-  pacientes.value = data.pacientes;
+-  medicos.value = data.medicos;
+-  consultorios.value = data.consultorios;
++  const requestToken = ++optionsRequestToken;
++  optionsError.value = '';
++  try {
++    const data = await listReceptionOptions(locationParams());
++    if (requestToken !== optionsRequestToken) return;
++    pacientes.value = data.pacientes;
++    medicos.value = data.medicos;
++    consultorios.value = data.consultorios;
++  } catch (err) {
++    if (requestToken !== optionsRequestToken) return;
++    clearReceptionOptions();
++    optionsError.value = err instanceof Error ? err.message : 'No fue posible cargar las opciones de recepción.';
++  }
+ }
+ 
+ async function loadRows() {
+@@ -211,6 +271,7 @@ async function clearFilters() {
+   search.paciente = '';
+   search.medico = '';
+   search.consultorio = '';
++  optionsError.value = '';
+   filters.institucion_id = '';
+   filters.complejo_id = '';
+   filters.torre_id = '';
+@@ -406,6 +467,7 @@ onMounted(async () => {
+         <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
+       </div>
+       <p v-if="message" class="success-message">{{ message }}</p>
++      <p v-if="optionsError" class="error">{{ optionsError }}</p>
+       <p v-if="error" class="error">{{ error }}</p>
+     </form>
+ 

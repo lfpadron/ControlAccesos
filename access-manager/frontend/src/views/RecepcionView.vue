@@ -31,7 +31,9 @@ const rows = ref<ReceptionCita[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const error = ref('');
+const optionsError = ref('');
 const message = ref('');
+let optionsRequestToken = 0;
 
 const search = reactive({
   institucion: '',
@@ -56,13 +58,15 @@ const filters = reactive({
 });
 
 const scopedComplejos = computed(() =>
-  filters.institucion_id ? complejos.value.filter((item) => item.institucion_id === filters.institucion_id) : [],
+  filters.institucion_id ? sortByLabel(uniqueById(complejos.value.filter((item) => item.institucion_id === filters.institucion_id)), (item) => item.nombre) : [],
 );
 const scopedTorres = computed(() =>
-  filters.complejo_id ? torres.value.filter((item) => item.complejo_id === filters.complejo_id) : [],
+  filters.complejo_id ? sortByLabel(uniqueById(torres.value.filter((item) => item.complejo_id === filters.complejo_id)), torreLabel) : [],
 );
 const scopedPisos = computed(() =>
-  filters.torre_id ? sortPisosByCodigo(pisos.value.filter((item) => item.torre_id === filters.torre_id)) : [],
+  filters.complejo_id && filters.torre_id
+    ? sortPisosByCodigo(uniqueById(pisos.value.filter((item) => item.complejo_id === filters.complejo_id && item.torre_id === filters.torre_id)))
+    : [],
 );
 const currentPage = computed(() => Math.floor(filters.offset / filters.limit) + 1);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / filters.limit)));
@@ -76,6 +80,21 @@ function matchByLabel<T extends { id: string }>(items: T[], text: string, labele
 
 function optionId(options: ReceptionOption[], text: string) {
   return matchByLabel(options, text, (item) => item.label)?.id ?? '';
+}
+
+function uniqueById<T extends { id: string }>(rows: T[]) {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    result.push(row);
+  }
+  return result;
+}
+
+function sortByLabel<T>(rows: T[], labeler: (item: T) => string) {
+  return [...rows].sort((left, right) => labeler(left).localeCompare(labeler(right), 'es', { numeric: true, sensitivity: 'base' }));
 }
 
 function institucionLabel(item: Institucion) {
@@ -109,16 +128,33 @@ function applySingleDefaults() {
   }
 }
 
+function clearAppointmentSearch() {
+  search.paciente = '';
+  search.medico = '';
+  search.consultorio = '';
+}
+
+function clearReceptionOptions() {
+  pacientes.value = [];
+  medicos.value = [];
+  consultorios.value = [];
+}
+
 function syncInstitucion() {
   const match = matchByLabel(instituciones.value, search.institucion, institucionLabel);
   filters.institucion_id = match?.id ?? '';
   search.campus = '';
   search.torre = '';
   search.piso = '';
+  clearAppointmentSearch();
   filters.complejo_id = '';
   filters.torre_id = '';
   filters.piso_id = '';
   applySingleDefaults();
+  if (search.institucion.trim() && !match) {
+    clearReceptionOptions();
+    return;
+  }
   void refreshOptions();
 }
 
@@ -127,9 +163,14 @@ function syncCampus() {
   filters.complejo_id = match?.id ?? '';
   search.torre = '';
   search.piso = '';
+  clearAppointmentSearch();
   filters.torre_id = '';
   filters.piso_id = '';
   applySingleDefaults();
+  if (search.campus.trim() && !match) {
+    clearReceptionOptions();
+    return;
+  }
   void refreshOptions();
 }
 
@@ -137,14 +178,24 @@ function syncTorre() {
   const match = matchByLabel(scopedTorres.value, search.torre, torreLabel);
   filters.torre_id = match?.id ?? '';
   search.piso = '';
+  clearAppointmentSearch();
   filters.piso_id = '';
   applySingleDefaults();
+  if (search.torre.trim() && !match) {
+    clearReceptionOptions();
+    return;
+  }
   void refreshOptions();
 }
 
 function syncPiso() {
   const match = matchByLabel(scopedPisos.value, search.piso, pisoLabel);
   filters.piso_id = match?.id ?? '';
+  clearAppointmentSearch();
+  if (search.piso.trim() && !match) {
+    clearReceptionOptions();
+    return;
+  }
   void refreshOptions();
 }
 
@@ -178,10 +229,19 @@ function requestParams(): ReceptionCitaFilters {
 }
 
 async function refreshOptions() {
-  const data = await listReceptionOptions(locationParams());
-  pacientes.value = data.pacientes;
-  medicos.value = data.medicos;
-  consultorios.value = data.consultorios;
+  const requestToken = ++optionsRequestToken;
+  optionsError.value = '';
+  try {
+    const data = await listReceptionOptions(locationParams());
+    if (requestToken !== optionsRequestToken) return;
+    pacientes.value = data.pacientes;
+    medicos.value = data.medicos;
+    consultorios.value = data.consultorios;
+  } catch (err) {
+    if (requestToken !== optionsRequestToken) return;
+    clearReceptionOptions();
+    optionsError.value = err instanceof Error ? err.message : 'No fue posible cargar las opciones de recepción.';
+  }
 }
 
 async function loadRows() {
@@ -211,6 +271,7 @@ async function clearFilters() {
   search.paciente = '';
   search.medico = '';
   search.consultorio = '';
+  optionsError.value = '';
   filters.institucion_id = '';
   filters.complejo_id = '';
   filters.torre_id = '';
@@ -406,6 +467,7 @@ onMounted(async () => {
         <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
       </div>
       <p v-if="message" class="success-message">{{ message }}</p>
+      <p v-if="optionsError" class="error">{{ optionsError }}</p>
       <p v-if="error" class="error">{{ error }}</p>
     </form>
 

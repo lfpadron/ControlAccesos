@@ -65,6 +65,76 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
     assert paciente["nombre_preferido"] == f"Alias {suffix}"
 
 
+def test_recepcion_loads_location_catalogs_and_today_options(client: TestClient, auth_headers: dict[str, str]) -> None:
+    admin_pacientes_response = client.get("/api/pacientes", headers=auth_headers)
+    admin_medicos_response = client.get("/api/medicos", headers=auth_headers)
+    admin_consultorios_response = client.get("/api/consultorios", headers=auth_headers)
+    for response in (admin_pacientes_response, admin_medicos_response, admin_consultorios_response):
+        assert response.status_code == 200, response.text
+
+    paciente = next(item for item in admin_pacientes_response.json() if item["folio_paciente"] == "PDEMO246")
+    medico = next(item for item in admin_medicos_response.json() if item["nombre"] == "Médico" and item["apellidos"] == "Demo")
+    consultorio = next(item for item in admin_consultorios_response.json() if item["codigo"] == "C-101")
+    today = datetime.now(ZoneInfo("America/Mexico_City")).date().isoformat()
+    now_local = datetime.now(ZoneInfo("America/Mexico_City"))
+    cita_response = client.post(
+        "/api/citas?confirmar_duplicado=true",
+        headers=auth_headers,
+        json={
+            "tipo": "PROGRAMADA",
+            "paciente_id": paciente["id"],
+            "medico_id": medico["id"],
+            "consultorio_id": consultorio["id"],
+            "complejo_id": consultorio["complejo_id"],
+            "piso_id": consultorio["piso_id"],
+            "fecha_cita": today,
+            "hora_cita": now_local.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
+            "duracion_estimada": 30,
+            "origen": "TEST_RECEPCION",
+        },
+    )
+    assert cita_response.status_code == 201, cita_response.text
+
+    password = os.getenv("SEED_ADMIN_PASSWORD", "change-me-temporary-admin-password")
+    login_response = client.post(
+        "/api/auth/login",
+        json={"email": "recepcion-demo@example.com", "password": password},
+    )
+    assert login_response.status_code == 200, login_response.text
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    instituciones_response = client.get("/api/catalogos-operativos/instituciones", headers=headers)
+    complejos_response = client.get("/api/catalogos-operativos/complejos", headers=headers)
+    torres_response = client.get("/api/catalogos-operativos/torres", headers=headers)
+    pisos_response = client.get("/api/catalogos-operativos/pisos", headers=headers)
+    for response in (instituciones_response, complejos_response, torres_response, pisos_response):
+        assert response.status_code == 200, response.text
+        assert response.json()
+
+    institucion = instituciones_response.json()[0]
+    complejo = next(item for item in complejos_response.json() if item["institucion_id"] == institucion["id"])
+    torre = next(item for item in torres_response.json() if item["complejo_id"] == complejo["id"])
+    piso = next(item for item in pisos_response.json() if item["complejo_id"] == complejo["id"] and item["torre_id"] == torre["id"])
+
+    params = {
+        "institucion_id": institucion["id"],
+        "complejo_id": complejo["id"],
+        "torre_id": torre["id"],
+        "piso_id": piso["id"],
+        "hora_inicio": "00:00",
+    }
+    options_response = client.get("/api/recepcion/opciones", headers=headers, params=params)
+    assert options_response.status_code == 200, options_response.text
+    options = options_response.json()
+    assert options["pacientes"]
+    assert options["medicos"]
+    assert options["consultorios"]
+
+    citas_response = client.get("/api/recepcion/citas", headers=headers, params=params)
+    assert citas_response.status_code == 200, citas_response.text
+    assert citas_response.json()["total"] >= 1
+
+
 def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
     initial_password = "Temporal123!"
