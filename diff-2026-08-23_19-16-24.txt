@@ -1,0 +1,76 @@
+diff --git a/access-manager/backend/app/services/access_scope.py b/access-manager/backend/app/services/access_scope.py
+index d18f02a..e4ec167 100644
+--- a/access-manager/backend/app/services/access_scope.py
++++ b/access-manager/backend/app/services/access_scope.py
+@@ -401,9 +401,10 @@ def _institucion_location_access_predicate(user: Usuario, institucion_id_col: An
+ 
+ 
+ def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
++    medico = aliased(Medico)
+     own_medico = (
+-        select(Medico.id)
+-        .where(Medico.id == medico_id_col, Medico.usuario_id == user.id, Medico.activo.is_(True))
++        select(medico.id)
++        .where(medico.id == medico_id_col, medico.usuario_id == user.id, medico.activo.is_(True))
+         .exists()
+     )
+     role_medico = _role_scope_exists(user, UsuarioRol.medico_id == medico_id_col, today)
+@@ -412,9 +413,10 @@ def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | No
+ 
+ 
+ def _doctor_medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
++    medico = aliased(Medico)
+     own_medico = (
+-        select(Medico.id)
+-        .where(Medico.id == medico_id_col, Medico.usuario_id == user.id, Medico.activo.is_(True))
++        select(medico.id)
++        .where(medico.id == medico_id_col, medico.usuario_id == user.id, medico.activo.is_(True))
+         .exists()
+     )
+     doctor_role_medico = _role_scope_exists(
+diff --git a/access-manager/backend/tests/test_access_scope.py b/access-manager/backend/tests/test_access_scope.py
+index a6c9157..1c212b0 100644
+--- a/access-manager/backend/tests/test_access_scope.py
++++ b/access-manager/backend/tests/test_access_scope.py
+@@ -26,6 +26,7 @@ from app.models.operational import (
+ )
+ from app.models.usuario import Usuario
+ from app.api.contactos import search_institution_scope_for_user, search_institutions_for_user
++from app.api.flow import reception_base_query
+ from app.services.access_scope import (
+     cita_agenda_access_predicate,
+     complejo_catalog_access_predicate,
+@@ -308,3 +309,20 @@ def test_location_catalog_scope_predicates_compile() -> None:
+     assert "usuario_roles.consultorio_id IS NOT NULL AND usuario_roles.consultorio_id = consultorios.id" in compiled
+     assert "usuario_roles.consultorio_id IS NULL AND usuario_roles.piso_id IS NOT NULL" in compiled
+     assert "medico_pacientes AS medico_pacientes_1" not in compiled
++
++
++def test_reception_query_compiles_with_medico_join() -> None:
++    db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
++    user = Usuario(
++        id=uuid4(),
++        apellidos="Scope",
++        nombre="Recepción",
++        email="recepcion-query@example.com",
++        password_hash="irrelevant",
++    )
++
++    query = reception_base_query(db, user)
++    compiled = str(query.compile(dialect=postgresql.dialect()))
++
++    assert "JOIN medicos ON medicos.id = citas.medico_id" in compiled
++    assert "FROM medicos AS medicos_1" in compiled
+diff --git a/access-manager/frontend/src/views/RecepcionView.vue b/access-manager/frontend/src/views/RecepcionView.vue
+index d3f1986..700822a 100644
+--- a/access-manager/frontend/src/views/RecepcionView.vue
++++ b/access-manager/frontend/src/views/RecepcionView.vue
+@@ -467,7 +467,7 @@ onMounted(async () => {
+         <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
+       </div>
+       <p v-if="message" class="success-message">{{ message }}</p>
+-      <p v-if="optionsError" class="error">{{ optionsError }}</p>
++      <p v-if="optionsError && optionsError !== error" class="error">{{ optionsError }}</p>
+       <p v-if="error" class="error">{{ error }}</p>
+     </form>
+ 

@@ -401,9 +401,10 @@ def _institucion_location_access_predicate(user: Usuario, institucion_id_col: An
 
 
 def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
+    medico = aliased(Medico)
     own_medico = (
-        select(Medico.id)
-        .where(Medico.id == medico_id_col, Medico.usuario_id == user.id, Medico.activo.is_(True))
+        select(medico.id)
+        .where(medico.id == medico_id_col, medico.usuario_id == user.id, medico.activo.is_(True))
         .exists()
     )
     role_medico = _role_scope_exists(user, UsuarioRol.medico_id == medico_id_col, today)
@@ -412,9 +413,10 @@ def _medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | No
 
 
 def _doctor_medico_access_predicate(user: Usuario, medico_id_col: Any, today: date | None = None) -> Any:
+    medico = aliased(Medico)
     own_medico = (
-        select(Medico.id)
-        .where(Medico.id == medico_id_col, Medico.usuario_id == user.id, Medico.activo.is_(True))
+        select(medico.id)
+        .where(medico.id == medico_id_col, medico.usuario_id == user.id, medico.activo.is_(True))
         .exists()
     )
     doctor_role_medico = _role_scope_exists(

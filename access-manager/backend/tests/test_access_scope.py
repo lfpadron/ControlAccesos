@@ -26,6 +26,7 @@ from app.models.operational import (
 )
 from app.models.usuario import Usuario
 from app.api.contactos import search_institution_scope_for_user, search_institutions_for_user
+from app.api.flow import reception_base_query
 from app.services.access_scope import (
     cita_agenda_access_predicate,
     complejo_catalog_access_predicate,
@@ -308,3 +309,20 @@ def test_location_catalog_scope_predicates_compile() -> None:
     assert "usuario_roles.consultorio_id IS NOT NULL AND usuario_roles.consultorio_id = consultorios.id" in compiled
     assert "usuario_roles.consultorio_id IS NULL AND usuario_roles.piso_id IS NOT NULL" in compiled
     assert "medico_pacientes AS medico_pacientes_1" not in compiled
+
+
+def test_reception_query_compiles_with_medico_join() -> None:
+    db = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: None))
+    user = Usuario(
+        id=uuid4(),
+        apellidos="Scope",
+        nombre="Recepción",
+        email="recepcion-query@example.com",
+        password_hash="irrelevant",
+    )
+
+    query = reception_base_query(db, user)
+    compiled = str(query.compile(dialect=postgresql.dialect()))
+
+    assert "JOIN medicos ON medicos.id = citas.medico_id" in compiled
+    assert "FROM medicos AS medicos_1" in compiled

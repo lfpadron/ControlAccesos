@@ -467,7 +467,7 @@ onMounted(async () => {
         <button class="secondary" type="button" @click="clearFilters">Limpiar</button>
       </div>
       <p v-if="message" class="success-message">{{ message }}</p>
-      <p v-if="optionsError" class="error">{{ optionsError }}</p>
+      <p v-if="optionsError && optionsError !== error" class="error">{{ optionsError }}</p>
       <p v-if="error" class="error">{{ error }}</p>
     </form>
 
