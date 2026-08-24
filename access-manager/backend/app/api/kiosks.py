@@ -191,6 +191,13 @@ def patient_lookup_label(paciente: Paciente) -> str:
     return first_names or last_names or paciente.folio_paciente
 
 
+def patient_phone_display(paciente: Paciente) -> str:
+    digits = normalized_digits(paciente.celular)
+    if not digits:
+        return "sin teléfono registrado"
+    return f"XXX{digits[-4:]}"
+
+
 def patient_identity_key(paciente: Paciente) -> str:
     return normalize_patient_text(
         " ".join(part for part in [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre or paciente.nombre_preferido] if part)
@@ -358,6 +365,8 @@ def public_kiosko_buscar_pacientes(
         KioskoPacienteOption(
             id=patient.id,
             label=patient_lookup_label(patient),
+            celular=patient.celular,
+            telefono_display=patient_phone_display(patient),
             homonimo=identity_counts[patient_identity_key(patient)] > 1,
         )
         for patient in matched_patients[:20]
@@ -381,8 +390,19 @@ def public_kiosko_buscar_citas(
         query = query.where(Cita.paciente_id == scoped_patient_id)
     else:
         matching_patients = [patient for patient in scoped_patients_for_punto(db, punto) if patient_matches_terms(patient, paciente)]
+        identity_counts = Counter(patient_identity_key(patient) for patient in matching_patients)
+        homonym_keys = {key for key, count in identity_counts.items() if key and count > 1}
+        has_homonyms = bool(homonym_keys)
+        has_contact_filter = normalized_digits(celular) is not None or fecha_nacimiento is not None
+        if has_homonyms and not has_contact_filter:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=HOMONYM_CONFIRMATION_MESSAGE)
         if normalized_digits(celular) is not None or fecha_nacimiento is not None:
             matching_patients = [patient for patient in matching_patients if patient_matches_contact(patient, celular, fecha_nacimiento)]
+        if has_homonyms:
+            resolved_homonyms = [patient for patient in matching_patients if patient_identity_key(patient) in homonym_keys]
+            if len(resolved_homonyms) != 1:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=HOMONYM_FAILURE_MESSAGE)
+            matching_patients = [resolved_homonyms[0]]
         if not matching_patients:
             touch_kiosko(db, kiosko)
             return []

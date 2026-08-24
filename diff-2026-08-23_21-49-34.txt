@@ -1,0 +1,106 @@
+diff --git a/access-manager/backend/app/api/kiosks.py b/access-manager/backend/app/api/kiosks.py
+index a88ae3c..f4e44a8 100644
+--- a/access-manager/backend/app/api/kiosks.py
++++ b/access-manager/backend/app/api/kiosks.py
+@@ -191,6 +191,13 @@ def patient_lookup_label(paciente: Paciente) -> str:
+     return first_names or last_names or paciente.folio_paciente
+ 
+ 
++def patient_phone_display(paciente: Paciente) -> str:
++    digits = normalized_digits(paciente.celular)
++    if not digits:
++        return "sin teléfono registrado"
++    return f"XXX{digits[-4:]}"
++
++
+ def patient_identity_key(paciente: Paciente) -> str:
+     return normalize_patient_text(
+         " ".join(part for part in [paciente.apellido_paterno, paciente.apellido_materno, paciente.nombre or paciente.nombre_preferido] if part)
+@@ -358,6 +365,8 @@ def public_kiosko_buscar_pacientes(
+         KioskoPacienteOption(
+             id=patient.id,
+             label=patient_lookup_label(patient),
++            celular=patient.celular,
++            telefono_display=patient_phone_display(patient),
+             homonimo=identity_counts[patient_identity_key(patient)] > 1,
+         )
+         for patient in matched_patients[:20]
+@@ -381,8 +390,19 @@ def public_kiosko_buscar_citas(
+         query = query.where(Cita.paciente_id == scoped_patient_id)
+     else:
+         matching_patients = [patient for patient in scoped_patients_for_punto(db, punto) if patient_matches_terms(patient, paciente)]
++        identity_counts = Counter(patient_identity_key(patient) for patient in matching_patients)
++        homonym_keys = {key for key, count in identity_counts.items() if key and count > 1}
++        has_homonyms = bool(homonym_keys)
++        has_contact_filter = normalized_digits(celular) is not None or fecha_nacimiento is not None
++        if has_homonyms and not has_contact_filter:
++            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=HOMONYM_CONFIRMATION_MESSAGE)
+         if normalized_digits(celular) is not None or fecha_nacimiento is not None:
+             matching_patients = [patient for patient in matching_patients if patient_matches_contact(patient, celular, fecha_nacimiento)]
++        if has_homonyms:
++            resolved_homonyms = [patient for patient in matching_patients if patient_identity_key(patient) in homonym_keys]
++            if len(resolved_homonyms) != 1:
++                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=HOMONYM_FAILURE_MESSAGE)
++            matching_patients = [resolved_homonyms[0]]
+         if not matching_patients:
+             touch_kiosko(db, kiosko)
+             return []
+diff --git a/access-manager/backend/app/schemas/kiosk.py b/access-manager/backend/app/schemas/kiosk.py
+index d5b6e57..732cef5 100644
+--- a/access-manager/backend/app/schemas/kiosk.py
++++ b/access-manager/backend/app/schemas/kiosk.py
+@@ -91,4 +91,6 @@ class KioskoPublicConfig(KioskoConfigMixin):
+ class KioskoPacienteOption(BaseModel):
+     id: UUID
+     label: str
++    celular: str | None = None
++    telefono_display: str
+     homonimo: bool = False
+diff --git a/access-manager/kiosk/src/views/KioskHomeView.vue b/access-manager/kiosk/src/views/KioskHomeView.vue
+index 3e9f2d9..a506a95 100644
+--- a/access-manager/kiosk/src/views/KioskHomeView.vue
++++ b/access-manager/kiosk/src/views/KioskHomeView.vue
+@@ -32,6 +32,8 @@ type KioskoConfig = {
+ type PacienteOption = {
+   id: string;
+   label: string;
++  celular?: string | null;
++  telefono_display: string;
+   homonimo: boolean;
+ };
+ 
+@@ -161,10 +163,15 @@ function hidePacienteOptionsSoon() {
+ function selectPaciente(option: PacienteOption) {
+   selectedPaciente.value = option;
+   nombreApellido.value = option.label;
++  celular.value = option.celular ?? '';
+   pacienteOptions.value = [];
+   showPacienteOptions.value = false;
+   error.value = '';
+-  status.value = option.homonimo ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Paciente seleccionado.';
++  if (option.homonimo && !option.celular) {
++    status.value = 'Capture fecha de nacimiento para confirmar al paciente.';
++  } else {
++    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el celular o capture fecha de nacimiento.' : 'Paciente seleccionado.';
++  }
+ }
+ 
+ function openMode(next: Mode) {
+@@ -193,7 +200,7 @@ async function searchCitas() {
+     return;
+   }
+   if (selectedPaciente.value?.homonimo && !celular.value.trim() && !fechaNacimiento.value) {
+-    error.value = 'Capture celular o fecha de nacimiento para confirmar al paciente.';
++    error.value = selectedPaciente.value.celular ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
+     return;
+   }
+   loading.value = true;
+@@ -321,7 +328,7 @@ onBeforeUnmount(() => {
+               type="button"
+               @mousedown.prevent="selectPaciente(option)"
+             >
+-              <span>{{ option.label }}</span>
++              <span>{{ option.label }} - teléfono: {{ option.telefono_display }}</span>
+               <small v-if="option.homonimo">Requiere celular o fecha de nacimiento</small>
+             </button>
+           </div>

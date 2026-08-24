@@ -91,4 +91,6 @@ class KioskoPublicConfig(KioskoConfigMixin):
 class KioskoPacienteOption(BaseModel):
     id: UUID
     label: str
+    celular: str | None = None
+    telefono_display: str
     homonimo: bool = False

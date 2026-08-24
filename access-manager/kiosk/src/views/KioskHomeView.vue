@@ -32,6 +32,8 @@ type KioskoConfig = {
 type PacienteOption = {
   id: string;
   label: string;
+  celular?: string | null;
+  telefono_display: string;
   homonimo: boolean;
 };
 
@@ -161,10 +163,15 @@ function hidePacienteOptionsSoon() {
 function selectPaciente(option: PacienteOption) {
   selectedPaciente.value = option;
   nombreApellido.value = option.label;
+  celular.value = option.celular ?? '';
   pacienteOptions.value = [];
   showPacienteOptions.value = false;
   error.value = '';
-  status.value = option.homonimo ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Paciente seleccionado.';
+  if (option.homonimo && !option.celular) {
+    status.value = 'Capture fecha de nacimiento para confirmar al paciente.';
+  } else {
+    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el celular o capture fecha de nacimiento.' : 'Paciente seleccionado.';
+  }
 }
 
 function openMode(next: Mode) {
@@ -193,7 +200,7 @@ async function searchCitas() {
     return;
   }
   if (selectedPaciente.value?.homonimo && !celular.value.trim() && !fechaNacimiento.value) {
-    error.value = 'Capture celular o fecha de nacimiento para confirmar al paciente.';
+    error.value = selectedPaciente.value.celular ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
     return;
   }
   loading.value = true;
@@ -321,7 +328,7 @@ onBeforeUnmount(() => {
               type="button"
               @mousedown.prevent="selectPaciente(option)"
             >
-              <span>{{ option.label }}</span>
+              <span>{{ option.label }} - teléfono: {{ option.telefono_display }}</span>
               <small v-if="option.homonimo">Requiere celular o fecha de nacimiento</small>
             </button>
           </div>
