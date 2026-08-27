@@ -113,6 +113,11 @@ class CheckinResponse {
     this.citaId,
     this.folioTurno,
     this.estadoCita,
+    this.requiereConfirmacion = false,
+    this.fechaLabel,
+    this.torre,
+    this.piso,
+    this.checkinAt,
   });
 
   final String resultado;
@@ -120,6 +125,11 @@ class CheckinResponse {
   final String? citaId;
   final String? folioTurno;
   final String? estadoCita;
+  final bool requiereConfirmacion;
+  final String? fechaLabel;
+  final String? torre;
+  final String? piso;
+  final DateTime? checkinAt;
 
   factory CheckinResponse.fromJson(Map<String, dynamic> json) {
     return CheckinResponse(
@@ -128,6 +138,11 @@ class CheckinResponse {
       citaId: json['cita_id'] as String?,
       folioTurno: json['folio_turno'] as String?,
       estadoCita: json['estado_cita'] as String?,
+      requiereConfirmacion: json['requiere_confirmacion'] as bool? ?? false,
+      fechaLabel: json['fecha_label'] as String?,
+      torre: json['torre'] as String?,
+      piso: json['piso'] as String?,
+      checkinAt: json['checkin_at'] is String ? DateTime.tryParse(json['checkin_at'] as String) : null,
     );
   }
 }

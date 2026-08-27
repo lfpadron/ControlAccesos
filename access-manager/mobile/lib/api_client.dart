@@ -85,6 +85,22 @@ class ApiClient {
     return CheckinResponse.fromJson(payload);
   }
 
+  Future<CheckinResponse> validateQr(String qrToken, String deviceId) async {
+    final body = {
+      'token': qrToken,
+      'canal': 'APP_MOVIL',
+      'dispositivo_id': deviceId,
+    };
+    Map<String, dynamic> payload;
+    try {
+      payload = await _request<Map<String, dynamic>>('POST', '/mobile/qr/validar', body: body);
+    } on ApiException catch (error) {
+      if (!_isMissingMobileRoute(error)) rethrow;
+      payload = await _request<Map<String, dynamic>>('POST', '/qr/validar', body: {'token': qrToken});
+    }
+    return CheckinResponse.fromJson(payload);
+  }
+
   Future<CheckinResponse> checkinManual(String citaId, String deviceId) async {
     final body = {
       'canal': 'APP_MOVIL',

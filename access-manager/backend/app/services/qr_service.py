@@ -136,7 +136,14 @@ def validate_qr(db: Session, token: str) -> QrValidationResult:
     if qr_token is None:
         return QrValidationResult(False, "ROJO", "El QR no está registrado.")
     if qr_token.estado != "GENERADO":
-        return QrValidationResult(False, "ROJO", f"El QR está en estado {qr_token.estado}.", qr_token=qr_token)
+        cita = db.get(Cita, cita_id)
+        return QrValidationResult(
+            False,
+            qr_token.estado,
+            f"El QR está en estado {qr_token.estado}.",
+            cita=cita,
+            qr_token=qr_token,
+        )
     if qr_token.fecha_expiracion <= timestamp:
         qr_token.estado = "EXPIRADO"
         db.flush()

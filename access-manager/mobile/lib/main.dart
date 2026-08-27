@@ -525,23 +525,26 @@ class _QrCheckinScreenState extends State<QrCheckinScreen> {
     });
     await _controller.stop();
     try {
-      final response = await widget.api.checkinQr(qrToken, widget.deviceId);
-      if (response.folioTurno != null) {
-        await widget.logStore.add(qrToken: qrToken, folioTurno: response.folioTurno, recepcionistaLogin: widget.session.email);
-      }
-      TicketResponse? ticket;
-      String? ticketError;
-      if (response.citaId != null) {
-        try {
-          ticket = await widget.api.fetchTicket(response.citaId!);
-        } catch (error) {
-          ticketError = 'Llegada registrada, pero no fue posible obtener el ticket: $error';
-        }
-      }
+      final response = await widget.api.validateQr(qrToken, widget.deviceId);
       if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: ticket, initialError: ticketError)),
-      );
+      if (response.requiereConfirmacion) {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => QrConfirmScreen(
+              api: widget.api,
+              logStore: widget.logStore,
+              session: widget.session,
+              deviceId: widget.deviceId,
+              qrToken: qrToken!,
+              preview: response,
+            ),
+          ),
+        );
+      } else {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: null)),
+        );
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -584,6 +587,141 @@ class _QrCheckinScreenState extends State<QrCheckinScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class QrConfirmScreen extends StatefulWidget {
+  const QrConfirmScreen({
+    super.key,
+    required this.api,
+    required this.logStore,
+    required this.session,
+    required this.deviceId,
+    required this.qrToken,
+    required this.preview,
+  });
+
+  final ApiClient api;
+  final LocalLogStore logStore;
+  final SavedSession session;
+  final String deviceId;
+  final String qrToken;
+  final CheckinResponse preview;
+
+  @override
+  State<QrConfirmScreen> createState() => _QrConfirmScreenState();
+}
+
+class _QrConfirmScreenState extends State<QrConfirmScreen> {
+  bool _loading = false;
+  String? _error;
+
+  void _backToScan() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => QrCheckinScreen(
+          api: widget.api,
+          logStore: widget.logStore,
+          session: widget.session,
+          deviceId: widget.deviceId,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirm() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await widget.api.checkinQr(widget.qrToken, widget.deviceId);
+      if (response.folioTurno != null) {
+        await widget.logStore.add(qrToken: widget.qrToken, folioTurno: response.folioTurno, recepcionistaLogin: widget.session.email);
+      }
+      TicketResponse? ticket;
+      String? ticketError;
+      if (response.citaId != null) {
+        try {
+          ticket = await widget.api.fetchTicket(response.citaId!);
+        } catch (error) {
+          ticketError = 'Llegada registrada, pero no fue posible obtener el ticket: $error';
+        }
+      }
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: ticket, initialError: ticketError)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = [
+      if ((widget.preview.fechaLabel ?? '').isNotEmpty) widget.preview.fechaLabel!,
+      if ((widget.preview.torre ?? '').isNotEmpty) widget.preview.torre!,
+      if ((widget.preview.piso ?? '').isNotEmpty) widget.preview.piso!,
+    ].join(' · ');
+    return Scaffold(
+      appBar: AppBar(title: const Text('Confirmar llegada')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle, color: Color(0xFF11845B), size: 30),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(widget.preview.mensaje, style: Theme.of(context).textTheme.titleLarge)),
+                      ],
+                    ),
+                    if (detail.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(detail),
+                    ],
+                    if (widget.preview.folioTurno != null) ...[
+                      const SizedBox(height: 12),
+                      Text('Turno ${widget.preview.folioTurno}'),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: _loading ? null : _confirm,
+              icon: _loading
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.check_circle),
+              label: const Text('Confirmar'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
+              onPressed: _loading ? null : _backToScan,
+              child: const Text('Regresar'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              ErrorBanner(message: _error!),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -861,13 +999,21 @@ class _CheckinResultScreenState extends State<CheckinResultScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.circle, color: color, size: 18),
+                        Icon(statusIcon(widget.response.resultado), color: color, size: 30),
                         const SizedBox(width: 8),
-                        Text(widget.response.resultado, style: Theme.of(context).textTheme.headlineSmall),
+                        Expanded(child: Text(widget.response.mensaje, style: Theme.of(context).textTheme.headlineSmall)),
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    Text(widget.response.mensaje),
+                    if (widget.response.fechaLabel != null || widget.response.torre != null || widget.response.piso != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        [
+                          if ((widget.response.fechaLabel ?? '').isNotEmpty) widget.response.fechaLabel!,
+                          if ((widget.response.torre ?? '').isNotEmpty) widget.response.torre!,
+                          if ((widget.response.piso ?? '').isNotEmpty) widget.response.piso!,
+                        ].join(' · '),
+                      ),
+                    ],
                     if (widget.response.folioTurno != null) ...[
                       const SizedBox(height: 16),
                       Text('Turno', style: Theme.of(context).textTheme.labelLarge),
@@ -1087,5 +1233,18 @@ Color statusColor(String status) {
       return const Color(0xFFC53030);
     default:
       return const Color(0xFF4A5568);
+  }
+}
+
+IconData statusIcon(String status) {
+  switch (status.toUpperCase()) {
+    case 'VERDE':
+      return Icons.check_circle;
+    case 'ROJO':
+      return Icons.cancel;
+    case 'AMARILLO':
+      return Icons.warning_amber;
+    default:
+      return Icons.info;
   }
 }

@@ -1,0 +1,2021 @@
+diff --git a/access-manager/backend/app/api/auth.py b/access-manager/backend/app/api/auth.py
+index 2580f03..d23f6d5 100644
+--- a/access-manager/backend/app/api/auth.py
++++ b/access-manager/backend/app/api/auth.py
+@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
+ from sqlalchemy import func, select
+ from sqlalchemy.orm import Session
+ 
+-from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
++from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS, default_permissions_for_role
+ from app.core.database import get_db
+ from app.core.security import create_access_token, get_current_user, hash_password, verify_password
+ from app.models.operational import Role, UsuarioRol
+@@ -16,13 +16,6 @@ from app.services.audit_service import record_audit_event
+ router = APIRouter()
+ 
+ ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
+-
+-def default_permissions_for_role(codigo: str) -> dict[str, str]:
+-    if codigo == "ADMIN_SISTEMA":
+-        return {screen: "editar" for screen in MENU_SCREEN_KEYS}
+-    return {}
+-
+-
+ def normalize_profile_email(value: object) -> str | None:
+     if value is None:
+         return None
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index c60e58e..b1d4335 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++from collections import defaultdict
+ from datetime import UTC, date, datetime, time, timedelta
+ from typing import Any
+ from uuid import UUID
+@@ -9,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+ from sqlalchemy import and_, func, or_, select
+ from sqlalchemy.orm import Session, aliased
+ 
++from app.constants import default_permissions_for_role
+ from app.core.database import get_db
+-from app.core.security import require_permission, require_role
++from app.core.security import require_permission
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+@@ -46,6 +48,8 @@ from app.schemas.flow import (
+     QrRead,
+     QrValidarRequest,
+     QrValidarResponse,
++    ReporteCitaItem,
++    ReportePacienteItem,
+     ReceptionCheckinCancelResponse,
+     ReceptionCitaItem,
+     ReceptionCitasResponse,
+@@ -83,11 +87,24 @@ qr_router = APIRouter()
+ mobile_router = APIRouter()
+ catalogos_operativos_router = APIRouter()
+ recepcion_router = APIRouter()
++reportes_router = APIRouter()
+ 
+ ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
+ ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+-
+-CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "recepcion", "checkin-qr", "turnos-llamados"))
++ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
++
++CatalogosOperativosUser = Depends(
++    require_permission(
++        "pacientes",
++        "citas",
++        "citas-hoy",
++        "recepcion",
++        "checkin-qr",
++        "turnos-llamados",
++        "reportes-medicos",
++        "reportes-recepcion",
++    )
++)
+ PacientesReadUser = Depends(require_permission("pacientes"))
+ PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
+ CitasAgendaReadUser = Depends(require_permission("citas"))
+@@ -98,8 +115,10 @@ CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", min
+ RecepcionReadUser = Depends(require_permission("recepcion"))
+ RecepcionWriteUser = Depends(require_permission("recepcion", minimum="editar"))
+ CheckinQrWriteUser = Depends(require_permission("checkin-qr", minimum="editar"))
+-MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
+-MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
++ReportesMedicosReadUser = Depends(require_permission("reportes-medicos"))
++ReportesRecepcionReadUser = Depends(require_permission("reportes-recepcion"))
++MobileSessionUser = Depends(require_permission("app-qr", minimum="editar"))
++MobileCheckinUser = Depends(require_permission("app-qr", minimum="editar"))
+ 
+ 
+ def business_today() -> date:
+@@ -145,6 +164,34 @@ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
+     )
+ 
+ 
++def user_has_permission(db: Session, usuario: Usuario, screen_key: str, minimum: str = "consultar") -> bool:
++    required_level = ACCESS_ORDER[minimum]
++    today = business_today()
++    roles = list(
++        db.execute(
++            select(Role)
++            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
++            .where(
++                UsuarioRol.usuario_id == usuario.id,
++                UsuarioRol.activo.is_(True),
++                UsuarioRol.fecha_inicio <= today,
++                or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
++                Role.activo.is_(True),
++            )
++        ).scalars()
++    )
++    if any(role.codigo == "ADMIN_SISTEMA" for role in roles):
++        return True
++    return any(
++        ACCESS_ORDER.get(
++            {**default_permissions_for_role(role.codigo), **(role.permisos or {})}.get(screen_key, "sin"),
++            0,
++        )
++        >= required_level
++        for role in roles
++    )
++
++
+ def active_user_role_conditions(usuario: Usuario, today: date) -> list[Any]:
+     return [
+         UsuarioRol.usuario_id == usuario.id,
+@@ -1018,6 +1065,170 @@ def can_cancel_lobby_checkin(event: EventoLlegada | None, timestamp: datetime |
+     return (timestamp or now_utc()) - event_created_at_utc(event) <= CHECKIN_CANCEL_WINDOW
+ 
+ 
++QR_NOT_REGISTERED_MESSAGE = "Paciente no se encuentra registrado. Favor de verificar con la asistente o su médico."
++SPANISH_WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
++
++
++def cita_today(db: Session, cita: Cita) -> date:
++    return datetime.now(ZoneInfo(cita_zona_horaria(db, cita))).date()
++
++
++def cita_fecha_label(cita: Cita) -> str:
++    return f"{SPANISH_WEEKDAYS[cita.fecha_cita.weekday()]} {cita.fecha_cita.day}"
++
++
++def qr_context_response(
++    db: Session,
++    cita: Cita | None,
++    resultado: str,
++    mensaje: str,
++    requiere_confirmacion: bool = False,
++    checkin_event: EventoLlegada | None = None,
++) -> CheckinResponse:
++    if cita is None:
++        return CheckinResponse(resultado=resultado, mensaje=mensaje, requiere_confirmacion=requiere_confirmacion)
++    piso = db.get(Piso, cita.piso_id)
++    torre = db.get(Torre, piso.torre_id) if piso is not None else None
++    return CheckinResponse(
++        resultado=resultado,
++        mensaje=mensaje,
++        cita_id=cita.id,
++        folio_turno=cita.folio_turno,
++        estado_cita=cita.estado,
++        requiere_confirmacion=requiere_confirmacion,
++        fecha_label=cita_fecha_label(cita),
++        torre=torre_label(torre),
++        piso=piso_label(piso),
++        checkin_at=checkin_event.created_at if checkin_event else None,
++    )
++
++
++def qr_invalid_response() -> CheckinResponse:
++    return CheckinResponse(resultado="ROJO", mensaje=QR_NOT_REGISTERED_MESSAGE)
++
++
++def qr_scan_response(
++    db: Session,
++    cita: Cita | None,
++    current_user: Usuario | None = None,
++) -> CheckinResponse:
++    if cita is None:
++        return qr_invalid_response()
++    if cita.fecha_cita != cita_today(db, cita):
++        return qr_invalid_response()
++    if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
++        return qr_invalid_response()
++    if current_user is not None and not can_access_cita(db, current_user, cita.id, business_today()):
++        return qr_invalid_response()
++    checkin_event = latest_lobby_checkin(db, cita.id)
++    if checkin_event is not None or cita.estado == "LLEGO_LOBBY":
++        return qr_context_response(db, cita, "VERDE", "Paciente ya registrado", checkin_event=checkin_event)
++    return qr_context_response(
++        db,
++        cita,
++        "VERDE",
++        "Paciente encontrado. Confirme el check-in.",
++        requiere_confirmacion=True,
++    )
++
++
++def record_qr_validation_event(
++    db: Session,
++    request: Request,
++    payload: QrCheckinRequest | QrValidarRequest,
++    result,
++    valid: bool,
++    resultado: str,
++    cita: Cita | None = None,
++    current_user: Usuario | None = None,
++) -> None:
++    record_audit_event(
++        db,
++        evento="QR_VALIDADO",
++        entidad="qr_tokens",
++        entidad_id=result.qr_token.id if result.qr_token else None,
++        usuario_id=current_user.id if current_user else None,
++        canal=getattr(payload, "canal", "API_EXTERNA"),
++        ip_origen=client_ip(request),
++        valor_despues={
++            "valido": valid,
++            "resultado": resultado,
++            "cita_id": str(cita.id) if cita else None,
++        },
++    )
++
++
++def validate_qr_for_scan(
++    payload: QrCheckinRequest | QrValidarRequest,
++    request: Request,
++    db: Session,
++    current_user: Usuario | None = None,
++) -> CheckinResponse:
++    result = validate_qr(db, payload.token)
++    response = qr_scan_response(db, result.cita, current_user)
++    if not result.valid and response.requiere_confirmacion:
++        response = qr_invalid_response()
++    record_qr_validation_event(
++        db,
++        request,
++        payload,
++        result,
++        response.resultado != "ROJO",
++        response.resultado,
++        result.cita if response.resultado != "ROJO" else None,
++        current_user,
++    )
++    db.commit()
++    return response
++
++
++def confirm_qr_checkin(
++    payload: QrCheckinRequest,
++    request: Request,
++    db: Session,
++    current_user: Usuario | None = None,
++) -> CheckinResponse:
++    result = validate_qr(db, payload.token)
++    response = qr_scan_response(db, result.cita, current_user)
++    if not result.valid and response.requiere_confirmacion:
++        response = qr_invalid_response()
++    if response.resultado == "ROJO" or result.cita is None:
++        record_qr_validation_event(db, request, payload, result, False, response.resultado, None, current_user)
++        db.commit()
++        return response
++    cita = result.cita
++    if not response.requiere_confirmacion:
++        record_qr_validation_event(db, request, payload, result, True, response.resultado, cita, current_user)
++        db.commit()
++        return response
++    event = create_arrival_event(
++        db,
++        cita,
++        "CHECKIN_LOBBY",
++        payload.canal,
++        request,
++        payload.sala_id,
++        current_user.id if current_user else None,
++        payload.dispositivo_id,
++    )
++    if result.qr_token is not None:
++        result.qr_token.estado = "USADO"
++    record_audit_event(
++        db,
++        evento="CHECKIN_LOBBY",
++        entidad="eventos_llegada",
++        entidad_id=event.id,
++        usuario_id=current_user.id if current_user else None,
++        canal=payload.canal,
++        ip_origen=client_ip(request),
++        valor_despues={"cita_id": str(cita.id), "resultado": "VERDE"},
++    )
++    record_qr_validation_event(db, request, payload, result, True, "VERDE", cita, current_user)
++    db.commit()
++    db.refresh(cita)
++    return qr_context_response(db, cita, "VERDE", "Check-in registrado.", checkin_event=event)
++
++
+ def restore_qr_if_needed(db: Session, cita_id: UUID, timestamp: datetime) -> bool:
+     qr_token = db.execute(
+         select(QrToken)
+@@ -1304,75 +1515,17 @@ def reception_qr_checkin(
+     db: Session = Depends(get_db),
+     current_user: Usuario = CheckinQrWriteUser,
+ ) -> CheckinResponse:
+-    result = validate_qr(db, payload.token)
+-    if not result.valid or result.cita is None:
+-        record_audit_event(
+-            db,
+-            evento="QR_VALIDADO",
+-            entidad="qr_tokens",
+-            entidad_id=result.qr_token.id if result.qr_token else None,
+-            usuario_id=current_user.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"valido": False, "resultado": result.status},
+-        )
+-        db.commit()
+-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
++    return confirm_qr_checkin(payload, request, db, current_user)
+ 
+-    cita = result.cita
+-    if cita.fecha_cita != business_today() or not can_access_cita(db, current_user, cita.id, business_today()):
+-        record_audit_event(
+-            db,
+-            evento="QR_VALIDADO",
+-            entidad="qr_tokens",
+-            entidad_id=result.qr_token.id if result.qr_token else None,
+-            usuario_id=current_user.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"valido": False, "resultado": "FUERA_ALCANCE", "cita_id": str(cita.id)},
+-        )
+-        db.commit()
+-        return CheckinResponse(resultado="ROJO", mensaje="Cita no encontrada para hoy o fuera de su alcance.")
+-    if cita.estado == "LLEGO_LOBBY":
+-        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+ 
+-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+-    if resultado != "ROJO":
+-        event = create_arrival_event(
+-            db,
+-            cita,
+-            "CHECKIN_LOBBY",
+-            payload.canal,
+-            request,
+-            payload.sala_id,
+-            current_user.id,
+-            payload.dispositivo_id,
+-        )
+-        if result.qr_token is not None:
+-            result.qr_token.estado = "USADO"
+-        record_audit_event(
+-            db,
+-            evento="CHECKIN_LOBBY",
+-            entidad="eventos_llegada",
+-            entidad_id=event.id,
+-            usuario_id=current_user.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+-        )
+-    record_audit_event(
+-        db,
+-        evento="QR_VALIDADO",
+-        entidad="qr_tokens",
+-        entidad_id=result.qr_token.id if result.qr_token else None,
+-        usuario_id=current_user.id,
+-        canal=payload.canal,
+-        ip_origen=client_ip(request),
+-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
+-    )
+-    db.commit()
+-    db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++@recepcion_router.post("/qr/validar", response_model=CheckinResponse)
++def reception_qr_validar(
++    payload: QrCheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = CheckinQrWriteUser,
++) -> CheckinResponse:
++    return validate_qr_for_scan(payload, request, db, current_user)
+ 
+ 
+ @pacientes_router.get("/buscar", response_model=list[PacienteRead])
+@@ -2024,6 +2177,361 @@ def authenticated_lobby_checkin(
+     return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+ 
+ 
++def parse_month(value: str | None, fallback: date) -> date:
++    if not value:
++        return date(fallback.year, fallback.month, 1)
++    try:
++        year_text, month_text = value.split("-", 1)
++        return date(int(year_text), int(month_text), 1)
++    except Exception:
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mes inválido. Use formato AAAA-MM.") from None
++
++
++def add_month(value: date) -> date:
++    if value.month == 12:
++        return date(value.year + 1, 1, 1)
++    return date(value.year, value.month + 1, 1)
++
++
++def end_of_month(value: date) -> date:
++    return add_month(value) - timedelta(days=1)
++
++
++def parse_week(value: str | None, fallback: date) -> date:
++    if not value:
++        return fallback - timedelta(days=fallback.weekday())
++    try:
++        if "-W" in value:
++            year_text, week_text = value.split("-W", 1)
++            return date.fromisocalendar(int(year_text), int(week_text), 1)
++        selected = date.fromisoformat(value)
++        return selected - timedelta(days=selected.weekday())
++    except Exception:
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Semana inválida. Use formato AAAA-WSS.") from None
++
++
++def validate_range(start: date, end: date) -> None:
++    if end < start:
++        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La fecha final no puede ser menor que la inicial.")
++
++
++def report_range(
++    agrupacion: str,
++    mes_desde: str | None,
++    mes_hasta: str | None,
++    semana_desde: str | None,
++    semana_hasta: str | None,
++    dia_desde: date | None,
++    dia_hasta: date | None,
++    semana: str | None,
++) -> tuple[date, date]:
++    today = business_today()
++    if agrupacion == "mes":
++        start = parse_month(mes_desde, today)
++        end = end_of_month(parse_month(mes_hasta, start))
++    elif agrupacion == "semana":
++        start = parse_week(semana_desde, today)
++        end = parse_week(semana_hasta, start) + timedelta(days=6)
++    elif agrupacion == "hora":
++        start = parse_week(semana, today)
++        end = start + timedelta(days=6)
++    else:
++        start = dia_desde or today
++        end = dia_hasta or start
++    validate_range(start, end)
++    return start, end
++
++
++def month_period(value: date) -> str:
++    return f"{value.year}-{value.month:02d}"
++
++
++def week_period(value: date) -> str:
++    iso = value.isocalendar()
++    return f"{iso.year}-W{iso.week:02d}"
++
++
++def day_period(value: date) -> str:
++    return value.isoformat()
++
++
++def period_for_date(value: date, agrupacion: str) -> str:
++    if agrupacion == "mes":
++        return month_period(value)
++    if agrupacion == "semana":
++        return week_period(value)
++    return day_period(value)
++
++
++def hour_columns() -> list[str]:
++    return [f"{hour:02d}:00" for hour in range(24)]
++
++
++def empty_hours() -> dict[str, int]:
++    return {column: 0 for column in hour_columns()}
++
++
++def report_citas_rows(
++    db: Session,
++    current_user: Usuario,
++    start: date,
++    end: date,
++    medical_scope: bool,
++    institucion_id: UUID | None = None,
++):
++    if medical_scope:
++        predicate = cita_agenda_access_predicate(db, current_user, business_today())
++    else:
++        predicate = cita_access_predicate(db, current_user, business_today())
++    query = (
++        select(Cita, Paciente, Medico, Consultorio, Piso, Torre, Complejo)
++        .join(Paciente, Paciente.id == Cita.paciente_id)
++        .join(Medico, Medico.id == Cita.medico_id)
++        .join(Consultorio, Consultorio.id == Cita.consultorio_id)
++        .join(Piso, Piso.id == Cita.piso_id)
++        .join(Torre, Torre.id == Piso.torre_id)
++        .join(Complejo, Complejo.id == Cita.complejo_id)
++        .where(Cita.fecha_cita >= start, Cita.fecha_cita <= end, predicate)
++    )
++    if institucion_id is not None:
++        query = query.where(Complejo.institucion_id == institucion_id)
++    return db.execute(query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)).all()
++
++
++def report_cita_item(db: Session, row) -> ReporteCitaItem:
++    cita, paciente, medico, consultorio, piso, torre, complejo = row
++    return ReporteCitaItem(
++        cita_id=cita.id,
++        fecha_cita=cita.fecha_cita,
++        hora_cita=cita.hora_cita,
++        paciente=patient_last_first_name(paciente),
++        medico=medico_last_first_name(medico),
++        campus=complejo.nombre,
++        torre=torre_label(torre) or "",
++        piso=piso_label(piso) or "",
++        consultorio=consultorio_label(consultorio) or consultorio.codigo,
++        estado=cita.estado,
++        se_presento=latest_lobby_checkin(db, cita.id) is not None,
++    )
++
++
++def ensure_report_institution_access(db: Session, current_user: Usuario, institucion_id: UUID) -> None:
++    exists = db.execute(
++        select(Institucion.id)
++        .where(
++            Institucion.id == institucion_id,
++            Institucion.activo.is_(True),
++            institucion_catalog_access_predicate(db, current_user, business_today()),
++        )
++        .limit(1)
++    ).first()
++    if exists is None:
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institución no encontrada.")
++
++
++@reportes_router.get("/medicos/pacientes", response_model=list[ReportePacienteItem])
++def reporte_medicos_pacientes(
++    medico_id: UUID | None = Query(default=None),
++    paciente: str | None = Query(default=None),
++    db: Session = Depends(get_db),
++    current_user: Usuario = ReportesMedicosReadUser,
++) -> list[ReportePacienteItem]:
++    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
++    if medico_id is not None:
++        ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
++        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
++            MedicoPaciente.medico_id == medico_id,
++            MedicoPaciente.activo.is_(True),
++        )
++    if paciente:
++        search_name = func.lower(
++            func.coalesce(Paciente.apellido_paterno, "")
++            + " "
++            + func.coalesce(Paciente.apellido_materno, "")
++            + " "
++            + func.coalesce(Paciente.nombre, "")
++            + " "
++            + func.coalesce(Paciente.nombre_preferido, "")
++            + " "
++            + func.coalesce(Paciente.folio_paciente, "")
++        )
++        for term_text in paciente.split():
++            query = query.where(search_name.like(normalize_search(term_text)))
++    result: list[ReportePacienteItem] = []
++    pacientes = list(db.execute(query.order_by(*patient_order_columns()).limit(300)).scalars())
++    for paciente_row in pacientes:
++        last_query = (
++            select(Cita, Medico)
++            .join(Medico, Medico.id == Cita.medico_id)
++            .where(
++                Cita.paciente_id == paciente_row.id,
++                cita_agenda_access_predicate(db, current_user, business_today()),
++            )
++            .order_by(Cita.fecha_cita.desc(), Cita.hora_cita.desc())
++            .limit(1)
++        )
++        last = db.execute(last_query).first()
++        last_cita = last[0] if last else None
++        last_medico = last[1] if last else None
++        result.append(
++            ReportePacienteItem(
++                paciente_id=paciente_row.id,
++                folio_paciente=paciente_row.folio_paciente,
++                paciente=patient_last_first_name(paciente_row),
++                medico=medico_last_first_name(last_medico) if last_medico else None,
++                fecha_ultima_cita=last_cita.fecha_cita if last_cita else None,
++                hora_ultima_cita=last_cita.hora_cita if last_cita else None,
++                se_presento=latest_lobby_checkin(db, last_cita.id) is not None if last_cita else None,
++            )
++        )
++    return result
++
++
++@reportes_router.get("/medicos/citas", response_model=list[ReporteCitaItem])
++def reporte_medicos_citas(
++    fecha_desde: date | None = Query(default=None),
++    fecha_hasta: date | None = Query(default=None),
++    db: Session = Depends(get_db),
++    current_user: Usuario = ReportesMedicosReadUser,
++) -> list[ReporteCitaItem]:
++    start = fecha_desde or business_today()
++    end = fecha_hasta or start
++    validate_range(start, end)
++    return [report_cita_item(db, row) for row in report_citas_rows(db, current_user, start, end, medical_scope=True)]
++
++
++@reportes_router.get("/medicos/citas-agrupadas")
++def reporte_medicos_citas_agrupadas(
++    agrupacion: str = Query(default="mes", pattern="^(mes|semana|dia|hora)$"),
++    mes_desde: str | None = None,
++    mes_hasta: str | None = None,
++    semana_desde: str | None = None,
++    semana_hasta: str | None = None,
++    dia_desde: date | None = None,
++    dia_hasta: date | None = None,
++    semana: str | None = None,
++    db: Session = Depends(get_db),
++    current_user: Usuario = ReportesMedicosReadUser,
++) -> list[dict[str, Any]]:
++    start, end = report_range(
++        agrupacion,
++        mes_desde,
++        mes_hasta,
++        semana_desde,
++        semana_hasta,
++        dia_desde,
++        dia_hasta,
++        semana,
++    )
++    rows = report_citas_rows(db, current_user, start, end, medical_scope=True)
++    if agrupacion == "hora":
++        by_day = {start + timedelta(days=offset): empty_hours() for offset in range((end - start).days + 1)}
++        for cita, *_rest in rows:
++            by_day[cita.fecha_cita][f"{cita.hora_cita.hour:02d}:00"] += 1
++        return [
++            {
++                "fecha": day.isoformat(),
++                "dia_semana": SPANISH_WEEKDAYS[day.weekday()],
++                "horas": hours,
++                "total": sum(hours.values()),
++            }
++            for day, hours in sorted(by_day.items())
++        ]
++    grouped: defaultdict[str, int] = defaultdict(int)
++    for cita, *_rest in rows:
++        grouped[period_for_date(cita.fecha_cita, agrupacion)] += 1
++    return [{"periodo": key, "citas": grouped[key]} for key in sorted(grouped)]
++
++
++@reportes_router.get("/recepcion/citas-agrupadas")
++def reporte_recepcion_citas_agrupadas(
++    institucion_id: UUID,
++    agrupacion: str = Query(default="mes", pattern="^(mes|semana|dia|hora)$"),
++    mes_desde: str | None = None,
++    mes_hasta: str | None = None,
++    semana_desde: str | None = None,
++    semana_hasta: str | None = None,
++    dia_desde: date | None = None,
++    dia_hasta: date | None = None,
++    semana: str | None = None,
++    db: Session = Depends(get_db),
++    current_user: Usuario = ReportesRecepcionReadUser,
++) -> list[dict[str, Any]]:
++    ensure_report_institution_access(db, current_user, institucion_id)
++    start, end = report_range(
++        agrupacion,
++        mes_desde,
++        mes_hasta,
++        semana_desde,
++        semana_hasta,
++        dia_desde,
++        dia_hasta,
++        semana,
++    )
++    rows = report_citas_rows(db, current_user, start, end, medical_scope=False, institucion_id=institucion_id)
++    if agrupacion == "hora":
++        grouped_hours: dict[tuple[UUID, str, UUID, str, UUID, str, date], dict[str, int]] = {}
++        for cita, _paciente, _medico, _consultorio, piso, torre, complejo in rows:
++            key = (
++                complejo.id,
++                complejo.nombre,
++                torre.id,
++                torre_label(torre) or "",
++                piso.id,
++                piso_label(piso) or "",
++                cita.fecha_cita,
++            )
++            if key not in grouped_hours:
++                grouped_hours[key] = empty_hours()
++            grouped_hours[key][f"{cita.hora_cita.hour:02d}:00"] += 1
++        return [
++            {
++                "campus_id": str(campus_id),
++                "campus": campus,
++                "torre_id": str(torre_id),
++                "torre": torre,
++                "piso_id": str(piso_id),
++                "piso": piso,
++                "fecha": fecha.isoformat(),
++                "dia_semana": SPANISH_WEEKDAYS[fecha.weekday()],
++                "horas": hours,
++                "total": sum(hours.values()),
++            }
++            for (campus_id, campus, torre_id, torre, piso_id, piso, fecha), hours in sorted(
++                grouped_hours.items(),
++                key=lambda item: (item[0][1], item[0][3], item[0][5], item[0][6]),
++            )
++        ]
++    grouped_locations: defaultdict[tuple[UUID, str, UUID, str, UUID, str, str], int] = defaultdict(int)
++    for cita, _paciente, _medico, _consultorio, piso, torre, complejo in rows:
++        key = (
++            complejo.id,
++            complejo.nombre,
++            torre.id,
++            torre_label(torre) or "",
++            piso.id,
++            piso_label(piso) or "",
++            period_for_date(cita.fecha_cita, agrupacion),
++        )
++        grouped_locations[key] += 1
++    return [
++        {
++            "campus_id": str(campus_id),
++            "campus": campus,
++            "torre_id": str(torre_id),
++            "torre": torre,
++            "piso_id": str(piso_id),
++            "piso": piso,
++            "periodo": periodo,
++            "citas": count,
++        }
++        for (campus_id, campus, torre_id, torre, piso_id, piso, periodo), count in sorted(
++            grouped_locations.items(),
++            key=lambda item: (item[0][1], item[0][3], item[0][5], item[0][6]),
++        )
++    ]
++
++
+ @mobile_router.get("/session", response_model=MobileSessionResponse)
+ def mobile_session(db: Session = Depends(get_db), current_user: Usuario = MobileSessionUser) -> MobileSessionResponse:
+     roles = active_role_codes(db, current_user)
+@@ -2032,7 +2540,7 @@ def mobile_session(db: Session = Depends(get_db), current_user: Usuario = Mobile
+         nombre=current_user.nombre,
+         email=current_user.email,
+         roles=sorted(roles),
+-        can_checkin=bool(roles.intersection({"ADMIN_SISTEMA", "RECEPCIONISTA"})),
++        can_checkin=user_has_permission(db, current_user, "app-qr", "editar"),
+         can_view_logs=bool(roles.intersection({"ADMIN_SISTEMA", "ADMIN_NEGOCIO"})),
+     )
+ 
+@@ -2089,59 +2597,17 @@ def mobile_checkin_qr(
+     db: Session = Depends(get_db),
+     current_user: Usuario = MobileCheckinUser,
+ ) -> CheckinResponse:
+-    result = validate_qr(db, payload.token)
+-    if not result.valid or result.cita is None:
+-        record_audit_event(
+-            db,
+-            evento="QR_VALIDADO",
+-            entidad="qr_tokens",
+-            entidad_id=result.qr_token.id if result.qr_token else None,
+-            usuario_id=current_user.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"valido": False, "resultado": result.status},
+-        )
+-        db.commit()
+-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
++    return confirm_qr_checkin(payload, request, db, current_user)
+ 
+-    cita = result.cita
+-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+-    if resultado != "ROJO":
+-        event = create_arrival_event(
+-            db,
+-            cita,
+-            "CHECKIN_LOBBY",
+-            payload.canal,
+-            request,
+-            payload.sala_id,
+-            current_user.id,
+-            payload.dispositivo_id,
+-        )
+-        if result.qr_token is not None:
+-            result.qr_token.estado = "USADO"
+-        record_audit_event(
+-            db,
+-            evento="CHECKIN_LOBBY",
+-            entidad="eventos_llegada",
+-            entidad_id=event.id,
+-            usuario_id=current_user.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+-        )
+-    record_audit_event(
+-        db,
+-        evento="QR_VALIDADO",
+-        entidad="qr_tokens",
+-        entidad_id=result.qr_token.id if result.qr_token else None,
+-        usuario_id=current_user.id,
+-        canal=payload.canal,
+-        ip_origen=client_ip(request),
+-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
+-    )
+-    db.commit()
+-    db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++
++@mobile_router.post("/qr/validar", response_model=CheckinResponse)
++def mobile_validar_qr(
++    payload: QrCheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = MobileCheckinUser,
++) -> CheckinResponse:
++    return validate_qr_for_scan(payload, request, db, current_user)
+ 
+ 
+ @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)
+@@ -2187,68 +2653,22 @@ def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request,
+ 
+ @qr_router.post("/validar", response_model=QrValidarResponse)
+ def validar_qr(payload: QrValidarRequest, request: Request, db: Session = Depends(get_db)):
+-    result = validate_qr(db, payload.token)
+-    cita = result.cita
+-    record_audit_event(
+-        db,
+-        evento="QR_VALIDADO",
+-        entidad="qr_tokens",
+-        entidad_id=result.qr_token.id if result.qr_token else None,
+-        canal="API_EXTERNA",
+-        ip_origen=client_ip(request),
+-        valor_despues={"valido": result.valid, "resultado": result.status, "cita_id": str(cita.id) if cita else None},
+-    )
+-    db.commit()
++    response = validate_qr_for_scan(payload, request, db)
+     return QrValidarResponse(
+-        valido=result.valid,
+-        resultado=result.status,
+-        mensaje=result.message,
+-        cita_id=cita.id if cita else None,
+-        folio_turno=cita.folio_turno if cita else None,
+-        estado_cita=cita.estado if cita else None,
++        valido=response.resultado != "ROJO",
++        resultado=response.resultado,
++        mensaje=response.mensaje,
++        cita_id=response.cita_id,
++        folio_turno=response.folio_turno,
++        estado_cita=response.estado_cita,
++        requiere_confirmacion=response.requiere_confirmacion,
++        fecha_label=response.fecha_label,
++        torre=response.torre,
++        piso=response.piso,
++        checkin_at=response.checkin_at,
+     )
+ 
+ 
+ @qr_router.post("/checkin", response_model=CheckinResponse)
+ def checkin_qr(payload: QrCheckinRequest, request: Request, db: Session = Depends(get_db)):
+-    result = validate_qr(db, payload.token)
+-    if not result.valid or result.cita is None:
+-        record_audit_event(
+-            db,
+-            evento="QR_VALIDADO",
+-            entidad="qr_tokens",
+-            entidad_id=result.qr_token.id if result.qr_token else None,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"valido": False, "resultado": result.status},
+-        )
+-        db.commit()
+-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
+-
+-    cita = result.cita
+-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+-    if resultado != "ROJO":
+-        event = create_arrival_event(db, cita, "CHECKIN_LOBBY", payload.canal, request, payload.sala_id, dispositivo_id=payload.dispositivo_id)
+-        if result.qr_token is not None:
+-            result.qr_token.estado = "USADO"
+-        record_audit_event(
+-            db,
+-            evento="CHECKIN_LOBBY",
+-            entidad="eventos_llegada",
+-            entidad_id=event.id,
+-            canal=payload.canal,
+-            ip_origen=client_ip(request),
+-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+-        )
+-    record_audit_event(
+-        db,
+-        evento="QR_VALIDADO",
+-        entidad="qr_tokens",
+-        entidad_id=result.qr_token.id if result.qr_token else None,
+-        canal=payload.canal,
+-        ip_origen=client_ip(request),
+-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
+-    )
+-    db.commit()
+-    db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++    return confirm_qr_checkin(payload, request, db)
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index 39b98f8..89afe98 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -15,6 +15,7 @@ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
+ api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
+ api_router.include_router(flow.catalogos_operativos_router, prefix="/catalogos-operativos", tags=["catalogos-operativos"])
+ api_router.include_router(flow.recepcion_router, prefix="/recepcion", tags=["recepcion"])
++api_router.include_router(flow.reportes_router, prefix="/reportes", tags=["reportes"])
+ api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
+ api_router.include_router(kiosks.router, tags=["kiosks"])
+ api_router.include_router(operational.roles_router, prefix="/roles", tags=["roles"])
+diff --git a/access-manager/backend/app/constants.py b/access-manager/backend/app/constants.py
+index dacf995..89604e3 100644
+--- a/access-manager/backend/app/constants.py
++++ b/access-manager/backend/app/constants.py
+@@ -42,5 +42,35 @@ MENU_SCREEN_KEYS = (
+     "kioskos",
+     "turnos-llamados",
+     "reportes",
++    "reportes-medicos",
++    "reportes-recepcion",
+     "auditoria",
+ )
++
++APP_PERMISSION_KEYS = (
++    "app-qr",
++    "app-medicos",
++)
++
++PERMISSION_KEYS = MENU_SCREEN_KEYS + APP_PERMISSION_KEYS
++
++ROLE_DEFAULT_PERMISSIONS = {
++    "RECEPCIONISTA": {
++        "recepcion": "editar",
++        "checkin-qr": "editar",
++        "app-qr": "editar",
++        "reportes-recepcion": "consultar",
++    },
++    "MEDICO": {
++        "pacientes": "consultar",
++        "citas": "consultar",
++        "reportes-medicos": "consultar",
++        "app-medicos": "editar",
++    },
++}
++
++
++def default_permissions_for_role(codigo: str) -> dict[str, str]:
++    if codigo == "ADMIN_SISTEMA":
++        return {screen: "editar" for screen in PERMISSION_KEYS}
++    return dict(ROLE_DEFAULT_PERMISSIONS.get(codigo, {}))
+diff --git a/access-manager/backend/app/core/security.py b/access-manager/backend/app/core/security.py
+index e4b78c6..b1e15ac 100644
+--- a/access-manager/backend/app/core/security.py
++++ b/access-manager/backend/app/core/security.py
+@@ -11,6 +11,7 @@ from jose import JWTError, jwt
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session
+ 
++from app.constants import default_permissions_for_role
+ from app.core.config import get_settings
+ from app.core.database import get_db
+ from app.models.usuario import Usuario
+@@ -143,7 +144,7 @@ def require_permission(*screen_keys: str, minimum: str = "consultar"):
+ 
+         required_level = ACCESS_ORDER[minimum]
+         for role in roles:
+-            permissions = role.permisos or {}
++            permissions = {**default_permissions_for_role(role.codigo), **(role.permisos or {})}
+             for screen_key in screen_keys:
+                 access = permissions.get(screen_key, "sin")
+                 if ACCESS_ORDER.get(access, 0) >= required_level:
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index de0a3ee..907fe31 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -203,6 +203,11 @@ class QrValidarResponse(BaseModel):
+     cita_id: UUID | None = None
+     folio_turno: str | None = None
+     estado_cita: str | None = None
++    requiere_confirmacion: bool = False
++    fecha_label: str | None = None
++    torre: str | None = None
++    piso: str | None = None
++    checkin_at: datetime | None = None
+ 
+ 
+ class CheckinRequest(BaseModel):
+@@ -236,6 +241,11 @@ class CheckinResponse(BaseModel):
+     cita_id: UUID | None = None
+     folio_turno: str | None = None
+     estado_cita: str | None = None
++    requiere_confirmacion: bool = False
++    fecha_label: str | None = None
++    torre: str | None = None
++    piso: str | None = None
++    checkin_at: datetime | None = None
+ 
+ 
+ class ReceptionOption(BaseModel):
+@@ -305,3 +315,63 @@ class CitaActionResponse(BaseModel):
+     id: UUID
+     estado: str
+     folio_turno: str
++
++
++class ReportePacienteItem(BaseModel):
++    paciente_id: UUID
++    folio_paciente: str
++    paciente: str
++    medico: str | None = None
++    fecha_ultima_cita: date | None = None
++    hora_ultima_cita: time | None = None
++    se_presento: bool | None = None
++
++
++class ReporteCitaItem(BaseModel):
++    cita_id: UUID
++    fecha_cita: date
++    hora_cita: time
++    paciente: str
++    medico: str
++    campus: str
++    torre: str
++    piso: str
++    consultorio: str
++    estado: str
++    se_presento: bool
++
++
++class ReporteAgrupadoItem(BaseModel):
++    periodo: str
++    citas: int
++
++
++class ReporteHorarioItem(BaseModel):
++    fecha: date
++    dia_semana: str
++    horas: dict[str, int]
++    total: int
++
++
++class ReporteRecepcionAgrupadoItem(BaseModel):
++    campus_id: UUID
++    campus: str
++    torre_id: UUID
++    torre: str
++    piso_id: UUID
++    piso: str
++    periodo: str
++    citas: int
++
++
++class ReporteRecepcionHorarioItem(BaseModel):
++    campus_id: UUID
++    campus: str
++    torre_id: UUID
++    torre: str
++    piso_id: UUID
++    piso: str
++    fecha: date
++    dia_semana: str
++    horas: dict[str, int]
++    total: int
+diff --git a/access-manager/backend/app/services/qr_service.py b/access-manager/backend/app/services/qr_service.py
+index b2ac47d..03483dc 100644
+--- a/access-manager/backend/app/services/qr_service.py
++++ b/access-manager/backend/app/services/qr_service.py
+@@ -136,7 +136,14 @@ def validate_qr(db: Session, token: str) -> QrValidationResult:
+     if qr_token is None:
+         return QrValidationResult(False, "ROJO", "El QR no está registrado.")
+     if qr_token.estado != "GENERADO":
+-        return QrValidationResult(False, "ROJO", f"El QR está en estado {qr_token.estado}.", qr_token=qr_token)
++        cita = db.get(Cita, cita_id)
++        return QrValidationResult(
++            False,
++            qr_token.estado,
++            f"El QR está en estado {qr_token.estado}.",
++            cita=cita,
++            qr_token=qr_token,
++        )
+     if qr_token.fecha_expiracion <= timestamp:
+         qr_token.estado = "EXPIRADO"
+         db.flush()
+diff --git a/access-manager/backend/app/services/reset_data.py b/access-manager/backend/app/services/reset_data.py
+index 9c8caeb..e1c8693 100644
+--- a/access-manager/backend/app/services/reset_data.py
++++ b/access-manager/backend/app/services/reset_data.py
+@@ -5,6 +5,7 @@ import logging
+ from sqlalchemy import delete, select
+ from sqlalchemy.orm import Session
+ 
++from app.constants import ROLE_DEFAULT_PERMISSIONS
+ from app.core.config import get_settings
+ from app.core.database import SessionLocal
+ from app.core.logging import configure_logging
+@@ -42,14 +43,6 @@ ROLE_SEEDS = (
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
+ )
+-ROLE_DEFAULT_PERMISSIONS = {
+-    "RECEPCIONISTA": {
+-        "recepcion": "editar",
+-        "checkin-qr": "editar",
+-    },
+-}
+-
+-
+ def delete_all(db: Session, model: type) -> int:
+     result = db.execute(delete(model))
+     return int(result.rowcount or 0)
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 03dc6f1..3688e3a 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
+ 
+ from sqlalchemy import select
+ 
++from app.constants import ROLE_DEFAULT_PERMISSIONS
+ from app.core.config import get_settings
+ from app.core.database import SessionLocal
+ from app.core.logging import configure_logging
+@@ -43,14 +44,6 @@ ROLE_SEEDS = (
+     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
+     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
+ )
+-ROLE_DEFAULT_PERMISSIONS = {
+-    "RECEPCIONISTA": {
+-        "recepcion": "editar",
+-        "checkin-qr": "editar",
+-    },
+-}
+-
+-
+ def apply_default_role_permissions(role: Role) -> None:
+     defaults = ROLE_DEFAULT_PERMISSIONS.get(role.codigo)
+     if not defaults:
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 127c664..29932e2 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -147,6 +147,8 @@ watch(
+         <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
+         <span class="nav-section">Reportes</span>
+         <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
++        <RouterLink to="/reportes/medicos" :class="{ disabled: !canUse('/reportes/medicos') }" :aria-disabled="!canUse('/reportes/medicos')" @click="handleNav($event, '/reportes/medicos')">Reportes médicos</RouterLink>
++        <RouterLink to="/reportes/recepcion" :class="{ disabled: !canUse('/reportes/recepcion') }" :aria-disabled="!canUse('/reportes/recepcion')" @click="handleNav($event, '/reportes/recepcion')">Reportes recepción</RouterLink>
+         <RouterLink to="/auditoria" :class="{ disabled: !canUse('/auditoria') }" :aria-disabled="!canUse('/auditoria')" @click="handleNav($event, '/auditoria')">Auditoría</RouterLink>
+       </nav>
+       <button v-if="isAuthenticated" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index 00410ef..0b189bb 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -12,6 +12,14 @@ export type ScreenDefinition = {
+   path: string;
+ };
+ 
++export type AccessDefinition = {
++  key: string;
++  label: string;
++  path?: string;
++  kind: 'screen' | 'app';
++  allowedLevels?: AccessLevel[];
++};
++
+ export const screens: ScreenDefinition[] = [
+   { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
+   { key: 'perfil', label: 'Perfil', path: '/perfil' },
+@@ -40,9 +48,21 @@ export const screens: ScreenDefinition[] = [
+   { key: 'kioskos', label: 'Kioskos', path: '/kioskos' },
+   { key: 'turnos-llamados', label: 'Turnos llamados', path: '/turnos-llamados' },
+   { key: 'reportes', label: 'Reportes', path: '/reportes' },
++  { key: 'reportes-medicos', label: 'Reportes médicos', path: '/reportes/medicos' },
++  { key: 'reportes-recepcion', label: 'Reportes recepción', path: '/reportes/recepcion' },
+   { key: 'auditoria', label: 'Auditoría', path: '/auditoria' },
+ ];
+ 
++export const appAccessDefinitions: AccessDefinition[] = [
++  { key: 'app-qr', label: 'App de QR', kind: 'app', allowedLevels: ['sin', 'editar'] },
++  { key: 'app-medicos', label: 'App médicos', kind: 'app', allowedLevels: ['sin', 'editar'] },
++];
++
++export const accessDefinitions: AccessDefinition[] = [
++  ...screens.map((screen) => ({ ...screen, kind: 'screen' as const })),
++  ...appAccessDefinitions,
++];
++
+ export const screenByPath = new Map(screens.map((screen) => [screen.path, screen]));
+ export const screenByKey = new Map(screens.map((screen) => [screen.key, screen]));
+ export const DEFAULT_INITIAL_SCREEN = 'perfil';
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index a8e785f..9495a0d 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -501,6 +501,71 @@ export type CheckinResponse = {
+   cita_id?: string | null;
+   folio_turno?: string | null;
+   estado_cita?: string | null;
++  requiere_confirmacion?: boolean;
++  fecha_label?: string | null;
++  torre?: string | null;
++  piso?: string | null;
++  checkin_at?: string | null;
++};
++
++export type ReportePacienteItem = {
++  paciente_id: string;
++  folio_paciente: string;
++  paciente: string;
++  medico?: string | null;
++  fecha_ultima_cita?: string | null;
++  hora_ultima_cita?: string | null;
++  se_presento?: boolean | null;
++};
++
++export type ReporteCitaItem = {
++  cita_id: string;
++  fecha_cita: string;
++  hora_cita: string;
++  paciente: string;
++  medico: string;
++  campus: string;
++  torre: string;
++  piso: string;
++  consultorio: string;
++  estado: string;
++  se_presento: boolean;
++};
++
++export type ReporteAgrupadoItem = {
++  periodo: string;
++  citas: number;
++};
++
++export type ReporteHorarioItem = {
++  fecha: string;
++  dia_semana: string;
++  horas: Record<string, number>;
++  total: number;
++};
++
++export type ReporteRecepcionAgrupadoItem = {
++  campus_id: string;
++  campus: string;
++  torre_id: string;
++  torre: string;
++  piso_id: string;
++  piso: string;
++  periodo: string;
++  citas: number;
++};
++
++export type ReporteRecepcionHorarioItem = {
++  campus_id: string;
++  campus: string;
++  torre_id: string;
++  torre: string;
++  piso_id: string;
++  piso: string;
++  fecha: string;
++  dia_semana: string;
++  horas: Record<string, number>;
++  total: number;
+ };
+ 
+ export type ReceptionOption = {
+@@ -879,6 +944,11 @@ export const receptionQrCheckin = (token: string) =>
+     method: 'POST',
+     body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
+   });
++export const receptionQrValidate = (token: string) =>
++  apiFetch<CheckinResponse>('/recepcion/qr/validar', {
++    method: 'POST',
++    body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
++  });
+ 
+ export function searchPacientes(q: string, medicoId?: string) {
+   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
+@@ -1054,6 +1124,35 @@ export function validarQr(token: string) {
+   });
+ }
+ 
++export type MedicalGroupedReportParams = {
++  agrupacion: 'mes' | 'semana' | 'dia' | 'hora';
++  mes_desde?: string;
++  mes_hasta?: string;
++  semana_desde?: string;
++  semana_hasta?: string;
++  dia_desde?: string;
++  dia_hasta?: string;
++  semana?: string;
++};
++
++export type ReceptionGroupedReportParams = MedicalGroupedReportParams & {
++  institucion_id: string;
++};
++
++export const listReporteMedicoPacientes = (params: { medico_id?: string; paciente?: string } = {}) =>
++  apiFetch<ReportePacienteItem[]>(`/reportes/medicos/pacientes${queryString(params)}`);
++
++export const listReporteMedicoCitas = (params: { fecha_desde?: string; fecha_hasta?: string } = {}) =>
++  apiFetch<ReporteCitaItem[]>(`/reportes/medicos/citas${queryString(params)}`);
++
++export const listReporteMedicoAgrupado = (params: MedicalGroupedReportParams) =>
++  apiFetch<Array<ReporteAgrupadoItem | ReporteHorarioItem>>(`/reportes/medicos/citas-agrupadas${queryString(params)}`);
++
++export const listReporteRecepcionAgrupado = (params: ReceptionGroupedReportParams) =>
++  apiFetch<Array<ReporteRecepcionAgrupadoItem | ReporteRecepcionHorarioItem>>(
++    `/reportes/recepcion/citas-agrupadas${queryString(params)}`,
++  );
++
+ export function cancelarCita(citaId: string) {
+   return apiFetch<{ id: string; estado: string; folio_turno: string }>(`/citas/${citaId}/cancelar`, { method: 'PATCH' });
+ }
+diff --git a/access-manager/frontend/src/exporters.ts b/access-manager/frontend/src/exporters.ts
+index 55e1070..21ac1b7 100644
+--- a/access-manager/frontend/src/exporters.ts
++++ b/access-manager/frontend/src/exporters.ts
+@@ -1,4 +1,4 @@
+-export type ExportFormat = 'excel' | 'csv' | 'json';
++export type ExportFormat = 'excel' | 'csv' | 'json' | 'pdf';
+ export type ExportColumn<T> = {
+   key: keyof T | string;
+   label: string;
+@@ -68,6 +68,15 @@ export function exportRows<T extends object>(
+   const body = rows
+     .map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(cellValue(row, column))}</td>`).join('')}</tr>`)
+     .join('');
++  if (format === 'pdf') {
++    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(safeName)}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#17202a}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #d9e1ea;padding:8px;text-align:left}th{font-size:12px;text-transform:uppercase;color:#526172}</style></head><body><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table><script>window.print();</script></body></html>`;
++    const popup = window.open('', '_blank');
++    if (popup) {
++      popup.document.write(html);
++      popup.document.close();
++    }
++    return;
++  }
+   const html = `<html><head><meta charset="utf-8"></head><body><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+   downloadBlob(html, 'application/vnd.ms-excel;charset=utf-8', `${safeName}.xls`);
+ }
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 970772a..4142bd0 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -25,6 +25,8 @@ import CheckinQrView from '../views/CheckinQrView.vue';
+ import PantallasTurnosView from '../views/PantallasTurnosView.vue';
+ import ContactosInstitucionalesView from '../views/ContactosInstitucionalesView.vue';
+ import ReportesView from '../views/ReportesView.vue';
++import ReportesMedicosView from '../views/ReportesMedicosView.vue';
++import ReportesRecepcionView from '../views/ReportesRecepcionView.vue';
+ import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
+ import KioskosView from '../views/KioskosView.vue';
+ import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
+@@ -59,6 +61,8 @@ const router = createRouter({
+     { path: '/checkin-qr', component: CheckinQrView },
+     { path: '/busqueda-usuarios', component: BusquedaUsuariosView },
+     { path: '/reportes', component: ReportesView },
++    { path: '/reportes/medicos', component: ReportesMedicosView },
++    { path: '/reportes/recepcion', component: ReportesRecepcionView },
+     { path: '/contactos-institucionales', component: ContactosInstitucionalesView },
+     { path: '/asignaciones', component: AsignacionesView },
+     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 35dc7f1..ae79a4f 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -51,6 +51,12 @@ button:disabled {
+   color: #243447;
+ }
+ 
++.white-button {
++  background: #ffffff;
++  border: 1px solid #c6d1dd;
++  color: #243447;
++}
++
+ .fullscreen-frame {
+   display: grid;
+   grid-template-rows: minmax(0, 1fr) auto;
+@@ -460,6 +466,14 @@ input[readonly] {
+   width: auto;
+ }
+ 
++.permission-empty {
++  color: #8a9bae;
++  display: inline-flex;
++  font-weight: 700;
++  min-width: 2rem;
++  justify-content: center;
++}
++
+ .actions-row,
+ .inline-actions {
+   align-items: center;
+@@ -890,7 +904,30 @@ pre {
+ }
+ 
+ .qr-result strong {
++  align-items: center;
++  display: flex;
+   font-size: 1.5rem;
++  gap: 0.5rem;
++}
++
++.qr-result-icon {
++  align-items: center;
++  border-radius: 999px;
++  display: inline-flex;
++  font-size: 1.15rem;
++  height: 2rem;
++  justify-content: center;
++  width: 2rem;
++}
++
++.qr-result.verde .qr-result-icon {
++  background: #168451;
++  color: #ffffff;
++}
++
++.qr-result.rojo .qr-result-icon {
++  background: #d92d20;
++  color: #ffffff;
+ }
+ 
+ .qr-result.verde {
+diff --git a/access-manager/frontend/src/views/CheckinQrView.vue b/access-manager/frontend/src/views/CheckinQrView.vue
+index c156ad1..2fa367e 100644
+--- a/access-manager/frontend/src/views/CheckinQrView.vue
++++ b/access-manager/frontend/src/views/CheckinQrView.vue
+@@ -1,10 +1,12 @@
+ <script setup lang="ts">
+ import { nextTick, onMounted, ref } from 'vue';
+-import { receptionQrCheckin, type CheckinResponse } from '../api/client';
++import { receptionQrCheckin, receptionQrValidate, type CheckinResponse } from '../api/client';
+ 
+ const qrToken = ref('');
++const pendingToken = ref('');
+ const inputRef = ref<HTMLInputElement | null>(null);
+ const loading = ref(false);
++const confirming = ref(false);
+ const error = ref('');
+ const result = ref<CheckinResponse | null>(null);
+ const scans = ref<Array<{ at: string; resultado: string; mensaje: string; folio?: string | null }>>([]);
+@@ -32,18 +34,50 @@ async function submitQr() {
+   error.value = '';
+   result.value = null;
+   try {
+-    const response = await receptionQrCheckin(token);
++    const response = await receptionQrValidate(token);
+     result.value = response;
++    pendingToken.value = response.requiere_confirmacion ? token : '';
+     pushScan(response);
+-    qrToken.value = '';
++    if (!response.requiere_confirmacion) {
++      qrToken.value = '';
++    }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible validar el QR.';
+   } finally {
+     loading.value = false;
++    if (!result.value?.requiere_confirmacion) {
++      focusInput();
++    }
++  }
++}
++
++async function confirmQr() {
++  const token = pendingToken.value;
++  if (!token || confirming.value) return;
++  confirming.value = true;
++  error.value = '';
++  try {
++    const response = await receptionQrCheckin(token);
++    result.value = response;
++    pendingToken.value = '';
++    qrToken.value = '';
++    pushScan(response);
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible registrar el check-in.';
++  } finally {
++    confirming.value = false;
+     focusInput();
+   }
+ }
+ 
++function resetScan() {
++  result.value = null;
++  pendingToken.value = '';
++  qrToken.value = '';
++  error.value = '';
++  focusInput();
++}
++
+ function resultClass(response: CheckinResponse | null) {
+   if (!response) return '';
+   return response.resultado.toLowerCase();
+@@ -75,13 +109,21 @@ onMounted(focusInput);
+             placeholder="Escanee o pegue el código"
+           />
+         </div>
+-        <button type="submit" :disabled="loading || !qrToken.trim()">{{ loading ? 'Validando...' : 'Registrar' }}</button>
++        <button type="submit" :disabled="loading || !qrToken.trim()">{{ loading ? 'Validando...' : 'Validar' }}</button>
+       </form>
+ 
+       <div v-if="result" class="qr-result" :class="resultClass(result)">
+-        <strong>{{ result.resultado }}</strong>
+-        <span>{{ result.mensaje }}</span>
++        <strong><span class="qr-result-icon">{{ result.resultado === 'ROJO' ? '✕' : '✓' }}</span>{{ result.mensaje }}</strong>
++        <span v-if="result.fecha_label">{{ result.fecha_label }}</span>
++        <span v-if="result.torre || result.piso">{{ [result.torre, result.piso].filter(Boolean).join(' · ') }}</span>
+         <small v-if="result.folio_turno">Turno {{ result.folio_turno }}</small>
++        <div v-if="result.requiere_confirmacion" class="actions-row">
++          <button class="success" type="button" :disabled="confirming" @click="confirmQr">{{ confirming ? 'Registrando...' : '✓ Confirmar' }}</button>
++          <button class="white-button" type="button" @click="resetScan">Regresar</button>
++        </div>
++        <div v-else class="actions-row">
++          <button class="white-button" type="button" @click="resetScan">Regresar</button>
++        </div>
+       </div>
+       <p v-if="error" class="error">{{ error }}</p>
+     </section>
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index e28d19f..0517631 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -29,7 +29,7 @@ import {
+   type Usuario,
+ } from '../api/client';
+ import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
+-import { exportRows, type ExportFormat } from '../exporters';
++import { exportRows } from '../exporters';
+ import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
+ 
+ const citas = ref<Cita[]>([]);
+@@ -322,7 +322,7 @@ const exportColumns = [
+   { key: 'tipo', label: 'Tipo' },
+ ];
+ 
+-async function exportCitas(format: ExportFormat) {
++async function exportCitas(format: 'excel' | 'csv' | 'json') {
+   error.value = '';
+   try {
+     await auditCitasExport({ ...requestFilters(), formato: format });
+diff --git a/access-manager/frontend/src/views/RolesView.vue b/access-manager/frontend/src/views/RolesView.vue
+index db07336..67729db 100644
+--- a/access-manager/frontend/src/views/RolesView.vue
++++ b/access-manager/frontend/src/views/RolesView.vue
+@@ -1,6 +1,6 @@
+ <script setup lang="ts">
+ import { computed, onMounted, reactive, ref } from 'vue';
+-import { accessLevels, screens } from '../accessControl';
++import { accessDefinitions, accessLevels, screens, type AccessDefinition } from '../accessControl';
+ import { activateResource, createRole, deactivateResource, listRoles, updateRole, type AccessLevel, type Role } from '../api/client';
+ 
+ const roles = ref<Role[]>([]);
+@@ -26,16 +26,20 @@ const formTitle = computed(() => {
+ });
+ 
+ function blankPermissions() {
+-  return Object.fromEntries(screens.map((screen) => [screen.key, 'sin' as AccessLevel]));
++  return Object.fromEntries(accessDefinitions.map((screen) => [screen.key, 'sin' as AccessLevel]));
+ }
+ 
+ function defaultPermissions(role: Role | null) {
+   if (role?.codigo === 'ADMIN_SISTEMA') {
+-    return Object.fromEntries(screens.map((screen) => [screen.key, 'editar' as AccessLevel]));
++    return Object.fromEntries(accessDefinitions.map((screen) => [screen.key, 'editar' as AccessLevel]));
+   }
+   return blankPermissions();
+ }
+ 
++function canSelectAccess(definition: AccessDefinition, level: AccessLevel) {
++  return !definition.allowedLevels || definition.allowedLevels.includes(level);
++}
++
+ function setForm(role: Role | null) {
+   selected.value = role;
+   creating.value = false;
+@@ -207,13 +211,14 @@ onMounted(loadData);
+                 </tr>
+               </thead>
+               <tbody>
+-                <tr v-for="screen in screens" :key="screen.key">
++                <tr v-for="screen in accessDefinitions" :key="screen.key">
+                   <td>{{ screen.label }}</td>
+                   <td v-for="level in accessLevels" :key="`${screen.key}-${level.value}`">
+-                    <label class="check-row">
++                    <label v-if="canSelectAccess(screen, level.value)" class="check-row">
+                       <input v-model="form.permisos[screen.key]" type="radio" :name="`perm-${screen.key}`" :value="level.value" />
+                       {{ level.label }}
+                     </label>
++                    <span v-else class="permission-empty" aria-label="No aplica">-</span>
+                   </td>
+                 </tr>
+               </tbody>
+diff --git a/access-manager/mobile-pwa/src/api.ts b/access-manager/mobile-pwa/src/api.ts
+index 3498512..4dec353 100644
+--- a/access-manager/mobile-pwa/src/api.ts
++++ b/access-manager/mobile-pwa/src/api.ts
+@@ -13,6 +13,11 @@ export type CheckinResponse = {
+   cita_id?: string | null;
+   folio_turno?: string | null;
+   estado_cita?: string | null;
++  requiere_confirmacion?: boolean;
++  fecha_label?: string | null;
++  torre?: string | null;
++  piso?: string | null;
++  checkin_at?: string | null;
+ };
+ 
+ export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
+@@ -49,3 +54,10 @@ export function checkinQr(token: string) {
+     body: JSON.stringify({ token, canal: 'APP_MOVIL', dispositivo_id: 'mobile-pwa' }),
+   });
+ }
++
++export function validateQr(token: string) {
++  return apiFetch<CheckinResponse>('/qr/validar', {
++    method: 'POST',
++    body: JSON.stringify({ token }),
++  });
++}
+diff --git a/access-manager/mobile-pwa/src/views/ScanQrView.vue b/access-manager/mobile-pwa/src/views/ScanQrView.vue
+index ba976fb..24c4111 100644
+--- a/access-manager/mobile-pwa/src/views/ScanQrView.vue
++++ b/access-manager/mobile-pwa/src/views/ScanQrView.vue
+@@ -1,28 +1,47 @@
+ <script setup lang="ts">
+ import { ref } from 'vue';
+-import { checkinQr, type CheckinResponse } from '../api';
++import { checkinQr, validateQr, type CheckinResponse } from '../api';
+ 
+ defineEmits<{
+   back: [];
+ }>();
+ 
+ const token = ref('');
++const pendingToken = ref('');
+ const result = ref<CheckinResponse | null>(null);
+ const error = ref('');
+ const loading = ref(false);
++const confirming = ref(false);
+ 
+ async function submit() {
+   if (!token.value.trim()) return;
+   loading.value = true;
+   error.value = '';
+   try {
+-    result.value = await checkinQr(token.value.trim());
++    const response = await validateQr(token.value.trim());
++    result.value = response;
++    pendingToken.value = response.requiere_confirmacion ? token.value.trim() : '';
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible validar el QR.';
+   } finally {
+     loading.value = false;
+   }
+ }
++
++async function confirm() {
++  if (!pendingToken.value) return;
++  confirming.value = true;
++  error.value = '';
++  try {
++    result.value = await checkinQr(pendingToken.value);
++    pendingToken.value = '';
++    token.value = '';
++  } catch (err) {
++    error.value = err instanceof Error ? err.message : 'No fue posible registrar el check-in.';
++  } finally {
++    confirming.value = false;
++  }
++}
+ </script>
+ 
+ <template>
+@@ -31,10 +50,14 @@ async function submit() {
+       <div class="scan-box">Cámara pendiente</div>
+       <label for="qr">Token QR</label>
+       <input id="qr" v-model="token" placeholder="Pegar token" />
+-      <button class="primary" type="submit" :disabled="loading">Registrar llegada</button>
++      <button class="primary" type="submit" :disabled="loading">Validar</button>
+       <div v-if="result" class="result" :class="result.resultado.toLowerCase()">
+-        <strong>{{ result.resultado }}</strong>
+-        <span>{{ result.mensaje }}</span>
++        <strong>{{ result.resultado === 'ROJO' ? '✕' : '✓' }} {{ result.mensaje }}</strong>
++        <span v-if="result.fecha_label">{{ result.fecha_label }}</span>
++        <span v-if="result.torre || result.piso">{{ [result.torre, result.piso].filter(Boolean).join(' · ') }}</span>
++        <button v-if="result.requiere_confirmacion" class="primary" type="button" :disabled="confirming" @click="confirm">
++          {{ confirming ? 'Registrando...' : '✓ Confirmar' }}
++        </button>
+       </div>
+       <p v-if="error" class="error">{{ error }}</p>
+     </form>
+diff --git a/access-manager/mobile/lib/api_client.dart b/access-manager/mobile/lib/api_client.dart
+index 221b364..b36d412 100644
+--- a/access-manager/mobile/lib/api_client.dart
++++ b/access-manager/mobile/lib/api_client.dart
+@@ -85,6 +85,22 @@ class ApiClient {
+     return CheckinResponse.fromJson(payload);
+   }
+ 
++  Future<CheckinResponse> validateQr(String qrToken, String deviceId) async {
++    final body = {
++      'token': qrToken,
++      'canal': 'APP_MOVIL',
++      'dispositivo_id': deviceId,
++    };
++    Map<String, dynamic> payload;
++    try {
++      payload = await _request<Map<String, dynamic>>('POST', '/mobile/qr/validar', body: body);
++    } on ApiException catch (error) {
++      if (!_isMissingMobileRoute(error)) rethrow;
++      payload = await _request<Map<String, dynamic>>('POST', '/qr/validar', body: {'token': qrToken});
++    }
++    return CheckinResponse.fromJson(payload);
++  }
++
+   Future<CheckinResponse> checkinManual(String citaId, String deviceId) async {
+     final body = {
+       'canal': 'APP_MOVIL',
+diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+index 2f0b9bd..aef1bb6 100644
+--- a/access-manager/mobile/lib/main.dart
++++ b/access-manager/mobile/lib/main.dart
+@@ -525,23 +525,26 @@ class _QrCheckinScreenState extends State<QrCheckinScreen> {
+     });
+     await _controller.stop();
+     try {
+-      final response = await widget.api.checkinQr(qrToken, widget.deviceId);
+-      if (response.folioTurno != null) {
+-        await widget.logStore.add(qrToken: qrToken, folioTurno: response.folioTurno, recepcionistaLogin: widget.session.email);
+-      }
+-      TicketResponse? ticket;
+-      String? ticketError;
+-      if (response.citaId != null) {
+-        try {
+-          ticket = await widget.api.fetchTicket(response.citaId!);
+-        } catch (error) {
+-          ticketError = 'Llegada registrada, pero no fue posible obtener el ticket: $error';
+-        }
+-      }
++      final response = await widget.api.validateQr(qrToken, widget.deviceId);
+       if (!mounted) return;
+-      await Navigator.of(context).pushReplacement(
+-        MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: ticket, initialError: ticketError)),
+-      );
++      if (response.requiereConfirmacion) {
++        await Navigator.of(context).pushReplacement(
++          MaterialPageRoute(
++            builder: (_) => QrConfirmScreen(
++              api: widget.api,
++              logStore: widget.logStore,
++              session: widget.session,
++              deviceId: widget.deviceId,
++              qrToken: qrToken!,
++              preview: response,
++            ),
++          ),
++        );
++      } else {
++        await Navigator.of(context).pushReplacement(
++          MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: null)),
++        );
++      }
+     } catch (error) {
+       if (!mounted) return;
+       setState(() {
+@@ -589,6 +592,141 @@ class _QrCheckinScreenState extends State<QrCheckinScreen> {
+   }
+ }
+ 
++class QrConfirmScreen extends StatefulWidget {
++  const QrConfirmScreen({
++    super.key,
++    required this.api,
++    required this.logStore,
++    required this.session,
++    required this.deviceId,
++    required this.qrToken,
++    required this.preview,
++  });
++
++  final ApiClient api;
++  final LocalLogStore logStore;
++  final SavedSession session;
++  final String deviceId;
++  final String qrToken;
++  final CheckinResponse preview;
++
++  @override
++  State<QrConfirmScreen> createState() => _QrConfirmScreenState();
++}
++
++class _QrConfirmScreenState extends State<QrConfirmScreen> {
++  bool _loading = false;
++  String? _error;
++
++  void _backToScan() {
++    Navigator.of(context).pushReplacement(
++      MaterialPageRoute(
++        builder: (_) => QrCheckinScreen(
++          api: widget.api,
++          logStore: widget.logStore,
++          session: widget.session,
++          deviceId: widget.deviceId,
++        ),
++      ),
++    );
++  }
++
++  Future<void> _confirm() async {
++    setState(() {
++      _loading = true;
++      _error = null;
++    });
++    try {
++      final response = await widget.api.checkinQr(widget.qrToken, widget.deviceId);
++      if (response.folioTurno != null) {
++        await widget.logStore.add(qrToken: widget.qrToken, folioTurno: response.folioTurno, recepcionistaLogin: widget.session.email);
++      }
++      TicketResponse? ticket;
++      String? ticketError;
++      if (response.citaId != null) {
++        try {
++          ticket = await widget.api.fetchTicket(response.citaId!);
++        } catch (error) {
++          ticketError = 'Llegada registrada, pero no fue posible obtener el ticket: $error';
++        }
++      }
++      if (!mounted) return;
++      await Navigator.of(context).pushReplacement(
++        MaterialPageRoute(builder: (_) => CheckinResultScreen(response: response, ticket: ticket, initialError: ticketError)),
++      );
++    } catch (error) {
++      if (!mounted) return;
++      setState(() => _error = error.toString());
++    } finally {
++      if (mounted) {
++        setState(() => _loading = false);
++      }
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final detail = [
++      if ((widget.preview.fechaLabel ?? '').isNotEmpty) widget.preview.fechaLabel!,
++      if ((widget.preview.torre ?? '').isNotEmpty) widget.preview.torre!,
++      if ((widget.preview.piso ?? '').isNotEmpty) widget.preview.piso!,
++    ].join(' · ');
++    return Scaffold(
++      appBar: AppBar(title: const Text('Confirmar llegada')),
++      body: SafeArea(
++        child: ListView(
++          padding: const EdgeInsets.all(18),
++          children: [
++            Card(
++              child: Padding(
++                padding: const EdgeInsets.all(18),
++                child: Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  children: [
++                    Row(
++                      children: [
++                        const Icon(Icons.check_circle, color: Color(0xFF11845B), size: 30),
++                        const SizedBox(width: 10),
++                        Expanded(child: Text(widget.preview.mensaje, style: Theme.of(context).textTheme.titleLarge)),
++                      ],
++                    ),
++                    if (detail.isNotEmpty) ...[
++                      const SizedBox(height: 12),
++                      Text(detail),
++                    ],
++                    if (widget.preview.folioTurno != null) ...[
++                      const SizedBox(height: 12),
++                      Text('Turno ${widget.preview.folioTurno}'),
++                    ],
++                  ],
++                ),
++              ),
++            ),
++            const SizedBox(height: 14),
++            FilledButton.icon(
++              onPressed: _loading ? null : _confirm,
++              icon: _loading
++                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
++                  : const Icon(Icons.check_circle),
++              label: const Text('Confirmar'),
++            ),
++            const SizedBox(height: 10),
++            OutlinedButton(
++              style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
++              onPressed: _loading ? null : _backToScan,
++              child: const Text('Regresar'),
++            ),
++            if (_error != null) ...[
++              const SizedBox(height: 14),
++              ErrorBanner(message: _error!),
++            ],
++          ],
++        ),
++      ),
++    );
++  }
++}
++
+ class ManualSearchScreen extends StatefulWidget {
+   const ManualSearchScreen({
+     super.key,
+@@ -861,13 +999,21 @@ class _CheckinResultScreenState extends State<CheckinResultScreen> {
+                   children: [
+                     Row(
+                       children: [
+-                        Icon(Icons.circle, color: color, size: 18),
++                        Icon(statusIcon(widget.response.resultado), color: color, size: 30),
+                         const SizedBox(width: 8),
+-                        Text(widget.response.resultado, style: Theme.of(context).textTheme.headlineSmall),
++                        Expanded(child: Text(widget.response.mensaje, style: Theme.of(context).textTheme.headlineSmall)),
+                       ],
+                     ),
+-                    const SizedBox(height: 10),
+-                    Text(widget.response.mensaje),
++                    if (widget.response.fechaLabel != null || widget.response.torre != null || widget.response.piso != null) ...[
++                      const SizedBox(height: 10),
++                      Text(
++                        [
++                          if ((widget.response.fechaLabel ?? '').isNotEmpty) widget.response.fechaLabel!,
++                          if ((widget.response.torre ?? '').isNotEmpty) widget.response.torre!,
++                          if ((widget.response.piso ?? '').isNotEmpty) widget.response.piso!,
++                        ].join(' · '),
++                      ),
++                    ],
+                     if (widget.response.folioTurno != null) ...[
+                       const SizedBox(height: 16),
+                       Text('Turno', style: Theme.of(context).textTheme.labelLarge),
+@@ -1089,3 +1235,16 @@ Color statusColor(String status) {
+       return const Color(0xFF4A5568);
+   }
+ }
++
++IconData statusIcon(String status) {
++  switch (status.toUpperCase()) {
++    case 'VERDE':
++      return Icons.check_circle;
++    case 'ROJO':
++      return Icons.cancel;
++    case 'AMARILLO':
++      return Icons.warning_amber;
++    default:
++      return Icons.info;
++  }
++}
+diff --git a/access-manager/mobile/lib/models.dart b/access-manager/mobile/lib/models.dart
+index 141419f..a4c4f70 100644
+--- a/access-manager/mobile/lib/models.dart
++++ b/access-manager/mobile/lib/models.dart
+@@ -113,6 +113,11 @@ class CheckinResponse {
+     this.citaId,
+     this.folioTurno,
+     this.estadoCita,
++    this.requiereConfirmacion = false,
++    this.fechaLabel,
++    this.torre,
++    this.piso,
++    this.checkinAt,
+   });
+ 
+   final String resultado;
+@@ -120,6 +125,11 @@ class CheckinResponse {
+   final String? citaId;
+   final String? folioTurno;
+   final String? estadoCita;
++  final bool requiereConfirmacion;
++  final String? fechaLabel;
++  final String? torre;
++  final String? piso;
++  final DateTime? checkinAt;
+ 
+   factory CheckinResponse.fromJson(Map<String, dynamic> json) {
+     return CheckinResponse(
+@@ -128,6 +138,11 @@ class CheckinResponse {
+       citaId: json['cita_id'] as String?,
+       folioTurno: json['folio_turno'] as String?,
+       estadoCita: json['estado_cita'] as String?,
++      requiereConfirmacion: json['requiere_confirmacion'] as bool? ?? false,
++      fechaLabel: json['fecha_label'] as String?,
++      torre: json['torre'] as String?,
++      piso: json['piso'] as String?,
++      checkinAt: json['checkin_at'] is String ? DateTime.tryParse(json['checkin_at'] as String) : null,
+     );
+   }
+ }
+diff --git a/access-manager/mobile/pubspec.yaml b/access-manager/mobile/pubspec.yaml
+index 4f07b20..8fa5077 100644
+--- a/access-manager/mobile/pubspec.yaml
++++ b/access-manager/mobile/pubspec.yaml
+@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+ # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+ # In Windows, build-name is used as the major, minor, and patch parts
+ # of the product and file versions while build-number is used as the build suffix.
+-version: 1.0.0+1
++version: 1.0.1+2
+ 
+ environment:
+   sdk: ^3.11.0

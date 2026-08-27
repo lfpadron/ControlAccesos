@@ -147,6 +147,8 @@ watch(
         <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
         <span class="nav-section">Reportes</span>
         <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
+        <RouterLink to="/reportes/medicos" :class="{ disabled: !canUse('/reportes/medicos') }" :aria-disabled="!canUse('/reportes/medicos')" @click="handleNav($event, '/reportes/medicos')">Reportes médicos</RouterLink>
+        <RouterLink to="/reportes/recepcion" :class="{ disabled: !canUse('/reportes/recepcion') }" :aria-disabled="!canUse('/reportes/recepcion')" @click="handleNav($event, '/reportes/recepcion')">Reportes recepción</RouterLink>
         <RouterLink to="/auditoria" :class="{ disabled: !canUse('/auditoria') }" :aria-disabled="!canUse('/auditoria')" @click="handleNav($event, '/auditoria')">Auditoría</RouterLink>
       </nav>
       <button v-if="isAuthenticated" class="secondary" type="button" @click="logout">Cerrar sesión</button>

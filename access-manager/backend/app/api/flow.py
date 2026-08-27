@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from uuid import UUID
@@ -9,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.constants import default_permissions_for_role
 from app.core.database import get_db
-from app.core.security import require_permission, require_role
+from app.core.security import require_permission
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
@@ -46,6 +48,8 @@ from app.schemas.flow import (
     QrRead,
     QrValidarRequest,
     QrValidarResponse,
+    ReporteCitaItem,
+    ReportePacienteItem,
     ReceptionCheckinCancelResponse,
     ReceptionCitaItem,
     ReceptionCitasResponse,
@@ -83,11 +87,24 @@ qr_router = APIRouter()
 mobile_router = APIRouter()
 catalogos_operativos_router = APIRouter()
 recepcion_router = APIRouter()
+reportes_router = APIRouter()
 
 ADMIN_ROLE_CODES = {"ADMIN_SISTEMA", "ADMIN_NEGOCIO"}
 ASSISTANT_MEDICO_ROLE_CODES = {"ASISTENTE_MEDICO", "ASISTENTE", "RECEPCIONISTA"}
+ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
 
-CatalogosOperativosUser = Depends(require_permission("pacientes", "citas", "citas-hoy", "recepcion", "checkin-qr", "turnos-llamados"))
+CatalogosOperativosUser = Depends(
+    require_permission(
+        "pacientes",
+        "citas",
+        "citas-hoy",
+        "recepcion",
+        "checkin-qr",
+        "turnos-llamados",
+        "reportes-medicos",
+        "reportes-recepcion",
+    )
+)
 PacientesReadUser = Depends(require_permission("pacientes"))
 PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
 CitasAgendaReadUser = Depends(require_permission("citas"))
@@ -98,8 +115,10 @@ CitasOperationalWriteUser = Depends(require_permission("citas", "citas-hoy", min
 RecepcionReadUser = Depends(require_permission("recepcion"))
 RecepcionWriteUser = Depends(require_permission("recepcion", minimum="editar"))
 CheckinQrWriteUser = Depends(require_permission("checkin-qr", minimum="editar"))
-MobileSessionUser = Depends(require_role("RECEPCIONISTA", "ADMIN_NEGOCIO"))
-MobileCheckinUser = Depends(require_role("RECEPCIONISTA"))
+ReportesMedicosReadUser = Depends(require_permission("reportes-medicos"))
+ReportesRecepcionReadUser = Depends(require_permission("reportes-recepcion"))
+MobileSessionUser = Depends(require_permission("app-qr", minimum="editar"))
+MobileCheckinUser = Depends(require_permission("app-qr", minimum="editar"))
 
 
 def business_today() -> date:
@@ -142,6 +161,34 @@ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
                 Role.activo.is_(True),
             )
         ).scalars()
+    )
+
+
+def user_has_permission(db: Session, usuario: Usuario, screen_key: str, minimum: str = "consultar") -> bool:
+    required_level = ACCESS_ORDER[minimum]
+    today = business_today()
+    roles = list(
+        db.execute(
+            select(Role)
+            .join(UsuarioRol, UsuarioRol.rol_id == Role.id)
+            .where(
+                UsuarioRol.usuario_id == usuario.id,
+                UsuarioRol.activo.is_(True),
+                UsuarioRol.fecha_inicio <= today,
+                or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= today),
+                Role.activo.is_(True),
+            )
+        ).scalars()
+    )
+    if any(role.codigo == "ADMIN_SISTEMA" for role in roles):
+        return True
+    return any(
+        ACCESS_ORDER.get(
+            {**default_permissions_for_role(role.codigo), **(role.permisos or {})}.get(screen_key, "sin"),
+            0,
+        )
+        >= required_level
+        for role in roles
     )
 
 
@@ -1018,6 +1065,170 @@ def can_cancel_lobby_checkin(event: EventoLlegada | None, timestamp: datetime | 
     return (timestamp or now_utc()) - event_created_at_utc(event) <= CHECKIN_CANCEL_WINDOW
 
 
+QR_NOT_REGISTERED_MESSAGE = "Paciente no se encuentra registrado. Favor de verificar con la asistente o su médico."
+SPANISH_WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
+
+
+def cita_today(db: Session, cita: Cita) -> date:
+    return datetime.now(ZoneInfo(cita_zona_horaria(db, cita))).date()
+
+
+def cita_fecha_label(cita: Cita) -> str:
+    return f"{SPANISH_WEEKDAYS[cita.fecha_cita.weekday()]} {cita.fecha_cita.day}"
+
+
+def qr_context_response(
+    db: Session,
+    cita: Cita | None,
+    resultado: str,
+    mensaje: str,
+    requiere_confirmacion: bool = False,
+    checkin_event: EventoLlegada | None = None,
+) -> CheckinResponse:
+    if cita is None:
+        return CheckinResponse(resultado=resultado, mensaje=mensaje, requiere_confirmacion=requiere_confirmacion)
+    piso = db.get(Piso, cita.piso_id)
+    torre = db.get(Torre, piso.torre_id) if piso is not None else None
+    return CheckinResponse(
+        resultado=resultado,
+        mensaje=mensaje,
+        cita_id=cita.id,
+        folio_turno=cita.folio_turno,
+        estado_cita=cita.estado,
+        requiere_confirmacion=requiere_confirmacion,
+        fecha_label=cita_fecha_label(cita),
+        torre=torre_label(torre),
+        piso=piso_label(piso),
+        checkin_at=checkin_event.created_at if checkin_event else None,
+    )
+
+
+def qr_invalid_response() -> CheckinResponse:
+    return CheckinResponse(resultado="ROJO", mensaje=QR_NOT_REGISTERED_MESSAGE)
+
+
+def qr_scan_response(
+    db: Session,
+    cita: Cita | None,
+    current_user: Usuario | None = None,
+) -> CheckinResponse:
+    if cita is None:
+        return qr_invalid_response()
+    if cita.fecha_cita != cita_today(db, cita):
+        return qr_invalid_response()
+    if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
+        return qr_invalid_response()
+    if current_user is not None and not can_access_cita(db, current_user, cita.id, business_today()):
+        return qr_invalid_response()
+    checkin_event = latest_lobby_checkin(db, cita.id)
+    if checkin_event is not None or cita.estado == "LLEGO_LOBBY":
+        return qr_context_response(db, cita, "VERDE", "Paciente ya registrado", checkin_event=checkin_event)
+    return qr_context_response(
+        db,
+        cita,
+        "VERDE",
+        "Paciente encontrado. Confirme el check-in.",
+        requiere_confirmacion=True,
+    )
+
+
+def record_qr_validation_event(
+    db: Session,
+    request: Request,
+    payload: QrCheckinRequest | QrValidarRequest,
+    result,
+    valid: bool,
+    resultado: str,
+    cita: Cita | None = None,
+    current_user: Usuario | None = None,
+) -> None:
+    record_audit_event(
+        db,
+        evento="QR_VALIDADO",
+        entidad="qr_tokens",
+        entidad_id=result.qr_token.id if result.qr_token else None,
+        usuario_id=current_user.id if current_user else None,
+        canal=getattr(payload, "canal", "API_EXTERNA"),
+        ip_origen=client_ip(request),
+        valor_despues={
+            "valido": valid,
+            "resultado": resultado,
+            "cita_id": str(cita.id) if cita else None,
+        },
+    )
+
+
+def validate_qr_for_scan(
+    payload: QrCheckinRequest | QrValidarRequest,
+    request: Request,
+    db: Session,
+    current_user: Usuario | None = None,
+) -> CheckinResponse:
+    result = validate_qr(db, payload.token)
+    response = qr_scan_response(db, result.cita, current_user)
+    if not result.valid and response.requiere_confirmacion:
+        response = qr_invalid_response()
+    record_qr_validation_event(
+        db,
+        request,
+        payload,
+        result,
+        response.resultado != "ROJO",
+        response.resultado,
+        result.cita if response.resultado != "ROJO" else None,
+        current_user,
+    )
+    db.commit()
+    return response
+
+
+def confirm_qr_checkin(
+    payload: QrCheckinRequest,
+    request: Request,
+    db: Session,
+    current_user: Usuario | None = None,
+) -> CheckinResponse:
+    result = validate_qr(db, payload.token)
+    response = qr_scan_response(db, result.cita, current_user)
+    if not result.valid and response.requiere_confirmacion:
+        response = qr_invalid_response()
+    if response.resultado == "ROJO" or result.cita is None:
+        record_qr_validation_event(db, request, payload, result, False, response.resultado, None, current_user)
+        db.commit()
+        return response
+    cita = result.cita
+    if not response.requiere_confirmacion:
+        record_qr_validation_event(db, request, payload, result, True, response.resultado, cita, current_user)
+        db.commit()
+        return response
+    event = create_arrival_event(
+        db,
+        cita,
+        "CHECKIN_LOBBY",
+        payload.canal,
+        request,
+        payload.sala_id,
+        current_user.id if current_user else None,
+        payload.dispositivo_id,
+    )
+    if result.qr_token is not None:
+        result.qr_token.estado = "USADO"
+    record_audit_event(
+        db,
+        evento="CHECKIN_LOBBY",
+        entidad="eventos_llegada",
+        entidad_id=event.id,
+        usuario_id=current_user.id if current_user else None,
+        canal=payload.canal,
+        ip_origen=client_ip(request),
+        valor_despues={"cita_id": str(cita.id), "resultado": "VERDE"},
+    )
+    record_qr_validation_event(db, request, payload, result, True, "VERDE", cita, current_user)
+    db.commit()
+    db.refresh(cita)
+    return qr_context_response(db, cita, "VERDE", "Check-in registrado.", checkin_event=event)
+
+
 def restore_qr_if_needed(db: Session, cita_id: UUID, timestamp: datetime) -> bool:
     qr_token = db.execute(
         select(QrToken)
@@ -1304,75 +1515,17 @@ def reception_qr_checkin(
     db: Session = Depends(get_db),
     current_user: Usuario = CheckinQrWriteUser,
 ) -> CheckinResponse:
-    result = validate_qr(db, payload.token)
-    if not result.valid or result.cita is None:
-        record_audit_event(
-            db,
-            evento="QR_VALIDADO",
-            entidad="qr_tokens",
-            entidad_id=result.qr_token.id if result.qr_token else None,
-            usuario_id=current_user.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"valido": False, "resultado": result.status},
-        )
-        db.commit()
-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
+    return confirm_qr_checkin(payload, request, db, current_user)
 
-    cita = result.cita
-    if cita.fecha_cita != business_today() or not can_access_cita(db, current_user, cita.id, business_today()):
-        record_audit_event(
-            db,
-            evento="QR_VALIDADO",
-            entidad="qr_tokens",
-            entidad_id=result.qr_token.id if result.qr_token else None,
-            usuario_id=current_user.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"valido": False, "resultado": "FUERA_ALCANCE", "cita_id": str(cita.id)},
-        )
-        db.commit()
-        return CheckinResponse(resultado="ROJO", mensaje="Cita no encontrada para hoy o fuera de su alcance.")
-    if cita.estado == "LLEGO_LOBBY":
-        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
 
-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
-    if resultado != "ROJO":
-        event = create_arrival_event(
-            db,
-            cita,
-            "CHECKIN_LOBBY",
-            payload.canal,
-            request,
-            payload.sala_id,
-            current_user.id,
-            payload.dispositivo_id,
-        )
-        if result.qr_token is not None:
-            result.qr_token.estado = "USADO"
-        record_audit_event(
-            db,
-            evento="CHECKIN_LOBBY",
-            entidad="eventos_llegada",
-            entidad_id=event.id,
-            usuario_id=current_user.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
-        )
-    record_audit_event(
-        db,
-        evento="QR_VALIDADO",
-        entidad="qr_tokens",
-        entidad_id=result.qr_token.id if result.qr_token else None,
-        usuario_id=current_user.id,
-        canal=payload.canal,
-        ip_origen=client_ip(request),
-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
-    )
-    db.commit()
-    db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+@recepcion_router.post("/qr/validar", response_model=CheckinResponse)
+def reception_qr_validar(
+    payload: QrCheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = CheckinQrWriteUser,
+) -> CheckinResponse:
+    return validate_qr_for_scan(payload, request, db, current_user)
 
 
 @pacientes_router.get("/buscar", response_model=list[PacienteRead])
@@ -2024,6 +2177,361 @@ def authenticated_lobby_checkin(
     return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
 
 
+def parse_month(value: str | None, fallback: date) -> date:
+    if not value:
+        return date(fallback.year, fallback.month, 1)
+    try:
+        year_text, month_text = value.split("-", 1)
+        return date(int(year_text), int(month_text), 1)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mes inválido. Use formato AAAA-MM.") from None
+
+
+def add_month(value: date) -> date:
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def end_of_month(value: date) -> date:
+    return add_month(value) - timedelta(days=1)
+
+
+def parse_week(value: str | None, fallback: date) -> date:
+    if not value:
+        return fallback - timedelta(days=fallback.weekday())
+    try:
+        if "-W" in value:
+            year_text, week_text = value.split("-W", 1)
+            return date.fromisocalendar(int(year_text), int(week_text), 1)
+        selected = date.fromisoformat(value)
+        return selected - timedelta(days=selected.weekday())
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Semana inválida. Use formato AAAA-WSS.") from None
+
+
+def validate_range(start: date, end: date) -> None:
+    if end < start:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La fecha final no puede ser menor que la inicial.")
+
+
+def report_range(
+    agrupacion: str,
+    mes_desde: str | None,
+    mes_hasta: str | None,
+    semana_desde: str | None,
+    semana_hasta: str | None,
+    dia_desde: date | None,
+    dia_hasta: date | None,
+    semana: str | None,
+) -> tuple[date, date]:
+    today = business_today()
+    if agrupacion == "mes":
+        start = parse_month(mes_desde, today)
+        end = end_of_month(parse_month(mes_hasta, start))
+    elif agrupacion == "semana":
+        start = parse_week(semana_desde, today)
+        end = parse_week(semana_hasta, start) + timedelta(days=6)
+    elif agrupacion == "hora":
+        start = parse_week(semana, today)
+        end = start + timedelta(days=6)
+    else:
+        start = dia_desde or today
+        end = dia_hasta or start
+    validate_range(start, end)
+    return start, end
+
+
+def month_period(value: date) -> str:
+    return f"{value.year}-{value.month:02d}"
+
+
+def week_period(value: date) -> str:
+    iso = value.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def day_period(value: date) -> str:
+    return value.isoformat()
+
+
+def period_for_date(value: date, agrupacion: str) -> str:
+    if agrupacion == "mes":
+        return month_period(value)
+    if agrupacion == "semana":
+        return week_period(value)
+    return day_period(value)
+
+
+def hour_columns() -> list[str]:
+    return [f"{hour:02d}:00" for hour in range(24)]
+
+
+def empty_hours() -> dict[str, int]:
+    return {column: 0 for column in hour_columns()}
+
+
+def report_citas_rows(
+    db: Session,
+    current_user: Usuario,
+    start: date,
+    end: date,
+    medical_scope: bool,
+    institucion_id: UUID | None = None,
+):
+    if medical_scope:
+        predicate = cita_agenda_access_predicate(db, current_user, business_today())
+    else:
+        predicate = cita_access_predicate(db, current_user, business_today())
+    query = (
+        select(Cita, Paciente, Medico, Consultorio, Piso, Torre, Complejo)
+        .join(Paciente, Paciente.id == Cita.paciente_id)
+        .join(Medico, Medico.id == Cita.medico_id)
+        .join(Consultorio, Consultorio.id == Cita.consultorio_id)
+        .join(Piso, Piso.id == Cita.piso_id)
+        .join(Torre, Torre.id == Piso.torre_id)
+        .join(Complejo, Complejo.id == Cita.complejo_id)
+        .where(Cita.fecha_cita >= start, Cita.fecha_cita <= end, predicate)
+    )
+    if institucion_id is not None:
+        query = query.where(Complejo.institucion_id == institucion_id)
+    return db.execute(query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)).all()
+
+
+def report_cita_item(db: Session, row) -> ReporteCitaItem:
+    cita, paciente, medico, consultorio, piso, torre, complejo = row
+    return ReporteCitaItem(
+        cita_id=cita.id,
+        fecha_cita=cita.fecha_cita,
+        hora_cita=cita.hora_cita,
+        paciente=patient_last_first_name(paciente),
+        medico=medico_last_first_name(medico),
+        campus=complejo.nombre,
+        torre=torre_label(torre) or "",
+        piso=piso_label(piso) or "",
+        consultorio=consultorio_label(consultorio) or consultorio.codigo,
+        estado=cita.estado,
+        se_presento=latest_lobby_checkin(db, cita.id) is not None,
+    )
+
+
+def ensure_report_institution_access(db: Session, current_user: Usuario, institucion_id: UUID) -> None:
+    exists = db.execute(
+        select(Institucion.id)
+        .where(
+            Institucion.id == institucion_id,
+            Institucion.activo.is_(True),
+            institucion_catalog_access_predicate(db, current_user, business_today()),
+        )
+        .limit(1)
+    ).first()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institución no encontrada.")
+
+
+@reportes_router.get("/medicos/pacientes", response_model=list[ReportePacienteItem])
+def reporte_medicos_pacientes(
+    medico_id: UUID | None = Query(default=None),
+    paciente: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: Usuario = ReportesMedicosReadUser,
+) -> list[ReportePacienteItem]:
+    query = select(Paciente).where(paciente_access_predicate(db, current_user, business_today()))
+    if medico_id is not None:
+        ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
+        query = query.join(MedicoPaciente, MedicoPaciente.paciente_id == Paciente.id).where(
+            MedicoPaciente.medico_id == medico_id,
+            MedicoPaciente.activo.is_(True),
+        )
+    if paciente:
+        search_name = func.lower(
+            func.coalesce(Paciente.apellido_paterno, "")
+            + " "
+            + func.coalesce(Paciente.apellido_materno, "")
+            + " "
+            + func.coalesce(Paciente.nombre, "")
+            + " "
+            + func.coalesce(Paciente.nombre_preferido, "")
+            + " "
+            + func.coalesce(Paciente.folio_paciente, "")
+        )
+        for term_text in paciente.split():
+            query = query.where(search_name.like(normalize_search(term_text)))
+    result: list[ReportePacienteItem] = []
+    pacientes = list(db.execute(query.order_by(*patient_order_columns()).limit(300)).scalars())
+    for paciente_row in pacientes:
+        last_query = (
+            select(Cita, Medico)
+            .join(Medico, Medico.id == Cita.medico_id)
+            .where(
+                Cita.paciente_id == paciente_row.id,
+                cita_agenda_access_predicate(db, current_user, business_today()),
+            )
+            .order_by(Cita.fecha_cita.desc(), Cita.hora_cita.desc())
+            .limit(1)
+        )
+        last = db.execute(last_query).first()
+        last_cita = last[0] if last else None
+        last_medico = last[1] if last else None
+        result.append(
+            ReportePacienteItem(
+                paciente_id=paciente_row.id,
+                folio_paciente=paciente_row.folio_paciente,
+                paciente=patient_last_first_name(paciente_row),
+                medico=medico_last_first_name(last_medico) if last_medico else None,
+                fecha_ultima_cita=last_cita.fecha_cita if last_cita else None,
+                hora_ultima_cita=last_cita.hora_cita if last_cita else None,
+                se_presento=latest_lobby_checkin(db, last_cita.id) is not None if last_cita else None,
+            )
+        )
+    return result
+
+
+@reportes_router.get("/medicos/citas", response_model=list[ReporteCitaItem])
+def reporte_medicos_citas(
+    fecha_desde: date | None = Query(default=None),
+    fecha_hasta: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: Usuario = ReportesMedicosReadUser,
+) -> list[ReporteCitaItem]:
+    start = fecha_desde or business_today()
+    end = fecha_hasta or start
+    validate_range(start, end)
+    return [report_cita_item(db, row) for row in report_citas_rows(db, current_user, start, end, medical_scope=True)]
+
+
+@reportes_router.get("/medicos/citas-agrupadas")
+def reporte_medicos_citas_agrupadas(
+    agrupacion: str = Query(default="mes", pattern="^(mes|semana|dia|hora)$"),
+    mes_desde: str | None = None,
+    mes_hasta: str | None = None,
+    semana_desde: str | None = None,
+    semana_hasta: str | None = None,
+    dia_desde: date | None = None,
+    dia_hasta: date | None = None,
+    semana: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: Usuario = ReportesMedicosReadUser,
+) -> list[dict[str, Any]]:
+    start, end = report_range(
+        agrupacion,
+        mes_desde,
+        mes_hasta,
+        semana_desde,
+        semana_hasta,
+        dia_desde,
+        dia_hasta,
+        semana,
+    )
+    rows = report_citas_rows(db, current_user, start, end, medical_scope=True)
+    if agrupacion == "hora":
+        by_day = {start + timedelta(days=offset): empty_hours() for offset in range((end - start).days + 1)}
+        for cita, *_rest in rows:
+            by_day[cita.fecha_cita][f"{cita.hora_cita.hour:02d}:00"] += 1
+        return [
+            {
+                "fecha": day.isoformat(),
+                "dia_semana": SPANISH_WEEKDAYS[day.weekday()],
+                "horas": hours,
+                "total": sum(hours.values()),
+            }
+            for day, hours in sorted(by_day.items())
+        ]
+    grouped: defaultdict[str, int] = defaultdict(int)
+    for cita, *_rest in rows:
+        grouped[period_for_date(cita.fecha_cita, agrupacion)] += 1
+    return [{"periodo": key, "citas": grouped[key]} for key in sorted(grouped)]
+
+
+@reportes_router.get("/recepcion/citas-agrupadas")
+def reporte_recepcion_citas_agrupadas(
+    institucion_id: UUID,
+    agrupacion: str = Query(default="mes", pattern="^(mes|semana|dia|hora)$"),
+    mes_desde: str | None = None,
+    mes_hasta: str | None = None,
+    semana_desde: str | None = None,
+    semana_hasta: str | None = None,
+    dia_desde: date | None = None,
+    dia_hasta: date | None = None,
+    semana: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: Usuario = ReportesRecepcionReadUser,
+) -> list[dict[str, Any]]:
+    ensure_report_institution_access(db, current_user, institucion_id)
+    start, end = report_range(
+        agrupacion,
+        mes_desde,
+        mes_hasta,
+        semana_desde,
+        semana_hasta,
+        dia_desde,
+        dia_hasta,
+        semana,
+    )
+    rows = report_citas_rows(db, current_user, start, end, medical_scope=False, institucion_id=institucion_id)
+    if agrupacion == "hora":
+        grouped_hours: dict[tuple[UUID, str, UUID, str, UUID, str, date], dict[str, int]] = {}
+        for cita, _paciente, _medico, _consultorio, piso, torre, complejo in rows:
+            key = (
+                complejo.id,
+                complejo.nombre,
+                torre.id,
+                torre_label(torre) or "",
+                piso.id,
+                piso_label(piso) or "",
+                cita.fecha_cita,
+            )
+            if key not in grouped_hours:
+                grouped_hours[key] = empty_hours()
+            grouped_hours[key][f"{cita.hora_cita.hour:02d}:00"] += 1
+        return [
+            {
+                "campus_id": str(campus_id),
+                "campus": campus,
+                "torre_id": str(torre_id),
+                "torre": torre,
+                "piso_id": str(piso_id),
+                "piso": piso,
+                "fecha": fecha.isoformat(),
+                "dia_semana": SPANISH_WEEKDAYS[fecha.weekday()],
+                "horas": hours,
+                "total": sum(hours.values()),
+            }
+            for (campus_id, campus, torre_id, torre, piso_id, piso, fecha), hours in sorted(
+                grouped_hours.items(),
+                key=lambda item: (item[0][1], item[0][3], item[0][5], item[0][6]),
+            )
+        ]
+    grouped_locations: defaultdict[tuple[UUID, str, UUID, str, UUID, str, str], int] = defaultdict(int)
+    for cita, _paciente, _medico, _consultorio, piso, torre, complejo in rows:
+        key = (
+            complejo.id,
+            complejo.nombre,
+            torre.id,
+            torre_label(torre) or "",
+            piso.id,
+            piso_label(piso) or "",
+            period_for_date(cita.fecha_cita, agrupacion),
+        )
+        grouped_locations[key] += 1
+    return [
+        {
+            "campus_id": str(campus_id),
+            "campus": campus,
+            "torre_id": str(torre_id),
+            "torre": torre,
+            "piso_id": str(piso_id),
+            "piso": piso,
+            "periodo": periodo,
+            "citas": count,
+        }
+        for (campus_id, campus, torre_id, torre, piso_id, piso, periodo), count in sorted(
+            grouped_locations.items(),
+            key=lambda item: (item[0][1], item[0][3], item[0][5], item[0][6]),
+        )
+    ]
+
+
 @mobile_router.get("/session", response_model=MobileSessionResponse)
 def mobile_session(db: Session = Depends(get_db), current_user: Usuario = MobileSessionUser) -> MobileSessionResponse:
     roles = active_role_codes(db, current_user)
@@ -2032,7 +2540,7 @@ def mobile_session(db: Session = Depends(get_db), current_user: Usuario = Mobile
         nombre=current_user.nombre,
         email=current_user.email,
         roles=sorted(roles),
-        can_checkin=bool(roles.intersection({"ADMIN_SISTEMA", "RECEPCIONISTA"})),
+        can_checkin=user_has_permission(db, current_user, "app-qr", "editar"),
         can_view_logs=bool(roles.intersection({"ADMIN_SISTEMA", "ADMIN_NEGOCIO"})),
     )
 
@@ -2089,59 +2597,17 @@ def mobile_checkin_qr(
     db: Session = Depends(get_db),
     current_user: Usuario = MobileCheckinUser,
 ) -> CheckinResponse:
-    result = validate_qr(db, payload.token)
-    if not result.valid or result.cita is None:
-        record_audit_event(
-            db,
-            evento="QR_VALIDADO",
-            entidad="qr_tokens",
-            entidad_id=result.qr_token.id if result.qr_token else None,
-            usuario_id=current_user.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"valido": False, "resultado": result.status},
-        )
-        db.commit()
-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
+    return confirm_qr_checkin(payload, request, db, current_user)
 
-    cita = result.cita
-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
-    if resultado != "ROJO":
-        event = create_arrival_event(
-            db,
-            cita,
-            "CHECKIN_LOBBY",
-            payload.canal,
-            request,
-            payload.sala_id,
-            current_user.id,
-            payload.dispositivo_id,
-        )
-        if result.qr_token is not None:
-            result.qr_token.estado = "USADO"
-        record_audit_event(
-            db,
-            evento="CHECKIN_LOBBY",
-            entidad="eventos_llegada",
-            entidad_id=event.id,
-            usuario_id=current_user.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
-        )
-    record_audit_event(
-        db,
-        evento="QR_VALIDADO",
-        entidad="qr_tokens",
-        entidad_id=result.qr_token.id if result.qr_token else None,
-        usuario_id=current_user.id,
-        canal=payload.canal,
-        ip_origen=client_ip(request),
-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
-    )
-    db.commit()
-    db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+
+@mobile_router.post("/qr/validar", response_model=CheckinResponse)
+def mobile_validar_qr(
+    payload: QrCheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = MobileCheckinUser,
+) -> CheckinResponse:
+    return validate_qr_for_scan(payload, request, db, current_user)
 
 
 @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)
@@ -2187,68 +2653,22 @@ def checkin_sala_cita(cita_id: UUID, payload: CheckinRequest, request: Request, 
 
 @qr_router.post("/validar", response_model=QrValidarResponse)
 def validar_qr(payload: QrValidarRequest, request: Request, db: Session = Depends(get_db)):
-    result = validate_qr(db, payload.token)
-    cita = result.cita
-    record_audit_event(
-        db,
-        evento="QR_VALIDADO",
-        entidad="qr_tokens",
-        entidad_id=result.qr_token.id if result.qr_token else None,
-        canal="API_EXTERNA",
-        ip_origen=client_ip(request),
-        valor_despues={"valido": result.valid, "resultado": result.status, "cita_id": str(cita.id) if cita else None},
-    )
-    db.commit()
+    response = validate_qr_for_scan(payload, request, db)
     return QrValidarResponse(
-        valido=result.valid,
-        resultado=result.status,
-        mensaje=result.message,
-        cita_id=cita.id if cita else None,
-        folio_turno=cita.folio_turno if cita else None,
-        estado_cita=cita.estado if cita else None,
+        valido=response.resultado != "ROJO",
+        resultado=response.resultado,
+        mensaje=response.mensaje,
+        cita_id=response.cita_id,
+        folio_turno=response.folio_turno,
+        estado_cita=response.estado_cita,
+        requiere_confirmacion=response.requiere_confirmacion,
+        fecha_label=response.fecha_label,
+        torre=response.torre,
+        piso=response.piso,
+        checkin_at=response.checkin_at,
     )
 
 
 @qr_router.post("/checkin", response_model=CheckinResponse)
 def checkin_qr(payload: QrCheckinRequest, request: Request, db: Session = Depends(get_db)):
-    result = validate_qr(db, payload.token)
-    if not result.valid or result.cita is None:
-        record_audit_event(
-            db,
-            evento="QR_VALIDADO",
-            entidad="qr_tokens",
-            entidad_id=result.qr_token.id if result.qr_token else None,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"valido": False, "resultado": result.status},
-        )
-        db.commit()
-        return CheckinResponse(resultado="ROJO", mensaje=result.message)
-
-    cita = result.cita
-    resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
-    if resultado != "ROJO":
-        event = create_arrival_event(db, cita, "CHECKIN_LOBBY", payload.canal, request, payload.sala_id, dispositivo_id=payload.dispositivo_id)
-        if result.qr_token is not None:
-            result.qr_token.estado = "USADO"
-        record_audit_event(
-            db,
-            evento="CHECKIN_LOBBY",
-            entidad="eventos_llegada",
-            entidad_id=event.id,
-            canal=payload.canal,
-            ip_origen=client_ip(request),
-            valor_despues={"cita_id": str(cita.id), "resultado": resultado},
-        )
-    record_audit_event(
-        db,
-        evento="QR_VALIDADO",
-        entidad="qr_tokens",
-        entidad_id=result.qr_token.id if result.qr_token else None,
-        canal=payload.canal,
-        ip_origen=client_ip(request),
-        valor_despues={"valido": True, "resultado": resultado, "cita_id": str(cita.id)},
-    )
-    db.commit()
-    db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+    return confirm_qr_checkin(payload, request, db)

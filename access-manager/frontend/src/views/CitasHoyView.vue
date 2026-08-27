@@ -29,7 +29,7 @@ import {
   type Usuario,
 } from '../api/client';
 import { localTimeMinusHours, localTimePlusHours, todayLocalIso } from '../dateUtils';
-import { exportRows, type ExportFormat } from '../exporters';
+import { exportRows } from '../exporters';
 import { pisoCodigoVisibleLabel, sortPisosByCodigo } from '../floorLabels';
 
 const citas = ref<Cita[]>([]);
@@ -322,7 +322,7 @@ const exportColumns = [
   { key: 'tipo', label: 'Tipo' },
 ];
 
-async function exportCitas(format: ExportFormat) {
+async function exportCitas(format: 'excel' | 'csv' | 'json') {
   error.value = '';
   try {
     await auditCitasExport({ ...requestFilters(), formato: format });

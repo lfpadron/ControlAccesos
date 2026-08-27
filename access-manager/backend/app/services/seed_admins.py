@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from app.constants import ROLE_DEFAULT_PERMISSIONS
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.logging import configure_logging
@@ -43,14 +44,6 @@ ROLE_SEEDS = (
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
 )
-ROLE_DEFAULT_PERMISSIONS = {
-    "RECEPCIONISTA": {
-        "recepcion": "editar",
-        "checkin-qr": "editar",
-    },
-}
-
-
 def apply_default_role_permissions(role: Role) -> None:
     defaults = ROLE_DEFAULT_PERMISSIONS.get(role.codigo)
     if not defaults:

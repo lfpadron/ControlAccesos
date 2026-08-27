@@ -25,6 +25,8 @@ import CheckinQrView from '../views/CheckinQrView.vue';
 import PantallasTurnosView from '../views/PantallasTurnosView.vue';
 import ContactosInstitucionalesView from '../views/ContactosInstitucionalesView.vue';
 import ReportesView from '../views/ReportesView.vue';
+import ReportesMedicosView from '../views/ReportesMedicosView.vue';
+import ReportesRecepcionView from '../views/ReportesRecepcionView.vue';
 import BusquedaUsuariosView from '../views/BusquedaUsuariosView.vue';
 import KioskosView from '../views/KioskosView.vue';
 import ConsultaClustersConsultoriosView from '../views/ConsultaClustersConsultoriosView.vue';
@@ -59,6 +61,8 @@ const router = createRouter({
     { path: '/checkin-qr', component: CheckinQrView },
     { path: '/busqueda-usuarios', component: BusquedaUsuariosView },
     { path: '/reportes', component: ReportesView },
+    { path: '/reportes/medicos', component: ReportesMedicosView },
+    { path: '/reportes/recepcion', component: ReportesRecepcionView },
     { path: '/contactos-institucionales', component: ContactosInstitucionalesView },
     { path: '/asignaciones', component: AsignacionesView },
     { path: '/clusters-turnos', component: CatalogView, meta: { catalog: 'clusters-turnos' } },

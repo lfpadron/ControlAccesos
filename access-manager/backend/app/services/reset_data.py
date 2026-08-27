@@ -5,6 +5,7 @@ import logging
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.constants import ROLE_DEFAULT_PERMISSIONS
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.logging import configure_logging
@@ -42,14 +43,6 @@ ROLE_SEEDS = (
     ("GUARDIA_CONTINGENCIA", "Guardia de contingencia", "Operación limitada en contingencias."),
     ("USUARIO_KIOSKO", "Usuario kiosko", "Uso técnico para kioskos."),
 )
-ROLE_DEFAULT_PERMISSIONS = {
-    "RECEPCIONISTA": {
-        "recepcion": "editar",
-        "checkin-qr": "editar",
-    },
-}
-
-
 def delete_all(db: Session, model: type) -> int:
     result = db.execute(delete(model))
     return int(result.rowcount or 0)

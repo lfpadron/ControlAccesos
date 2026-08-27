@@ -501,6 +501,71 @@ export type CheckinResponse = {
   cita_id?: string | null;
   folio_turno?: string | null;
   estado_cita?: string | null;
+  requiere_confirmacion?: boolean;
+  fecha_label?: string | null;
+  torre?: string | null;
+  piso?: string | null;
+  checkin_at?: string | null;
+};
+
+export type ReportePacienteItem = {
+  paciente_id: string;
+  folio_paciente: string;
+  paciente: string;
+  medico?: string | null;
+  fecha_ultima_cita?: string | null;
+  hora_ultima_cita?: string | null;
+  se_presento?: boolean | null;
+};
+
+export type ReporteCitaItem = {
+  cita_id: string;
+  fecha_cita: string;
+  hora_cita: string;
+  paciente: string;
+  medico: string;
+  campus: string;
+  torre: string;
+  piso: string;
+  consultorio: string;
+  estado: string;
+  se_presento: boolean;
+};
+
+export type ReporteAgrupadoItem = {
+  periodo: string;
+  citas: number;
+};
+
+export type ReporteHorarioItem = {
+  fecha: string;
+  dia_semana: string;
+  horas: Record<string, number>;
+  total: number;
+};
+
+export type ReporteRecepcionAgrupadoItem = {
+  campus_id: string;
+  campus: string;
+  torre_id: string;
+  torre: string;
+  piso_id: string;
+  piso: string;
+  periodo: string;
+  citas: number;
+};
+
+export type ReporteRecepcionHorarioItem = {
+  campus_id: string;
+  campus: string;
+  torre_id: string;
+  torre: string;
+  piso_id: string;
+  piso: string;
+  fecha: string;
+  dia_semana: string;
+  horas: Record<string, number>;
+  total: number;
 };
 
 export type ReceptionOption = {
@@ -879,6 +944,11 @@ export const receptionQrCheckin = (token: string) =>
     method: 'POST',
     body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
   });
+export const receptionQrValidate = (token: string) =>
+  apiFetch<CheckinResponse>('/recepcion/qr/validar', {
+    method: 'POST',
+    body: JSON.stringify({ token, canal: 'RECEPCION', dispositivo_id: 'recepcion-qr' }),
+  });
 
 export function searchPacientes(q: string, medicoId?: string) {
   return apiFetch<Paciente[]>(`/pacientes/buscar${queryString({ q, medico_id: medicoId })}`);
@@ -1053,6 +1123,35 @@ export function validarQr(token: string) {
     body: JSON.stringify({ token }),
   });
 }
+
+export type MedicalGroupedReportParams = {
+  agrupacion: 'mes' | 'semana' | 'dia' | 'hora';
+  mes_desde?: string;
+  mes_hasta?: string;
+  semana_desde?: string;
+  semana_hasta?: string;
+  dia_desde?: string;
+  dia_hasta?: string;
+  semana?: string;
+};
+
+export type ReceptionGroupedReportParams = MedicalGroupedReportParams & {
+  institucion_id: string;
+};
+
+export const listReporteMedicoPacientes = (params: { medico_id?: string; paciente?: string } = {}) =>
+  apiFetch<ReportePacienteItem[]>(`/reportes/medicos/pacientes${queryString(params)}`);
+
+export const listReporteMedicoCitas = (params: { fecha_desde?: string; fecha_hasta?: string } = {}) =>
+  apiFetch<ReporteCitaItem[]>(`/reportes/medicos/citas${queryString(params)}`);
+
+export const listReporteMedicoAgrupado = (params: MedicalGroupedReportParams) =>
+  apiFetch<Array<ReporteAgrupadoItem | ReporteHorarioItem>>(`/reportes/medicos/citas-agrupadas${queryString(params)}`);
+
+export const listReporteRecepcionAgrupado = (params: ReceptionGroupedReportParams) =>
+  apiFetch<Array<ReporteRecepcionAgrupadoItem | ReporteRecepcionHorarioItem>>(
+    `/reportes/recepcion/citas-agrupadas${queryString(params)}`,
+  );
 
 export function cancelarCita(citaId: string) {
   return apiFetch<{ id: string; estado: string; folio_turno: string }>(`/citas/${citaId}/cancelar`, { method: 'PATCH' });

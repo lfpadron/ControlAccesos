@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
+from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS, default_permissions_for_role
 from app.core.database import get_db
 from app.core.security import create_access_token, get_current_user, hash_password, verify_password
 from app.models.operational import Role, UsuarioRol
@@ -16,13 +16,6 @@ from app.services.audit_service import record_audit_event
 router = APIRouter()
 
 ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
-
-def default_permissions_for_role(codigo: str) -> dict[str, str]:
-    if codigo == "ADMIN_SISTEMA":
-        return {screen: "editar" for screen in MENU_SCREEN_KEYS}
-    return {}
-
-
 def normalize_profile_email(value: object) -> str | None:
     if value is None:
         return None

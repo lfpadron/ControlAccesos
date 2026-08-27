@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue';
-import { receptionQrCheckin, type CheckinResponse } from '../api/client';
+import { receptionQrCheckin, receptionQrValidate, type CheckinResponse } from '../api/client';
 
 const qrToken = ref('');
+const pendingToken = ref('');
 const inputRef = ref<HTMLInputElement | null>(null);
 const loading = ref(false);
+const confirming = ref(false);
 const error = ref('');
 const result = ref<CheckinResponse | null>(null);
 const scans = ref<Array<{ at: string; resultado: string; mensaje: string; folio?: string | null }>>([]);
@@ -32,16 +34,48 @@ async function submitQr() {
   error.value = '';
   result.value = null;
   try {
-    const response = await receptionQrCheckin(token);
+    const response = await receptionQrValidate(token);
     result.value = response;
+    pendingToken.value = response.requiere_confirmacion ? token : '';
     pushScan(response);
-    qrToken.value = '';
+    if (!response.requiere_confirmacion) {
+      qrToken.value = '';
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible validar el QR.';
   } finally {
     loading.value = false;
+    if (!result.value?.requiere_confirmacion) {
+      focusInput();
+    }
+  }
+}
+
+async function confirmQr() {
+  const token = pendingToken.value;
+  if (!token || confirming.value) return;
+  confirming.value = true;
+  error.value = '';
+  try {
+    const response = await receptionQrCheckin(token);
+    result.value = response;
+    pendingToken.value = '';
+    qrToken.value = '';
+    pushScan(response);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'No fue posible registrar el check-in.';
+  } finally {
+    confirming.value = false;
     focusInput();
   }
+}
+
+function resetScan() {
+  result.value = null;
+  pendingToken.value = '';
+  qrToken.value = '';
+  error.value = '';
+  focusInput();
 }
 
 function resultClass(response: CheckinResponse | null) {
@@ -75,13 +109,21 @@ onMounted(focusInput);
             placeholder="Escanee o pegue el código"
           />
         </div>
-        <button type="submit" :disabled="loading || !qrToken.trim()">{{ loading ? 'Validando...' : 'Registrar' }}</button>
+        <button type="submit" :disabled="loading || !qrToken.trim()">{{ loading ? 'Validando...' : 'Validar' }}</button>
       </form>
 
       <div v-if="result" class="qr-result" :class="resultClass(result)">
-        <strong>{{ result.resultado }}</strong>
-        <span>{{ result.mensaje }}</span>
+        <strong><span class="qr-result-icon">{{ result.resultado === 'ROJO' ? '✕' : '✓' }}</span>{{ result.mensaje }}</strong>
+        <span v-if="result.fecha_label">{{ result.fecha_label }}</span>
+        <span v-if="result.torre || result.piso">{{ [result.torre, result.piso].filter(Boolean).join(' · ') }}</span>
         <small v-if="result.folio_turno">Turno {{ result.folio_turno }}</small>
+        <div v-if="result.requiere_confirmacion" class="actions-row">
+          <button class="success" type="button" :disabled="confirming" @click="confirmQr">{{ confirming ? 'Registrando...' : '✓ Confirmar' }}</button>
+          <button class="white-button" type="button" @click="resetScan">Regresar</button>
+        </div>
+        <div v-else class="actions-row">
+          <button class="white-button" type="button" @click="resetScan">Regresar</button>
+        </div>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
     </section>

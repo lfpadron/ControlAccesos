@@ -13,6 +13,11 @@ export type CheckinResponse = {
   cita_id?: string | null;
   folio_turno?: string | null;
   estado_cita?: string | null;
+  requiere_confirmacion?: boolean;
+  fecha_label?: string | null;
+  torre?: string | null;
+  piso?: string | null;
+  checkin_at?: string | null;
 };
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
@@ -47,5 +52,12 @@ export function checkinQr(token: string) {
   return apiFetch<CheckinResponse>('/qr/checkin', {
     method: 'POST',
     body: JSON.stringify({ token, canal: 'APP_MOVIL', dispositivo_id: 'mobile-pwa' }),
+  });
+}
+
+export function validateQr(token: string) {
+  return apiFetch<CheckinResponse>('/qr/validar', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
   });
 }

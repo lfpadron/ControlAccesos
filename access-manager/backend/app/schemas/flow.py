@@ -203,6 +203,11 @@ class QrValidarResponse(BaseModel):
     cita_id: UUID | None = None
     folio_turno: str | None = None
     estado_cita: str | None = None
+    requiere_confirmacion: bool = False
+    fecha_label: str | None = None
+    torre: str | None = None
+    piso: str | None = None
+    checkin_at: datetime | None = None
 
 
 class CheckinRequest(BaseModel):
@@ -236,6 +241,11 @@ class CheckinResponse(BaseModel):
     cita_id: UUID | None = None
     folio_turno: str | None = None
     estado_cita: str | None = None
+    requiere_confirmacion: bool = False
+    fecha_label: str | None = None
+    torre: str | None = None
+    piso: str | None = None
+    checkin_at: datetime | None = None
 
 
 class ReceptionOption(BaseModel):
@@ -305,3 +315,63 @@ class CitaActionResponse(BaseModel):
     id: UUID
     estado: str
     folio_turno: str
+
+
+class ReportePacienteItem(BaseModel):
+    paciente_id: UUID
+    folio_paciente: str
+    paciente: str
+    medico: str | None = None
+    fecha_ultima_cita: date | None = None
+    hora_ultima_cita: time | None = None
+    se_presento: bool | None = None
+
+
+class ReporteCitaItem(BaseModel):
+    cita_id: UUID
+    fecha_cita: date
+    hora_cita: time
+    paciente: str
+    medico: str
+    campus: str
+    torre: str
+    piso: str
+    consultorio: str
+    estado: str
+    se_presento: bool
+
+
+class ReporteAgrupadoItem(BaseModel):
+    periodo: str
+    citas: int
+
+
+class ReporteHorarioItem(BaseModel):
+    fecha: date
+    dia_semana: str
+    horas: dict[str, int]
+    total: int
+
+
+class ReporteRecepcionAgrupadoItem(BaseModel):
+    campus_id: UUID
+    campus: str
+    torre_id: UUID
+    torre: str
+    piso_id: UUID
+    piso: str
+    periodo: str
+    citas: int
+
+
+class ReporteRecepcionHorarioItem(BaseModel):
+    campus_id: UUID
+    campus: str
+    torre_id: UUID
+    torre: str
+    piso_id: UUID
+    piso: str
+    fecha: date
+    dia_semana: str
+    horas: dict[str, int]
+    total: int

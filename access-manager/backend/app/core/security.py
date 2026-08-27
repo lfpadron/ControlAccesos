@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.constants import default_permissions_for_role
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.usuario import Usuario
@@ -143,7 +144,7 @@ def require_permission(*screen_keys: str, minimum: str = "consultar"):
 
         required_level = ACCESS_ORDER[minimum]
         for role in roles:
-            permissions = role.permisos or {}
+            permissions = {**default_permissions_for_role(role.codigo), **(role.permisos or {})}
             for screen_key in screen_keys:
                 access = permissions.get(screen_key, "sin")
                 if ACCESS_ORDER.get(access, 0) >= required_level:

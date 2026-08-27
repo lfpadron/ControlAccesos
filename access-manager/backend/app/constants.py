@@ -42,5 +42,35 @@ MENU_SCREEN_KEYS = (
     "kioskos",
     "turnos-llamados",
     "reportes",
+    "reportes-medicos",
+    "reportes-recepcion",
     "auditoria",
 )
+
+APP_PERMISSION_KEYS = (
+    "app-qr",
+    "app-medicos",
+)
+
+PERMISSION_KEYS = MENU_SCREEN_KEYS + APP_PERMISSION_KEYS
+
+ROLE_DEFAULT_PERMISSIONS = {
+    "RECEPCIONISTA": {
+        "recepcion": "editar",
+        "checkin-qr": "editar",
+        "app-qr": "editar",
+        "reportes-recepcion": "consultar",
+    },
+    "MEDICO": {
+        "pacientes": "consultar",
+        "citas": "consultar",
+        "reportes-medicos": "consultar",
+        "app-medicos": "editar",
+    },
+}
+
+
+def default_permissions_for_role(codigo: str) -> dict[str, str]:
+    if codigo == "ADMIN_SISTEMA":
+        return {screen: "editar" for screen in PERMISSION_KEYS}
+    return dict(ROLE_DEFAULT_PERMISSIONS.get(codigo, {}))

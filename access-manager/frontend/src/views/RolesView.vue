@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { accessLevels, screens } from '../accessControl';
+import { accessDefinitions, accessLevels, screens, type AccessDefinition } from '../accessControl';
 import { activateResource, createRole, deactivateResource, listRoles, updateRole, type AccessLevel, type Role } from '../api/client';
 
 const roles = ref<Role[]>([]);
@@ -26,14 +26,18 @@ const formTitle = computed(() => {
 });
 
 function blankPermissions() {
-  return Object.fromEntries(screens.map((screen) => [screen.key, 'sin' as AccessLevel]));
+  return Object.fromEntries(accessDefinitions.map((screen) => [screen.key, 'sin' as AccessLevel]));
 }
 
 function defaultPermissions(role: Role | null) {
   if (role?.codigo === 'ADMIN_SISTEMA') {
-    return Object.fromEntries(screens.map((screen) => [screen.key, 'editar' as AccessLevel]));
+    return Object.fromEntries(accessDefinitions.map((screen) => [screen.key, 'editar' as AccessLevel]));
   }
   return blankPermissions();
+}
+
+function canSelectAccess(definition: AccessDefinition, level: AccessLevel) {
+  return !definition.allowedLevels || definition.allowedLevels.includes(level);
 }
 
 function setForm(role: Role | null) {
@@ -207,13 +211,14 @@ onMounted(loadData);
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="screen in screens" :key="screen.key">
+                <tr v-for="screen in accessDefinitions" :key="screen.key">
                   <td>{{ screen.label }}</td>
                   <td v-for="level in accessLevels" :key="`${screen.key}-${level.value}`">
-                    <label class="check-row">
+                    <label v-if="canSelectAccess(screen, level.value)" class="check-row">
                       <input v-model="form.permisos[screen.key]" type="radio" :name="`perm-${screen.key}`" :value="level.value" />
                       {{ level.label }}
                     </label>
+                    <span v-else class="permission-empty" aria-label="No aplica">-</span>
                   </td>
                 </tr>
               </tbody>

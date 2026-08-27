@@ -1,4 +1,4 @@
-export type ExportFormat = 'excel' | 'csv' | 'json';
+export type ExportFormat = 'excel' | 'csv' | 'json' | 'pdf';
 export type ExportColumn<T> = {
   key: keyof T | string;
   label: string;
@@ -68,6 +68,15 @@ export function exportRows<T extends object>(
   const body = rows
     .map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(cellValue(row, column))}</td>`).join('')}</tr>`)
     .join('');
+  if (format === 'pdf') {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(safeName)}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#17202a}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #d9e1ea;padding:8px;text-align:left}th{font-size:12px;text-transform:uppercase;color:#526172}</style></head><body><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table><script>window.print();</script></body></html>`;
+    const popup = window.open('', '_blank');
+    if (popup) {
+      popup.document.write(html);
+      popup.document.close();
+    }
+    return;
+  }
   const html = `<html><head><meta charset="utf-8"></head><body><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></body></html>`;
   downloadBlob(html, 'application/vnd.ms-excel;charset=utf-8', `${safeName}.xls`);
 }

@@ -12,6 +12,14 @@ export type ScreenDefinition = {
   path: string;
 };
 
+export type AccessDefinition = {
+  key: string;
+  label: string;
+  path?: string;
+  kind: 'screen' | 'app';
+  allowedLevels?: AccessLevel[];
+};
+
 export const screens: ScreenDefinition[] = [
   { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
   { key: 'perfil', label: 'Perfil', path: '/perfil' },
@@ -40,7 +48,19 @@ export const screens: ScreenDefinition[] = [
   { key: 'kioskos', label: 'Kioskos', path: '/kioskos' },
   { key: 'turnos-llamados', label: 'Turnos llamados', path: '/turnos-llamados' },
   { key: 'reportes', label: 'Reportes', path: '/reportes' },
+  { key: 'reportes-medicos', label: 'Reportes médicos', path: '/reportes/medicos' },
+  { key: 'reportes-recepcion', label: 'Reportes recepción', path: '/reportes/recepcion' },
   { key: 'auditoria', label: 'Auditoría', path: '/auditoria' },
+];
+
+export const appAccessDefinitions: AccessDefinition[] = [
+  { key: 'app-qr', label: 'App de QR', kind: 'app', allowedLevels: ['sin', 'editar'] },
+  { key: 'app-medicos', label: 'App médicos', kind: 'app', allowedLevels: ['sin', 'editar'] },
+];
+
+export const accessDefinitions: AccessDefinition[] = [
+  ...screens.map((screen) => ({ ...screen, kind: 'screen' as const })),
+  ...appAccessDefinitions,
 ];
 
 export const screenByPath = new Map(screens.map((screen) => [screen.path, screen]));
