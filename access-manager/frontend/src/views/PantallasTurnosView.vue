@@ -463,6 +463,12 @@ async function submit() {
   loading.value = true;
   error.value = '';
   message.value = '';
+  const pollingSeconds = Number(form.polling_interval_seconds);
+  if (!Number.isInteger(pollingSeconds) || pollingSeconds < 5 || pollingSeconds > 60) {
+    error.value = 'El polling debe estar entre 5 y 60 segundos.';
+    loading.value = false;
+    return;
+  }
   if (!form.cluster_ids.length) {
     error.value = 'Debe asignar al menos un clúster.';
     loading.value = false;
@@ -692,7 +698,7 @@ onMounted(loadData);
         <div class="form-grid">
           <div class="form-row">
             <label for="polling">Polling</label>
-            <input id="polling" v-model.number="form.polling_interval_seconds" type="number" min="2" max="10" required />
+            <input id="polling" v-model.number="form.polling_interval_seconds" type="number" min="5" max="60" required />
           </div>
           <label class="check-row screen-active">
             <input v-model="form.activa" type="checkbox" />

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PantallaTurnosConfigMixin(BaseModel):
-    polling_interval_seconds: int = Field(default=5, ge=2, le=10)
+    polling_interval_seconds: int = Field(default=5, ge=5, le=60)
     color_fondo: str | None = Field(default=None, max_length=40)
     color_texto: str | None = Field(default=None, max_length=40)
     color_turno_nuevo: str | None = Field(default=None, max_length=40)
@@ -43,7 +43,7 @@ class PantallaTurnosUpdate(BaseModel):
     nombre: str | None = Field(default=None, max_length=180)
     descripcion: str | None = Field(default=None, max_length=1000)
     activa: bool | None = None
-    polling_interval_seconds: int | None = Field(default=None, ge=2, le=10)
+    polling_interval_seconds: int | None = Field(default=None, ge=5, le=60)
     color_fondo: str | None = Field(default=None, max_length=40)
     color_texto: str | None = Field(default=None, max_length=40)
     color_turno_nuevo: str | None = Field(default=None, max_length=40)

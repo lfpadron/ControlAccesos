@@ -1,0 +1,208 @@
+diff --git a/access-manager/backend/app/models/display.py b/access-manager/backend/app/models/display.py
+index aa218c3..e9c638e 100644
+--- a/access-manager/backend/app/models/display.py
++++ b/access-manager/backend/app/models/display.py
+@@ -13,7 +13,7 @@ from app.models.base import Base, TimestampMixin
+ class PantallaTurnos(TimestampMixin, Base):
+     __tablename__ = "pantallas_turnos"
+     __table_args__ = (
+-        CheckConstraint("polling_interval_seconds BETWEEN 2 AND 10", name="polling_interval_range"),
++        CheckConstraint("polling_interval_seconds BETWEEN 5 AND 60", name="polling_interval_range"),
+         CheckConstraint("segundos_resaltado BETWEEN 5 AND 120", name="segundos_resaltado_range"),
+         CheckConstraint("segundos_visible BETWEEN 30 AND 3600", name="segundos_visible_range"),
+         CheckConstraint("max_turnos_visibles BETWEEN 1 AND 50", name="max_turnos_visibles_range"),
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index 1569578..cd1b474 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
+ 
+ 
+ class PantallaTurnosConfigMixin(BaseModel):
+-    polling_interval_seconds: int = Field(default=5, ge=2, le=10)
++    polling_interval_seconds: int = Field(default=5, ge=5, le=60)
+     color_fondo: str | None = Field(default=None, max_length=40)
+     color_texto: str | None = Field(default=None, max_length=40)
+     color_turno_nuevo: str | None = Field(default=None, max_length=40)
+@@ -43,7 +43,7 @@ class PantallaTurnosUpdate(BaseModel):
+     nombre: str | None = Field(default=None, max_length=180)
+     descripcion: str | None = Field(default=None, max_length=1000)
+     activa: bool | None = None
+-    polling_interval_seconds: int | None = Field(default=None, ge=2, le=10)
++    polling_interval_seconds: int | None = Field(default=None, ge=5, le=60)
+     color_fondo: str | None = Field(default=None, max_length=40)
+     color_texto: str | None = Field(default=None, max_length=40)
+     color_turno_nuevo: str | None = Field(default=None, max_length=40)
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 75162e2..23474c7 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -29,8 +29,10 @@ const displayName = ref('');
+ const voiceSupported = ref(false);
+ const voiceEnabled = ref(false);
+ let timer: number | undefined;
++let turnoTimingTimer: number | undefined;
+ let knownTurnoKeys = new Set<string>();
+ let hasLoadedTurnos = false;
++let serverClockOffsetMs = 0;
+ 
+ const screenStyle = computed(() => ({
+   '--display-bg': config.value.color_fondo || '#06111f',
+@@ -40,8 +42,9 @@ const screenStyle = computed(() => ({
+   '--display-new-size': `${config.value.font_size_turno_nuevo || 96}px`,
+   '--display-normal-size': `${config.value.font_size_turno_normal || 64}px`,
+ }));
++const hasHighlightedTurnos = computed(() => turnos.value.some((item) => item.resaltado));
+ const effectiveDisplayMode = computed<DisplayMode>(() => {
+-  if (turnos.value.length > 0) return 'turnos';
++  if (hasHighlightedTurnos.value) return 'turnos';
+   if (config.value.mostrar_proxima_cita && !config.value.mostrar_turnos) return 'proxima_cita';
+   return displayMode.value;
+ });
+@@ -54,10 +57,72 @@ const doctorStatusOptions = [
+ ];
+ 
+ function pollingMs() {
+-  const seconds = Math.min(10, Math.max(2, config.value.polling_interval_seconds || 5));
++  const seconds = Math.min(60, Math.max(5, config.value.polling_interval_seconds || 5));
+   return seconds * 1000;
+ }
+ 
++function timestampMs(value: string) {
++  const timestamp = Date.parse(value);
++  return Number.isFinite(timestamp) ? timestamp : 0;
++}
++
++function syncServerClock(value: string) {
++  const serverNow = timestampMs(value);
++  if (serverNow > 0) {
++    serverClockOffsetMs = serverNow - Date.now();
++  }
++}
++
++function currentServerTimeMs() {
++  return Date.now() + serverClockOffsetMs;
++}
++
++function turnoHighlightExpiresAt(item: PublicDisplayTurno) {
++  return timestampMs(item.llamado_en) + config.value.segundos_resaltado * 1000;
++}
++
++function turnoVisibleExpiresAt(item: PublicDisplayTurno) {
++  return timestampMs(item.llamado_en) + config.value.segundos_visible * 1000;
++}
++
++function normalizeTurnoTimings(items: PublicDisplayTurno[]) {
++  const now = currentServerTimeMs();
++  return items
++    .filter((item) => turnoVisibleExpiresAt(item) > now)
++    .map((item) => (item.resaltado && turnoHighlightExpiresAt(item) <= now ? { ...item, resaltado: false } : item));
++}
++
++function refreshTurnoTimings() {
++  const wasForcingTurnos = hasHighlightedTurnos.value;
++  const previousTurnoCount = turnos.value.length;
++  const nextTurnos = normalizeTurnoTimings(turnos.value);
++  turnos.value = nextTurnos;
++  const isRotatingDisplay = config.value.mostrar_turnos && config.value.mostrar_proxima_cita;
++  if (
++    !nextTurnos.some((item) => item.resaltado) &&
++    (wasForcingTurnos || (isRotatingDisplay && previousTurnoCount > 0 && nextTurnos.length === 0))
++  ) {
++    syncDisplayMode(nextTurnos);
++  }
++  scheduleTurnoTimingRefresh();
++}
++
++function scheduleTurnoTimingRefresh() {
++  window.clearTimeout(turnoTimingTimer);
++  const now = currentServerTimeMs();
++  const expirations = turnos.value.flatMap((item) => {
++    const values = [turnoVisibleExpiresAt(item)];
++    if (item.resaltado) {
++      values.push(turnoHighlightExpiresAt(item));
++    }
++    return values.filter((value) => value > now);
++  });
++  if (!expirations.length) return;
++  const nextExpiration = Math.min(...expirations);
++  const delay = Math.max(250, nextExpiration - now + 100);
++  turnoTimingTimer = window.setTimeout(refreshTurnoTimings, delay);
++}
++
+ function storageAvailable() {
+   try {
+     window.localStorage.getItem(VOICE_SETTING_KEY);
+@@ -148,7 +213,7 @@ function estimatedTimeLabel(item: PublicDisplayProximaCita) {
+ }
+ 
+ function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
+-  if (responseTurnos.length > 0) {
++  if (responseTurnos.some((item) => item.resaltado)) {
+     displayMode.value = 'turnos';
+     return;
+   }
+@@ -174,14 +239,16 @@ async function loadData() {
+   window.clearTimeout(timer);
+   try {
+     const response = await getPublicDisplayTurnos(codigoDispositivo.value, token.value);
+-    const nextKeys = new Set(response.turnos.map(turnoKey));
+-    const newHighlightedTurnos = response.turnos.filter(
++    config.value = response.config;
++    syncServerClock(response.ultima_conexion);
++    const responseTurnos = normalizeTurnoTimings(response.turnos);
++    const nextKeys = new Set(responseTurnos.map(turnoKey));
++    const newHighlightedTurnos = responseTurnos.filter(
+       (item) => item.resaltado && !knownTurnoKeys.has(turnoKey(item)),
+     );
+-    config.value = response.config;
+-    turnos.value = response.turnos;
++    turnos.value = responseTurnos;
+     proximasCitas.value = response.proximas_citas ?? [];
+-    syncDisplayMode(response.turnos);
++    syncDisplayMode(responseTurnos);
+     displayName.value = response.nombre || response.codigo_dispositivo;
+     if (hasLoadedTurnos) {
+       announceTurnos(newHighlightedTurnos);
+@@ -195,6 +262,7 @@ async function loadData() {
+     connected.value = false;
+     error.value = err instanceof Error ? err.message : 'Sin conexión';
+   } finally {
++    scheduleTurnoTimingRefresh();
+     timer = window.setTimeout(loadData, pollingMs());
+   }
+ }
+@@ -211,6 +279,7 @@ onMounted(async () => {
+ 
+ onUnmounted(() => {
+   window.clearTimeout(timer);
++  window.clearTimeout(turnoTimingTimer);
+   if (voiceSupported.value) {
+     window.speechSynthesis.cancel();
+   }
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index d130964..dcdbd9f 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -463,6 +463,12 @@ async function submit() {
+   loading.value = true;
+   error.value = '';
+   message.value = '';
++  const pollingSeconds = Number(form.polling_interval_seconds);
++  if (!Number.isInteger(pollingSeconds) || pollingSeconds < 5 || pollingSeconds > 60) {
++    error.value = 'El polling debe estar entre 5 y 60 segundos.';
++    loading.value = false;
++    return;
++  }
+   if (!form.cluster_ids.length) {
+     error.value = 'Debe asignar al menos un clúster.';
+     loading.value = false;
+@@ -692,7 +698,7 @@ onMounted(loadData);
+         <div class="form-grid">
+           <div class="form-row">
+             <label for="polling">Polling</label>
+-            <input id="polling" v-model.number="form.polling_interval_seconds" type="number" min="2" max="10" required />
++            <input id="polling" v-model.number="form.polling_interval_seconds" type="number" min="5" max="60" required />
+           </div>
+           <label class="check-row screen-active">
+             <input v-model="form.activa" type="checkbox" />

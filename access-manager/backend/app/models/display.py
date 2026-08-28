@@ -13,7 +13,7 @@ from app.models.base import Base, TimestampMixin
 class PantallaTurnos(TimestampMixin, Base):
     __tablename__ = "pantallas_turnos"
     __table_args__ = (
-        CheckConstraint("polling_interval_seconds BETWEEN 2 AND 10", name="polling_interval_range"),
+        CheckConstraint("polling_interval_seconds BETWEEN 5 AND 60", name="polling_interval_range"),
         CheckConstraint("segundos_resaltado BETWEEN 5 AND 120", name="segundos_resaltado_range"),
         CheckConstraint("segundos_visible BETWEEN 30 AND 3600", name="segundos_visible_range"),
         CheckConstraint("max_turnos_visibles BETWEEN 1 AND 50", name="max_turnos_visibles_range"),
