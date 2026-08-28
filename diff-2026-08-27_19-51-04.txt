@@ -1,0 +1,1263 @@
+diff --git a/access-manager/app_medicos/lib/api_client.dart b/access-manager/app_medicos/lib/api_client.dart
+index cd684c1..352e6ff 100644
+--- a/access-manager/app_medicos/lib/api_client.dart
++++ b/access-manager/app_medicos/lib/api_client.dart
+@@ -75,6 +75,29 @@ class ApiClient {
+         .toList();
+   }
+ 
++  Future<List<MedicoEstado>> listMedicosEstado() async {
++    final payload = await _request<List<dynamic>>(
++      'GET',
++      '/estado-medico/medicos',
++    );
++    return payload
++        .map((item) => MedicoEstado.fromJson(item as Map<String, dynamic>))
++        .toList();
++  }
++
++  Future<MedicoEstado> updateMedicoEstado(
++    String medicoId, {
++    required String estadoAtencion,
++    String? notasEstado,
++  }) async {
++    final payload = await _request<Map<String, dynamic>>(
++      'PATCH',
++      '/estado-medico/medicos/$medicoId',
++      body: {'estado_atencion': estadoAtencion, 'notas_estado': notasEstado},
++    );
++    return MedicoEstado.fromJson(payload);
++  }
++
+   Future<List<Consultorio>> listConsultorios({String? medicoId}) async {
+     final payload = await _request<List<dynamic>>(
+       'GET',
+diff --git a/access-manager/app_medicos/lib/main.dart b/access-manager/app_medicos/lib/main.dart
+index dc13ffa..dd354c8 100644
+--- a/access-manager/app_medicos/lib/main.dart
++++ b/access-manager/app_medicos/lib/main.dart
+@@ -356,6 +356,7 @@ class HomeScreen extends StatefulWidget {
+ class _HomeScreenState extends State<HomeScreen> {
+   final _agendaKey = GlobalKey<_AgendaScreenState>();
+   final _patientsKey = GlobalKey<_PatientsScreenState>();
++  final _doctorStatusKey = GlobalKey<_DoctorStatusScreenState>();
+   int _selectedIndex = 0;
+ 
+   String get _title {
+@@ -363,6 +364,7 @@ class _HomeScreenState extends State<HomeScreen> {
+       0 => 'Agenda',
+       1 => 'Pacientes',
+       2 => 'Nueva cita',
++      3 => 'Estado del médico',
+       _ => 'Perfil',
+     };
+   }
+@@ -372,6 +374,8 @@ class _HomeScreenState extends State<HomeScreen> {
+       _agendaKey.currentState?.refresh();
+     } else if (_selectedIndex == 1) {
+       _patientsKey.currentState?.refresh();
++    } else if (_selectedIndex == 3) {
++      _doctorStatusKey.currentState?.refresh();
+     }
+   }
+ 
+@@ -414,6 +418,11 @@ class _HomeScreenState extends State<HomeScreen> {
+           setState(() => _selectedIndex = 0);
+         },
+       ),
++      DoctorStatusScreen(
++        key: _doctorStatusKey,
++        api: widget.api,
++        session: widget.session,
++      ),
+       ProfileScreen(session: widget.session, onLogout: widget.onLogout),
+     ];
+ 
+@@ -421,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
+       appBar: AppBar(
+         title: Text(_title),
+         actions: [
+-          if (_selectedIndex <= 1)
++          if (_selectedIndex <= 1 || _selectedIndex == 3)
+             IconButton(
+               tooltip: 'Actualizar',
+               onPressed: _refreshCurrentTab,
+@@ -457,6 +466,11 @@ class _HomeScreenState extends State<HomeScreen> {
+             selectedIcon: Icon(Icons.add_circle),
+             label: 'Nueva',
+           ),
++          NavigationDestination(
++            icon: Icon(Icons.medical_services_outlined),
++            selectedIcon: Icon(Icons.medical_services),
++            label: 'Estado',
++          ),
+           NavigationDestination(
+             icon: Icon(Icons.person_outline),
+             selectedIcon: Icon(Icons.person),
+@@ -1472,6 +1486,280 @@ class _AppointmentFormContentState extends State<AppointmentFormContent> {
+   }
+ }
+ 
++class DoctorStatusScreen extends StatefulWidget {
++  const DoctorStatusScreen({
++    super.key,
++    required this.api,
++    required this.session,
++  });
++
++  final ApiClient api;
++  final SavedSession session;
++
++  @override
++  State<DoctorStatusScreen> createState() => _DoctorStatusScreenState();
++}
++
++class _DoctorStatusScreenState extends State<DoctorStatusScreen> {
++  final _notesController = TextEditingController();
++  List<MedicoEstado> _medicos = const [];
++  String? _selectedMedicoId;
++  bool _loading = true;
++  bool _saving = false;
++  String? _error;
++  String? _message;
++
++  bool get _isDoctorUser => widget.session.user.roleCodes.contains('MEDICO');
++
++  MedicoEstado? get _selectedMedico {
++    return _findMedicoById(_medicos, _selectedMedicoId);
++  }
++
++  MedicoEstado? _findMedicoById(List<MedicoEstado> rows, String? medicoId) {
++    if (medicoId == null) return null;
++    for (final medico in rows) {
++      if (medico.id == medicoId) return medico;
++    }
++    return null;
++  }
++
++  @override
++  void initState() {
++    super.initState();
++    refresh();
++  }
++
++  @override
++  void dispose() {
++    _notesController.dispose();
++    super.dispose();
++  }
++
++  String? _preferredMedicoId(List<MedicoEstado> rows) {
++    if (rows.isEmpty) return null;
++    if (_isDoctorUser) {
++      for (final medico in rows) {
++        if (medico.usuarioId == widget.session.user.id) return medico.id;
++      }
++      return rows.first.id;
++    }
++    if (rows.length == 1) return rows.first.id;
++    final selectedId = _selectedMedicoId;
++    if (selectedId != null && rows.any((medico) => medico.id == selectedId)) {
++      return selectedId;
++    }
++    return null;
++  }
++
++  Future<void> refresh({bool silent = false}) async {
++    if (!silent) {
++      setState(() {
++        _loading = true;
++        _error = null;
++      });
++    }
++    try {
++      final rows = await widget.api.listMedicosEstado();
++      final selectedId = _preferredMedicoId(rows);
++      final selected = _findMedicoById(rows, selectedId);
++      if (!mounted) return;
++      setState(() {
++        _medicos = rows;
++        _selectedMedicoId = selectedId;
++        _notesController.text = selected?.notasEstado ?? '';
++        _loading = false;
++      });
++    } catch (error) {
++      if (!mounted) return;
++      if (!silent) {
++        setState(() {
++          _error = error.toString();
++          _loading = false;
++        });
++      }
++    }
++  }
++
++  void _selectMedico(String? medicoId) {
++    final selected = _findMedicoById(_medicos, medicoId);
++    setState(() {
++      _selectedMedicoId = selected?.id;
++      _notesController.text = selected?.notasEstado ?? '';
++      _message = null;
++    });
++  }
++
++  Future<void> _setStatus(String estadoAtencion) async {
++    final medico = _selectedMedico;
++    if (medico == null) {
++      setState(() => _error = 'Seleccione un médico.');
++      return;
++    }
++    if (_notesController.text.length > 100) {
++      setState(() => _error = 'Las notas deben tener máximo 100 caracteres.');
++      return;
++    }
++    setState(() {
++      _saving = true;
++      _error = null;
++      _message = null;
++    });
++    try {
++      final updated = await widget.api.updateMedicoEstado(
++        medico.id,
++        estadoAtencion: estadoAtencion,
++        notasEstado: _notesController.text.trim().isEmpty
++            ? null
++            : _notesController.text.trim(),
++      );
++      if (!mounted) return;
++      setState(() {
++        _medicos = _medicos
++            .map((item) => item.id == updated.id ? updated : item)
++            .toList();
++        _selectedMedicoId = updated.id;
++        _notesController.text = updated.notasEstado ?? '';
++        _message =
++            'Estado actualizado: ${doctorStatusMeta(updated.estadoAtencion).label}.';
++      });
++    } catch (error) {
++      if (!mounted) return;
++      setState(() => _error = error.toString());
++    } finally {
++      if (mounted) setState(() => _saving = false);
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    if (_loading && _medicos.isEmpty) {
++      return const Center(child: CircularProgressIndicator());
++    }
++    final selected = _selectedMedico;
++    return RefreshIndicator(
++      onRefresh: refresh,
++      child: ListView(
++        padding: const EdgeInsets.all(16),
++        children: [
++          Card(
++            child: Padding(
++              padding: const EdgeInsets.all(16),
++              child: Column(
++                crossAxisAlignment: CrossAxisAlignment.start,
++                children: [
++                  LayoutBuilder(
++                    builder: (context, constraints) {
++                      return DropdownMenu<String>(
++                        key: ValueKey(_selectedMedicoId ?? 'sin-medico'),
++                        width: constraints.maxWidth,
++                        initialSelection: _selectedMedicoId,
++                        enabled: !_isDoctorUser && !_saving,
++                        enableFilter: true,
++                        requestFocusOnTap: true,
++                        label: const Text('Médico'),
++                        dropdownMenuEntries: _medicos
++                            .map(
++                              (medico) => DropdownMenuEntry(
++                                value: medico.id,
++                                label: medico.label,
++                              ),
++                            )
++                            .toList(),
++                        onSelected: _selectMedico,
++                      );
++                    },
++                  ),
++                  if (_message != null) ...[
++                    const SizedBox(height: 12),
++                    Text(
++                      _message!,
++                      style: const TextStyle(
++                        color: Color(0xFF11845B),
++                        fontWeight: FontWeight.w700,
++                      ),
++                    ),
++                  ],
++                  if (_error != null) ...[
++                    const SizedBox(height: 12),
++                    ErrorBanner(message: _error!),
++                  ],
++                ],
++              ),
++            ),
++          ),
++          const SizedBox(height: 12),
++          if (selected == null)
++            const EmptyState(
++              icon: Icons.medical_services_outlined,
++              text: 'No hay médico seleccionado.',
++            )
++          else
++            Card(
++              child: Padding(
++                padding: const EdgeInsets.all(16),
++                child: Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  children: [
++                    Text(
++                      selected.label,
++                      style: Theme.of(context).textTheme.titleLarge,
++                    ),
++                    const SizedBox(height: 10),
++                    DoctorStatusChip(estado: selected.estadoAtencion),
++                    const SizedBox(height: 16),
++                    TextField(
++                      controller: _notesController,
++                      enabled: !_saving,
++                      maxLength: 100,
++                      minLines: 2,
++                      maxLines: 3,
++                      decoration: const InputDecoration(labelText: 'Notas'),
++                    ),
++                    Align(
++                      alignment: Alignment.centerRight,
++                      child: TextButton.icon(
++                        onPressed: _saving
++                            ? null
++                            : () => setState(_notesController.clear),
++                        icon: const Icon(Icons.cleaning_services_outlined),
++                        label: const Text('Limpiar'),
++                      ),
++                    ),
++                    const SizedBox(height: 8),
++                    Wrap(
++                      spacing: 8,
++                      runSpacing: 8,
++                      children: doctorStatusMetas
++                          .map(
++                            (status) => OutlinedButton.icon(
++                              onPressed: _saving
++                                  ? null
++                                  : () => _setStatus(status.value),
++                              icon: Icon(status.icon, color: status.color),
++                              label: Text(status.label),
++                            ),
++                          )
++                          .toList(),
++                    ),
++                    if (_saving) ...[
++                      const SizedBox(height: 12),
++                      const LinearProgressIndicator(),
++                    ],
++                  ],
++                ),
++              ),
++            ),
++          if (!_loading && _medicos.isEmpty)
++            const EmptyState(
++              icon: Icons.medical_services_outlined,
++              text: 'No hay médicos disponibles.',
++            ),
++        ],
++      ),
++    );
++  }
++}
++
+ class ProfileScreen extends StatelessWidget {
+   const ProfileScreen({
+     super.key,
+@@ -1821,6 +2109,22 @@ class StatusChip extends StatelessWidget {
+   }
+ }
+ 
++class DoctorStatusChip extends StatelessWidget {
++  const DoctorStatusChip({super.key, required this.estado});
++
++  final String estado;
++
++  @override
++  Widget build(BuildContext context) {
++    final meta = doctorStatusMeta(estado);
++    return Chip(
++      visualDensity: VisualDensity.compact,
++      avatar: Icon(meta.icon, size: 18, color: meta.color),
++      label: Text(meta.label),
++    );
++  }
++}
++
+ class ArrivalBanner extends StatelessWidget {
+   const ArrivalBanner({super.key, required this.estado});
+ 
+@@ -1987,6 +2291,59 @@ const appointmentStates = [
+ 
+ const appointmentTypes = ['TODAS', 'PROGRAMADA', 'ESPONTANEA'];
+ 
++class DoctorStatusMeta {
++  const DoctorStatusMeta({
++    required this.value,
++    required this.label,
++    required this.icon,
++    required this.color,
++  });
++
++  final String value;
++  final String label;
++  final IconData icon;
++  final Color color;
++}
++
++const doctorStatusMetas = [
++  DoctorStatusMeta(
++    value: 'AUSENTE',
++    label: 'Ausente',
++    icon: Icons.close,
++    color: Color(0xFFB42318),
++  ),
++  DoctorStatusMeta(
++    value: 'NO_DISPONIBLE',
++    label: 'No disponible',
++    icon: Icons.priority_high,
++    color: Color(0xFFC2410C),
++  ),
++  DoctorStatusMeta(
++    value: 'EN_CONSULTA',
++    label: 'En consulta',
++    icon: Icons.circle,
++    color: Color(0xFFB7791F),
++  ),
++  DoctorStatusMeta(
++    value: 'DISPONIBLE',
++    label: 'Disponible',
++    icon: Icons.check,
++    color: Color(0xFF11845B),
++  ),
++];
++
++DoctorStatusMeta doctorStatusMeta(String value) {
++  for (final meta in doctorStatusMetas) {
++    if (meta.value == value) return meta;
++  }
++  return DoctorStatusMeta(
++    value: value,
++    label: value,
++    icon: Icons.help_outline,
++    color: const Color(0xFF4B5563),
++  );
++}
++
+ String appointmentStateLabel(String value) {
+   return switch (value) {
+     'TODAS' => 'Todas',
+diff --git a/access-manager/app_medicos/lib/models.dart b/access-manager/app_medicos/lib/models.dart
+index 1fa5aca..d245acf 100644
+--- a/access-manager/app_medicos/lib/models.dart
++++ b/access-manager/app_medicos/lib/models.dart
+@@ -143,12 +143,14 @@ class Medico {
+     required this.id,
+     required this.nombre,
+     required this.apellidos,
++    this.usuarioId,
+     this.nombreVisible,
+   });
+ 
+   final String id;
+   final String nombre;
+   final String apellidos;
++  final String? usuarioId;
+   final String? nombreVisible;
+ 
+   String get label {
+@@ -162,11 +164,53 @@ class Medico {
+       id: json['id'] as String? ?? '',
+       nombre: json['nombre'] as String? ?? '',
+       apellidos: json['apellidos'] as String? ?? '',
++      usuarioId: json['usuario_id'] as String?,
+       nombreVisible: json['nombre_visible'] as String?,
+     );
+   }
+ }
+ 
++class MedicoEstado {
++  const MedicoEstado({
++    required this.id,
++    required this.nombre,
++    required this.apellidos,
++    required this.estadoAtencion,
++    required this.updatedAt,
++    this.usuarioId,
++    this.nombreVisible,
++    this.notasEstado,
++  });
++
++  final String id;
++  final String nombre;
++  final String apellidos;
++  final String estadoAtencion;
++  final String updatedAt;
++  final String? usuarioId;
++  final String? nombreVisible;
++  final String? notasEstado;
++
++  String get label {
++    final visible = nombreVisible?.trim();
++    if (visible != null && visible.isNotEmpty) return visible;
++    return '$nombre $apellidos'.trim();
++  }
++
++  factory MedicoEstado.fromJson(Map<String, dynamic> json) {
++    return MedicoEstado(
++      id: json['id'] as String? ?? '',
++      nombre: json['nombre'] as String? ?? '',
++      apellidos: json['apellidos'] as String? ?? '',
++      estadoAtencion: json['estado_atencion'] as String? ?? 'DISPONIBLE',
++      updatedAt: json['updated_at'] as String? ?? '',
++      usuarioId: json['usuario_id'] as String?,
++      nombreVisible: json['nombre_visible'] as String?,
++      notasEstado: json['notas_estado'] as String?,
++    );
++  }
++}
++
+ class Consultorio {
+   const Consultorio({
+     required this.id,
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index b1d4335..ebe3ec3 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -39,6 +39,8 @@ from app.schemas.flow import (
+     CitaRead,
+     CitaSearchResult,
+     CitaUpdate,
++    MedicoEstadoRead,
++    MedicoEstadoUpdate,
+     MobileSessionResponse,
+     PacienteCreate,
+     PacienteRead,
+@@ -86,6 +88,7 @@ citas_router = APIRouter()
+ qr_router = APIRouter()
+ mobile_router = APIRouter()
+ catalogos_operativos_router = APIRouter()
++medico_estado_router = APIRouter()
+ recepcion_router = APIRouter()
+ reportes_router = APIRouter()
+ 
+@@ -105,6 +108,8 @@ CatalogosOperativosUser = Depends(
+         "reportes-recepcion",
+     )
+ )
++MedicoEstadoReadUser = Depends(require_permission("estado-medico", "app-medicos", "citas", "citas-hoy", "pacientes"))
++MedicoEstadoWriteUser = Depends(require_permission("estado-medico", "app-medicos", minimum="editar"))
+ PacientesReadUser = Depends(require_permission("pacientes"))
+ PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
+ CitasAgendaReadUser = Depends(require_permission("citas"))
+@@ -481,14 +486,7 @@ def institucion_assigned_to_medico(medico_id: UUID):
+     )
+ 
+ 
+-@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
+-def list_medicos_operativos(
+-    db: Session = Depends(get_db),
+-    current_user: Usuario = CatalogosOperativosUser,
+-) -> list[Medico]:
+-    today = business_today()
+-    if sync_medicos_for_medico_users(db, today):
+-        db.commit()
++def medico_operativo_access_predicate(db: Session, current_user: Usuario, today: date):
+     roles = active_role_codes(db, current_user)
+     access_predicate = medico_catalog_access_predicate(db, current_user, today)
+     if not roles.intersection(ADMIN_ROLE_CODES):
+@@ -499,16 +497,91 @@ def list_medicos_operativos(
+             )
+         elif roles.intersection(ASSISTANT_MEDICO_ROLE_CODES) or user_has_direct_medico_assignments(db, current_user, today):
+             access_predicate = medico_assigned_to_user_predicate(current_user, today)
+-    query = (
++    return access_predicate
++
++
++def accessible_medicos_query(db: Session, current_user: Usuario):
++    today = business_today()
++    return (
+         select(Medico)
+-        .where(Medico.activo.is_(True), access_predicate)
++        .where(
++            Medico.activo.is_(True),
++            medico_operativo_access_predicate(db, current_user, today),
++        )
+         .order_by(
+             func.lower(func.coalesce(Medico.apellidos, "")),
+             func.lower(func.coalesce(Medico.nombre, "")),
+             Medico.id,
+         )
+     )
+-    return list(db.execute(query).scalars())
++
++
++def accessible_medicos_for_user(db: Session, current_user: Usuario) -> list[Medico]:
++    today = business_today()
++    if sync_medicos_for_medico_users(db, today):
++        db.commit()
++    return list(db.execute(accessible_medicos_query(db, current_user)).scalars())
++
++
++def ensure_medico_estado_access(db: Session, current_user: Usuario, medico_id: UUID) -> Medico:
++    query = (
++        select(Medico)
++        .where(
++            Medico.id == medico_id,
++            Medico.activo.is_(True),
++            medico_operativo_access_predicate(db, current_user, business_today()),
++        )
++        .limit(1)
++    )
++    item = db.execute(query).scalar_one_or_none()
++    if item is None:
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Médico no encontrado.")
++    return item
++
++
++@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
++def list_medicos_operativos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = CatalogosOperativosUser,
++) -> list[Medico]:
++    return accessible_medicos_for_user(db, current_user)
++
++
++@medico_estado_router.get("/medicos", response_model=list[MedicoEstadoRead])
++def list_estado_medicos(
++    db: Session = Depends(get_db),
++    current_user: Usuario = MedicoEstadoReadUser,
++) -> list[Medico]:
++    return accessible_medicos_for_user(db, current_user)
++
++
++@medico_estado_router.patch("/medicos/{medico_id}", response_model=MedicoEstadoRead)
++def update_estado_medico(
++    medico_id: UUID,
++    payload: MedicoEstadoUpdate,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario = MedicoEstadoWriteUser,
++) -> Medico:
++    medico = ensure_medico_estado_access(db, current_user, medico_id)
++    before = audit_safe_dict(medico)
++    medico.estado_atencion = payload.estado_atencion
++    medico.notas_estado = payload.notas_estado
++    db.flush()
++    record_audit_event(
++        db,
++        evento="ESTADO_MEDICO_ACTUALIZADO",
++        entidad="medicos",
++        entidad_id=medico.id,
++        usuario_id=current_user.id,
++        canal="WEB",
++        ip_origen=client_ip(request),
++        valor_antes=before,
++        valor_despues=audit_safe_dict(medico),
++    )
++    db.commit()
++    db.refresh(medico)
++    return medico
+ 
+ 
+ @catalogos_operativos_router.get("/instituciones", response_model=list[InstitucionRead])
+@@ -711,13 +784,16 @@ def cita_zona_horaria(db: Session, cita: Cita) -> str:
+ def cita_item(db: Session, cita: Cita) -> CitaListItem:
+     payload = CitaRead.model_validate(cita).model_dump()
+     paciente = db.get(Paciente, cita.paciente_id)
++    medico = db.get(Medico, cita.medico_id)
+     return CitaListItem(
+         **payload,
+         paciente=patient_display_name(paciente),
+         paciente_nombre_completo=patient_medical_name(paciente),
+         consultorio=consultorio_label(db.get(Consultorio, cita.consultorio_id)),
+         piso=piso_label(db.get(Piso, cita.piso_id)),
+-        medico=medico_label(db.get(Medico, cita.medico_id)),
++        medico=medico_label(medico),
++        medico_estado_atencion=medico.estado_atencion if medico is not None else "DISPONIBLE",
++        medico_notas_estado=medico.notas_estado if medico is not None else None,
+     )
+ 
+ 
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index 89afe98..10705b2 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -14,6 +14,7 @@ api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
+ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
+ api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
+ api_router.include_router(flow.catalogos_operativos_router, prefix="/catalogos-operativos", tags=["catalogos-operativos"])
++api_router.include_router(flow.medico_estado_router, prefix="/estado-medico", tags=["estado-medico"])
+ api_router.include_router(flow.recepcion_router, prefix="/recepcion", tags=["recepcion"])
+ api_router.include_router(flow.reportes_router, prefix="/reportes", tags=["reportes"])
+ api_router.include_router(contactos.router, prefix="/contactos-institucionales", tags=["contactos-institucionales"])
+diff --git a/access-manager/backend/app/constants.py b/access-manager/backend/app/constants.py
+index 89604e3..acd682c 100644
+--- a/access-manager/backend/app/constants.py
++++ b/access-manager/backend/app/constants.py
+@@ -31,6 +31,7 @@ MENU_SCREEN_KEYS = (
+     "pacientes",
+     "citas",
+     "citas-hoy",
++    "estado-medico",
+     "recepcion",
+     "checkin-qr",
+     "contactos-institucionales",
+@@ -64,6 +65,7 @@ ROLE_DEFAULT_PERMISSIONS = {
+     "MEDICO": {
+         "pacientes": "consultar",
+         "citas": "consultar",
++        "estado-medico": "editar",
+         "reportes-medicos": "consultar",
+         "app-medicos": "editar",
+     },
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index 30c09a7..d5c2625 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -138,6 +138,10 @@ class Medico(TimestampMixin, Base):
+             "'PACIENTE_TURNO_CONSULTORIO', 'TURNO_CONSULTORIO')",
+             name="ck_medicos_plantilla_turno",
+         ),
++        CheckConstraint(
++            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
++            name="ck_medicos_estado_atencion",
++        ),
+     )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+@@ -151,6 +155,13 @@ class Medico(TimestampMixin, Base):
+         server_default=TURNO_TEMPLATE_DEFAULT,
+         nullable=False,
+     )
++    estado_atencion: Mapped[str] = mapped_column(
++        String(32),
++        default="DISPONIBLE",
++        server_default="DISPONIBLE",
++        nullable=False,
++    )
++    notas_estado: Mapped[str | None] = mapped_column(String(100))
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 907fe31..b6dfd2f 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -19,6 +19,7 @@ ESTADOS_CITA = {
+     "EXPIRADA",
+ }
+ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM", "API_EXTERNA"}
++ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
+ 
+ 
+ class PacienteBase(BaseModel):
+@@ -162,6 +163,40 @@ class CitaListItem(CitaRead):
+     consultorio: str | None = None
+     piso: str | None = None
+     medico: str | None = None
++    medico_estado_atencion: str = "DISPONIBLE"
++    medico_notas_estado: str | None = None
++
++
++class MedicoEstadoRead(BaseModel):
++    id: UUID
++    usuario_id: UUID | None = None
++    nombre: str
++    apellidos: str
++    nombre_visible: str | None = None
++    estado_atencion: str
++    notas_estado: str | None = None
++    updated_at: datetime
++
++    model_config = ConfigDict(from_attributes=True)
++
++
++class MedicoEstadoUpdate(BaseModel):
++    estado_atencion: str = Field(max_length=32)
++    notas_estado: str | None = Field(default=None, max_length=100)
++
++    @field_validator("notas_estado", mode="before")
++    @classmethod
++    def blank_note_to_none(cls, value):
++        if isinstance(value, str):
++            text = value.strip()
++            return text or None
++        return value
++
++    @model_validator(mode="after")
++    def validate_estado(self):
++        if self.estado_atencion not in ESTADOS_ATENCION_MEDICO:
++            raise ValueError("Estado de médico inválido.")
++        return self
+ 
+ 
+ class CitaSearchResult(BaseModel):
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 53c44be..22ee589 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -135,6 +135,69 @@ def test_recepcion_loads_location_catalogs_and_today_options(client: TestClient,
+     assert citas_response.json()["total"] >= 1
+ 
+ 
++def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth_headers: dict[str, str]) -> None:
++    pacientes_response = client.get("/api/pacientes", headers=auth_headers)
++    medicos_response = client.get("/api/medicos", headers=auth_headers)
++    consultorios_response = client.get("/api/consultorios", headers=auth_headers)
++    for response in (pacientes_response, medicos_response, consultorios_response):
++        assert response.status_code == 200, response.text
++
++    paciente = next(item for item in pacientes_response.json() if item["folio_paciente"] == "PDEMO246")
++    medico = next(item for item in medicos_response.json() if item["nombre"] == "Médico" and item["apellidos"] == "Demo")
++    consultorio = next(item for item in consultorios_response.json() if item["codigo"] == "C-101")
++
++    estado_response = client.get("/api/estado-medico/medicos", headers=auth_headers)
++    assert estado_response.status_code == 200, estado_response.text
++    estado_medico = next(item for item in estado_response.json() if item["id"] == medico["id"])
++    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
++
++    update_response = client.patch(
++        f"/api/estado-medico/medicos/{medico['id']}",
++        headers=auth_headers,
++        json={"estado_atencion": "NO_DISPONIBLE", "notas_estado": "Sale a cirugía"},
++    )
++    assert update_response.status_code == 200, update_response.text
++    assert update_response.json()["estado_atencion"] == "NO_DISPONIBLE"
++    assert update_response.json()["notas_estado"] == "Sale a cirugía"
++
++    today = datetime.now(ZoneInfo("America/Mexico_City")).date().isoformat()
++    now_local = datetime.now(ZoneInfo("America/Mexico_City"))
++    cita_response = client.post(
++        "/api/citas?confirmar_duplicado=true",
++        headers=auth_headers,
++        json={
++            "tipo": "PROGRAMADA",
++            "paciente_id": paciente["id"],
++            "medico_id": medico["id"],
++            "consultorio_id": consultorio["id"],
++            "complejo_id": consultorio["complejo_id"],
++            "piso_id": consultorio["piso_id"],
++            "fecha_cita": today,
++            "hora_cita": now_local.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
++            "duracion_estimada": 30,
++            "origen": "TEST_ESTADO_MEDICO",
++        },
++    )
++    assert cita_response.status_code == 201, cita_response.text
++
++    citas_response = client.get(
++        "/api/citas/hoy",
++        headers=auth_headers,
++        params={"medico_id": medico["id"], "hora_inicio": "00:00", "hora_fin": "23:59"},
++    )
++    assert citas_response.status_code == 200, citas_response.text
++    cita = next(item for item in citas_response.json() if item["id"] == cita_response.json()["id"])
++    assert cita["medico_estado_atencion"] == "NO_DISPONIBLE"
++    assert cita["medico_notas_estado"] == "Sale a cirugía"
++
++    reset_response = client.patch(
++        f"/api/estado-medico/medicos/{medico['id']}",
++        headers=auth_headers,
++        json={"estado_atencion": "DISPONIBLE", "notas_estado": None},
++    )
++    assert reset_response.status_code == 200, reset_response.text
++
++
+ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+     initial_password = "Temporal123!"
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 29932e2..6ce2be9 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -133,6 +133,7 @@ watch(
+         <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
+         <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Plantilla de turnos</RouterLink>
+         <span class="nav-section">Operación</span>
++        <RouterLink to="/estado-medico" :class="{ disabled: !canUse('/estado-medico') }" :aria-disabled="!canUse('/estado-medico')" @click="handleNav($event, '/estado-medico')">Estado del médico</RouterLink>
+         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
+         <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
+         <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index 0b189bb..c112978 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -37,6 +37,7 @@ export const screens: ScreenDefinition[] = [
+   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
+   { key: 'citas', label: 'Citas', path: '/citas' },
+   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
++  { key: 'estado-medico', label: 'Estado del médico', path: '/estado-medico' },
+   { key: 'recepcion', label: 'Recepción', path: '/recepcion' },
+   { key: 'checkin-qr', label: 'Checkin QR', path: '/checkin-qr' },
+   { key: 'contactos-institucionales', label: 'Contactos institucionales', path: '/contactos-institucionales' },
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 9495a0d..5935f4b 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -205,6 +205,17 @@ export type Medico = {
+   updated_at: string;
+ };
+ 
++export type MedicoEstado = {
++  id: string;
++  usuario_id?: string | null;
++  nombre: string;
++  apellidos: string;
++  nombre_visible?: string | null;
++  estado_atencion: string;
++  notas_estado?: string | null;
++  updated_at: string;
++};
++
+ export type Operador = {
+   id: string;
+   usuario_id: string;
+@@ -414,6 +425,8 @@ export type Cita = {
+   consultorio?: string | null;
+   piso?: string | null;
+   medico?: string | null;
++  medico_estado_atencion: string;
++  medico_notas_estado?: string | null;
+ };
+ 
+ export type CitaSearchResult = {
+@@ -829,6 +842,12 @@ export const listAccessiblePisos = (params: LocationCatalogParams = {}) =>
+ export const listAccessibleConsultorios = (params: LocationCatalogParams = {}) =>
+   apiFetch<Consultorio[]>(`/catalogos-operativos/consultorios${queryString(params)}`);
+ export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
++export const listMedicosEstado = () => apiFetch<MedicoEstado[]>('/estado-medico/medicos');
++export const updateMedicoEstado = (medicoId: string, payload: { estado_atencion: string; notas_estado?: string | null }) =>
++  apiFetch<MedicoEstado>(`/estado-medico/medicos/${medicoId}`, {
++    method: 'PATCH',
++    body: JSON.stringify(payload),
++  });
+ export const listOperadores = () => listResource<Operador>('operadores');
+ export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
+ export const listKioskos = () => listResource<Kiosko>('kioskos');
+diff --git a/access-manager/frontend/src/router/index.ts b/access-manager/frontend/src/router/index.ts
+index 4142bd0..e895131 100644
+--- a/access-manager/frontend/src/router/index.ts
++++ b/access-manager/frontend/src/router/index.ts
+@@ -20,6 +20,7 @@ import TurnosLlamadosView from '../views/TurnosLlamadosView.vue';
+ import PacientesView from '../views/PacientesView.vue';
+ import CitasView from '../views/CitasView.vue';
+ import CitasHoyView from '../views/CitasHoyView.vue';
++import EstadoMedicoView from '../views/EstadoMedicoView.vue';
+ import RecepcionView from '../views/RecepcionView.vue';
+ import CheckinQrView from '../views/CheckinQrView.vue';
+ import PantallasTurnosView from '../views/PantallasTurnosView.vue';
+@@ -57,6 +58,7 @@ const router = createRouter({
+     { path: '/pacientes', component: PacientesView },
+     { path: '/citas', component: CitasView },
+     { path: '/citas/hoy', component: CitasHoyView },
++    { path: '/estado-medico', component: EstadoMedicoView },
+     { path: '/recepcion', component: RecepcionView },
+     { path: '/checkin-qr', component: CheckinQrView },
+     { path: '/busqueda-usuarios', component: BusquedaUsuariosView },
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index ae79a4f..16a070e 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -627,6 +627,161 @@ th {
+   color: #56677a;
+ }
+ 
++.doctor-status-panel {
++  max-width: 760px;
++}
++
++.doctor-status-summary {
++  border: 1px solid #e2e8f0;
++  border-radius: 8px;
++  display: grid;
++  gap: 0.8rem;
++  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
++  padding: 0.9rem;
++}
++
++.doctor-status-summary > div > span,
++.dialog-details dt {
++  color: #667789;
++  font-size: 0.78rem;
++  font-weight: 800;
++  text-transform: uppercase;
++}
++
++.doctor-status-summary strong {
++  display: flex;
++  margin-top: 0.2rem;
++}
++
++.doctor-status-value,
++.table-status-button,
++.doctor-status-button {
++  align-items: center;
++  display: inline-flex;
++  gap: 0.45rem;
++}
++
++.doctor-status-icon {
++  align-items: center;
++  border-radius: 999px;
++  display: inline-flex;
++  flex: 0 0 auto;
++  font-size: 0.82rem;
++  font-weight: 900;
++  height: 1.25rem;
++  justify-content: center;
++  line-height: 1;
++  width: 1.25rem;
++}
++
++.doctor-status-red {
++  background: #fbe3df;
++  color: #b42318;
++}
++
++.doctor-status-orange {
++  background: #fff7ed;
++  color: #c2410c;
++}
++
++.doctor-status-yellow {
++  background: #fef3c7;
++  color: #b7791f;
++}
++
++.doctor-status-yellow::before {
++  background: currentColor;
++  border-radius: 999px;
++  content: "";
++  height: 0.55rem;
++  width: 0.55rem;
++}
++
++.doctor-status-green {
++  background: #ddf7ec;
++  color: #168451;
++}
++
++.doctor-status-muted {
++  background: #edf1f5;
++  color: #56677a;
++}
++
++.doctor-status-actions {
++  display: grid;
++  gap: 0.6rem;
++  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
++}
++
++.doctor-status-button {
++  justify-content: center;
++}
++
++.table-status-button {
++  background: transparent;
++  color: #17202a;
++  font-size: 0.9rem;
++  font-weight: 700;
++  padding: 0;
++  text-align: left;
++}
++
++.table-status-button:hover {
++  color: #1f6feb;
++}
++
++.notes-footer {
++  align-items: center;
++  color: #667789;
++  display: flex;
++  font-size: 0.82rem;
++  gap: 0.75rem;
++  justify-content: space-between;
++}
++
++.modal-backdrop {
++  align-items: center;
++  background: rgba(16, 25, 35, 0.46);
++  display: grid;
++  inset: 0;
++  justify-items: center;
++  padding: 1rem;
++  position: fixed;
++  z-index: 100;
++}
++
++.modal-panel {
++  background: #ffffff;
++  border-radius: 8px;
++  box-shadow: 0 22px 60px rgba(16, 25, 35, 0.24);
++  display: grid;
++  gap: 1rem;
++  max-width: 460px;
++  padding: 1.2rem;
++  width: min(100%, 460px);
++}
++
++.modal-panel h2 {
++  margin: 0;
++}
++
++.dialog-details {
++  display: grid;
++  gap: 0.8rem;
++  margin: 0;
++}
++
++.dialog-details div {
++  border-bottom: 1px solid #e2e8f0;
++  display: grid;
++  gap: 0.25rem;
++  padding-bottom: 0.65rem;
++}
++
++.dialog-details dd {
++  margin: 0;
++}
++
+ .message {
+   color: #526172;
+ }
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 0517631..9b204e8 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -46,6 +46,7 @@ const qrPayload = ref('');
+ const qrDataUrl = ref('');
+ const ticket = ref<TicketResponse | null>(null);
+ const selectedCita = ref<Cita | null>(null);
++const selectedDoctorStatusCita = ref<Cita | null>(null);
+ const loading = ref(false);
+ 
+ const filters = reactive({
+@@ -173,6 +174,13 @@ const timeRangeLabel = computed(() => {
+   return 'Todo el día';
+ });
+ 
++const doctorStatusOptions = [
++  { value: 'AUSENTE', label: 'Ausente', tone: 'red', icon: 'x' },
++  { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
++  { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
++  { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
++];
++
+ async function load() {
+   loading.value = true;
+   error.value = '';
+@@ -226,6 +234,18 @@ function statusLabel(status: string) {
+   return status;
+ }
+ 
++function doctorStatusLabel(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.label ?? status;
++}
++
++function doctorStatusTone(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.tone ?? 'muted';
++}
++
++function doctorStatusIcon(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.icon ?? '';
++}
++
+ function canCall(cita: Cita) {
+   return !['CANCELADA', 'EXPIRADA', 'FINALIZADA', 'NO_LLEGO'].includes(cita.estado);
+ }
+@@ -310,12 +330,17 @@ function patientMedicalDisplay(cita: Cita) {
+   return cita.paciente_nombre_completo || cita.paciente || cita.paciente_id;
+ }
+ 
++function showDoctorStatusDialog(cita: Cita) {
++  selectedDoctorStatusCita.value = cita;
++}
++
+ const exportColumns = [
+   { key: 'fecha_cita', label: 'Fecha' },
+   { key: 'hora_cita', label: 'Hora', value: (row: Cita) => row.hora_cita.slice(0, 5) },
+   { key: 'folio_turno', label: 'Turno' },
+   { key: 'paciente_nombre_completo', label: 'Paciente', value: patientMedicalDisplay },
+   { key: 'medico', label: 'Médico' },
++  { key: 'medico_estado_atencion', label: 'Estado médico', value: (row: Cita) => doctorStatusLabel(row.medico_estado_atencion) },
+   { key: 'consultorio', label: 'Consultorio' },
+   { key: 'piso', label: 'Piso' },
+   { key: 'estado', label: 'Estado' },
+@@ -453,8 +478,9 @@ onMounted(async () => {
+               <th>Turno</th>
+               <th>Paciente</th>
+               <th>Médico</th>
+-              <th>Consultorio</th>
+               <th>Estado</th>
++              <th>Consultorio</th>
++              <th>Estado cita</th>
+               <th>Acciones</th>
+             </tr>
+           </thead>
+@@ -464,6 +490,14 @@ onMounted(async () => {
+               <td><strong>{{ cita.folio_turno }}</strong></td>
+               <td>{{ patientMedicalDisplay(cita) }}</td>
+               <td>{{ cita.medico || cita.medico_id }}</td>
++              <td>
++                <button class="table-status-button" type="button" @click="showDoctorStatusDialog(cita)">
++                  <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(cita.medico_estado_atencion)}`">
++                    {{ doctorStatusIcon(cita.medico_estado_atencion) }}
++                  </span>
++                  {{ doctorStatusLabel(cita.medico_estado_atencion) }}
++                </button>
++              </td>
+               <td>{{ cita.consultorio || cita.consultorio_id }}</td>
+               <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
+               <td>
+@@ -502,5 +536,39 @@ Torre {{ ticket.torre }}
+ Cita {{ ticket.hora }} hrs</pre>
+       <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>
+     </div>
++
++    <div v-if="selectedDoctorStatusCita" class="modal-backdrop">
++      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="doctor-status-dialog-title">
++        <h2 id="doctor-status-dialog-title">Estado del médico</h2>
++        <dl class="dialog-details">
++          <div>
++            <dt>Médico</dt>
++            <dd>{{ selectedDoctorStatusCita.medico || selectedDoctorStatusCita.medico_id }}</dd>
++          </div>
++          <div>
++            <dt>Consultorio</dt>
++            <dd>{{ selectedDoctorStatusCita.consultorio || selectedDoctorStatusCita.consultorio_id }}</dd>
++          </div>
++          <div>
++            <dt>Estado</dt>
++            <dd>
++              <span class="doctor-status-value">
++                <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(selectedDoctorStatusCita.medico_estado_atencion)}`">
++                  {{ doctorStatusIcon(selectedDoctorStatusCita.medico_estado_atencion) }}
++                </span>
++                {{ doctorStatusLabel(selectedDoctorStatusCita.medico_estado_atencion) }}
++              </span>
++            </dd>
++          </div>
++          <div>
++            <dt>Nota</dt>
++            <dd>{{ selectedDoctorStatusCita.medico_notas_estado || 'Sin nota.' }}</dd>
++          </div>
++        </dl>
++        <div class="actions-row">
++          <button type="button" @click="selectedDoctorStatusCita = null">Ok</button>
++        </div>
++      </div>
++    </div>
+   </section>
+ </template>

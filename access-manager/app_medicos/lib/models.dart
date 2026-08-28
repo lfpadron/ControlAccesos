@@ -143,12 +143,14 @@ class Medico {
     required this.id,
     required this.nombre,
     required this.apellidos,
+    this.usuarioId,
     this.nombreVisible,
   });
 
   final String id;
   final String nombre;
   final String apellidos;
+  final String? usuarioId;
   final String? nombreVisible;
 
   String get label {
@@ -162,7 +164,49 @@ class Medico {
       id: json['id'] as String? ?? '',
       nombre: json['nombre'] as String? ?? '',
       apellidos: json['apellidos'] as String? ?? '',
+      usuarioId: json['usuario_id'] as String?,
       nombreVisible: json['nombre_visible'] as String?,
+    );
+  }
+}
+
+class MedicoEstado {
+  const MedicoEstado({
+    required this.id,
+    required this.nombre,
+    required this.apellidos,
+    required this.estadoAtencion,
+    required this.updatedAt,
+    this.usuarioId,
+    this.nombreVisible,
+    this.notasEstado,
+  });
+
+  final String id;
+  final String nombre;
+  final String apellidos;
+  final String estadoAtencion;
+  final String updatedAt;
+  final String? usuarioId;
+  final String? nombreVisible;
+  final String? notasEstado;
+
+  String get label {
+    final visible = nombreVisible?.trim();
+    if (visible != null && visible.isNotEmpty) return visible;
+    return '$nombre $apellidos'.trim();
+  }
+
+  factory MedicoEstado.fromJson(Map<String, dynamic> json) {
+    return MedicoEstado(
+      id: json['id'] as String? ?? '',
+      nombre: json['nombre'] as String? ?? '',
+      apellidos: json['apellidos'] as String? ?? '',
+      estadoAtencion: json['estado_atencion'] as String? ?? 'DISPONIBLE',
+      updatedAt: json['updated_at'] as String? ?? '',
+      usuarioId: json['usuario_id'] as String?,
+      nombreVisible: json['nombre_visible'] as String?,
+      notasEstado: json['notas_estado'] as String?,
     );
   }
 }

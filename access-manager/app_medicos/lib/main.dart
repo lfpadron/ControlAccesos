@@ -356,6 +356,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _agendaKey = GlobalKey<_AgendaScreenState>();
   final _patientsKey = GlobalKey<_PatientsScreenState>();
+  final _doctorStatusKey = GlobalKey<_DoctorStatusScreenState>();
   int _selectedIndex = 0;
 
   String get _title {
@@ -363,6 +364,7 @@ class _HomeScreenState extends State<HomeScreen> {
       0 => 'Agenda',
       1 => 'Pacientes',
       2 => 'Nueva cita',
+      3 => 'Estado del médico',
       _ => 'Perfil',
     };
   }
@@ -372,6 +374,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _agendaKey.currentState?.refresh();
     } else if (_selectedIndex == 1) {
       _patientsKey.currentState?.refresh();
+    } else if (_selectedIndex == 3) {
+      _doctorStatusKey.currentState?.refresh();
     }
   }
 
@@ -414,6 +418,11 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() => _selectedIndex = 0);
         },
       ),
+      DoctorStatusScreen(
+        key: _doctorStatusKey,
+        api: widget.api,
+        session: widget.session,
+      ),
       ProfileScreen(session: widget.session, onLogout: widget.onLogout),
     ];
 
@@ -421,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(_title),
         actions: [
-          if (_selectedIndex <= 1)
+          if (_selectedIndex <= 1 || _selectedIndex == 3)
             IconButton(
               tooltip: 'Actualizar',
               onPressed: _refreshCurrentTab,
@@ -456,6 +465,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.add_circle_outline),
             selectedIcon: Icon(Icons.add_circle),
             label: 'Nueva',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.medical_services_outlined),
+            selectedIcon: Icon(Icons.medical_services),
+            label: 'Estado',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
@@ -1472,6 +1486,280 @@ class _AppointmentFormContentState extends State<AppointmentFormContent> {
   }
 }
 
+class DoctorStatusScreen extends StatefulWidget {
+  const DoctorStatusScreen({
+    super.key,
+    required this.api,
+    required this.session,
+  });
+
+  final ApiClient api;
+  final SavedSession session;
+
+  @override
+  State<DoctorStatusScreen> createState() => _DoctorStatusScreenState();
+}
+
+class _DoctorStatusScreenState extends State<DoctorStatusScreen> {
+  final _notesController = TextEditingController();
+  List<MedicoEstado> _medicos = const [];
+  String? _selectedMedicoId;
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+  String? _message;
+
+  bool get _isDoctorUser => widget.session.user.roleCodes.contains('MEDICO');
+
+  MedicoEstado? get _selectedMedico {
+    return _findMedicoById(_medicos, _selectedMedicoId);
+  }
+
+  MedicoEstado? _findMedicoById(List<MedicoEstado> rows, String? medicoId) {
+    if (medicoId == null) return null;
+    for (final medico in rows) {
+      if (medico.id == medicoId) return medico;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    refresh();
+  }
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  String? _preferredMedicoId(List<MedicoEstado> rows) {
+    if (rows.isEmpty) return null;
+    if (_isDoctorUser) {
+      for (final medico in rows) {
+        if (medico.usuarioId == widget.session.user.id) return medico.id;
+      }
+      return rows.first.id;
+    }
+    if (rows.length == 1) return rows.first.id;
+    final selectedId = _selectedMedicoId;
+    if (selectedId != null && rows.any((medico) => medico.id == selectedId)) {
+      return selectedId;
+    }
+    return null;
+  }
+
+  Future<void> refresh({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final rows = await widget.api.listMedicosEstado();
+      final selectedId = _preferredMedicoId(rows);
+      final selected = _findMedicoById(rows, selectedId);
+      if (!mounted) return;
+      setState(() {
+        _medicos = rows;
+        _selectedMedicoId = selectedId;
+        _notesController.text = selected?.notasEstado ?? '';
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      if (!silent) {
+        setState(() {
+          _error = error.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _selectMedico(String? medicoId) {
+    final selected = _findMedicoById(_medicos, medicoId);
+    setState(() {
+      _selectedMedicoId = selected?.id;
+      _notesController.text = selected?.notasEstado ?? '';
+      _message = null;
+    });
+  }
+
+  Future<void> _setStatus(String estadoAtencion) async {
+    final medico = _selectedMedico;
+    if (medico == null) {
+      setState(() => _error = 'Seleccione un médico.');
+      return;
+    }
+    if (_notesController.text.length > 100) {
+      setState(() => _error = 'Las notas deben tener máximo 100 caracteres.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final updated = await widget.api.updateMedicoEstado(
+        medico.id,
+        estadoAtencion: estadoAtencion,
+        notasEstado: _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _medicos = _medicos
+            .map((item) => item.id == updated.id ? updated : item)
+            .toList();
+        _selectedMedicoId = updated.id;
+        _notesController.text = updated.notasEstado ?? '';
+        _message =
+            'Estado actualizado: ${doctorStatusMeta(updated.estadoAtencion).label}.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading && _medicos.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final selected = _selectedMedico;
+    return RefreshIndicator(
+      onRefresh: refresh,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      return DropdownMenu<String>(
+                        key: ValueKey(_selectedMedicoId ?? 'sin-medico'),
+                        width: constraints.maxWidth,
+                        initialSelection: _selectedMedicoId,
+                        enabled: !_isDoctorUser && !_saving,
+                        enableFilter: true,
+                        requestFocusOnTap: true,
+                        label: const Text('Médico'),
+                        dropdownMenuEntries: _medicos
+                            .map(
+                              (medico) => DropdownMenuEntry(
+                                value: medico.id,
+                                label: medico.label,
+                              ),
+                            )
+                            .toList(),
+                        onSelected: _selectMedico,
+                      );
+                    },
+                  ),
+                  if (_message != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _message!,
+                      style: const TextStyle(
+                        color: Color(0xFF11845B),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    ErrorBanner(message: _error!),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (selected == null)
+            const EmptyState(
+              icon: Icons.medical_services_outlined,
+              text: 'No hay médico seleccionado.',
+            )
+          else
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      selected.label,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 10),
+                    DoctorStatusChip(estado: selected.estadoAtencion),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _notesController,
+                      enabled: !_saving,
+                      maxLength: 100,
+                      minLines: 2,
+                      maxLines: 3,
+                      decoration: const InputDecoration(labelText: 'Notas'),
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: _saving
+                            ? null
+                            : () => setState(_notesController.clear),
+                        icon: const Icon(Icons.cleaning_services_outlined),
+                        label: const Text('Limpiar'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: doctorStatusMetas
+                          .map(
+                            (status) => OutlinedButton.icon(
+                              onPressed: _saving
+                                  ? null
+                                  : () => _setStatus(status.value),
+                              icon: Icon(status.icon, color: status.color),
+                              label: Text(status.label),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    if (_saving) ...[
+                      const SizedBox(height: 12),
+                      const LinearProgressIndicator(),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          if (!_loading && _medicos.isEmpty)
+            const EmptyState(
+              icon: Icons.medical_services_outlined,
+              text: 'No hay médicos disponibles.',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     super.key,
@@ -1821,6 +2109,22 @@ class StatusChip extends StatelessWidget {
   }
 }
 
+class DoctorStatusChip extends StatelessWidget {
+  const DoctorStatusChip({super.key, required this.estado});
+
+  final String estado;
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = doctorStatusMeta(estado);
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(meta.icon, size: 18, color: meta.color),
+      label: Text(meta.label),
+    );
+  }
+}
+
 class ArrivalBanner extends StatelessWidget {
   const ArrivalBanner({super.key, required this.estado});
 
@@ -1986,6 +2290,59 @@ const appointmentStates = [
 ];
 
 const appointmentTypes = ['TODAS', 'PROGRAMADA', 'ESPONTANEA'];
+
+class DoctorStatusMeta {
+  const DoctorStatusMeta({
+    required this.value,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String value;
+  final String label;
+  final IconData icon;
+  final Color color;
+}
+
+const doctorStatusMetas = [
+  DoctorStatusMeta(
+    value: 'AUSENTE',
+    label: 'Ausente',
+    icon: Icons.close,
+    color: Color(0xFFB42318),
+  ),
+  DoctorStatusMeta(
+    value: 'NO_DISPONIBLE',
+    label: 'No disponible',
+    icon: Icons.priority_high,
+    color: Color(0xFFC2410C),
+  ),
+  DoctorStatusMeta(
+    value: 'EN_CONSULTA',
+    label: 'En consulta',
+    icon: Icons.circle,
+    color: Color(0xFFB7791F),
+  ),
+  DoctorStatusMeta(
+    value: 'DISPONIBLE',
+    label: 'Disponible',
+    icon: Icons.check,
+    color: Color(0xFF11845B),
+  ),
+];
+
+DoctorStatusMeta doctorStatusMeta(String value) {
+  for (final meta in doctorStatusMetas) {
+    if (meta.value == value) return meta;
+  }
+  return DoctorStatusMeta(
+    value: value,
+    label: value,
+    icon: Icons.help_outline,
+    color: const Color(0xFF4B5563),
+  );
+}
 
 String appointmentStateLabel(String value) {
   return switch (value) {

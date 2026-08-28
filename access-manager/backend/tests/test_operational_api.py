@@ -135,6 +135,69 @@ def test_recepcion_loads_location_catalogs_and_today_options(client: TestClient,
     assert citas_response.json()["total"] >= 1
 
 
+def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth_headers: dict[str, str]) -> None:
+    pacientes_response = client.get("/api/pacientes", headers=auth_headers)
+    medicos_response = client.get("/api/medicos", headers=auth_headers)
+    consultorios_response = client.get("/api/consultorios", headers=auth_headers)
+    for response in (pacientes_response, medicos_response, consultorios_response):
+        assert response.status_code == 200, response.text
+
+    paciente = next(item for item in pacientes_response.json() if item["folio_paciente"] == "PDEMO246")
+    medico = next(item for item in medicos_response.json() if item["nombre"] == "Médico" and item["apellidos"] == "Demo")
+    consultorio = next(item for item in consultorios_response.json() if item["codigo"] == "C-101")
+
+    estado_response = client.get("/api/estado-medico/medicos", headers=auth_headers)
+    assert estado_response.status_code == 200, estado_response.text
+    estado_medico = next(item for item in estado_response.json() if item["id"] == medico["id"])
+    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
+
+    update_response = client.patch(
+        f"/api/estado-medico/medicos/{medico['id']}",
+        headers=auth_headers,
+        json={"estado_atencion": "NO_DISPONIBLE", "notas_estado": "Sale a cirugía"},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["estado_atencion"] == "NO_DISPONIBLE"
+    assert update_response.json()["notas_estado"] == "Sale a cirugía"
+
+    today = datetime.now(ZoneInfo("America/Mexico_City")).date().isoformat()
+    now_local = datetime.now(ZoneInfo("America/Mexico_City"))
+    cita_response = client.post(
+        "/api/citas?confirmar_duplicado=true",
+        headers=auth_headers,
+        json={
+            "tipo": "PROGRAMADA",
+            "paciente_id": paciente["id"],
+            "medico_id": medico["id"],
+            "consultorio_id": consultorio["id"],
+            "complejo_id": consultorio["complejo_id"],
+            "piso_id": consultorio["piso_id"],
+            "fecha_cita": today,
+            "hora_cita": now_local.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
+            "duracion_estimada": 30,
+            "origen": "TEST_ESTADO_MEDICO",
+        },
+    )
+    assert cita_response.status_code == 201, cita_response.text
+
+    citas_response = client.get(
+        "/api/citas/hoy",
+        headers=auth_headers,
+        params={"medico_id": medico["id"], "hora_inicio": "00:00", "hora_fin": "23:59"},
+    )
+    assert citas_response.status_code == 200, citas_response.text
+    cita = next(item for item in citas_response.json() if item["id"] == cita_response.json()["id"])
+    assert cita["medico_estado_atencion"] == "NO_DISPONIBLE"
+    assert cita["medico_notas_estado"] == "Sale a cirugía"
+
+    reset_response = client.patch(
+        f"/api/estado-medico/medicos/{medico['id']}",
+        headers=auth_headers,
+        json={"estado_atencion": "DISPONIBLE", "notas_estado": None},
+    )
+    assert reset_response.status_code == 200, reset_response.text
+
+
 def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
     suffix = uuid4().hex[:8]
     initial_password = "Temporal123!"

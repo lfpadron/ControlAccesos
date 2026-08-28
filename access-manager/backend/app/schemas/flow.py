@@ -19,6 +19,7 @@ ESTADOS_CITA = {
     "EXPIRADA",
 }
 CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM", "API_EXTERNA"}
+ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
 
 
 class PacienteBase(BaseModel):
@@ -162,6 +163,40 @@ class CitaListItem(CitaRead):
     consultorio: str | None = None
     piso: str | None = None
     medico: str | None = None
+    medico_estado_atencion: str = "DISPONIBLE"
+    medico_notas_estado: str | None = None
+
+
+class MedicoEstadoRead(BaseModel):
+    id: UUID
+    usuario_id: UUID | None = None
+    nombre: str
+    apellidos: str
+    nombre_visible: str | None = None
+    estado_atencion: str
+    notas_estado: str | None = None
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MedicoEstadoUpdate(BaseModel):
+    estado_atencion: str = Field(max_length=32)
+    notas_estado: str | None = Field(default=None, max_length=100)
+
+    @field_validator("notas_estado", mode="before")
+    @classmethod
+    def blank_note_to_none(cls, value):
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_estado(self):
+        if self.estado_atencion not in ESTADOS_ATENCION_MEDICO:
+            raise ValueError("Estado de médico inválido.")
+        return self
 
 
 class CitaSearchResult(BaseModel):

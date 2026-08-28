@@ -20,6 +20,7 @@ import TurnosLlamadosView from '../views/TurnosLlamadosView.vue';
 import PacientesView from '../views/PacientesView.vue';
 import CitasView from '../views/CitasView.vue';
 import CitasHoyView from '../views/CitasHoyView.vue';
+import EstadoMedicoView from '../views/EstadoMedicoView.vue';
 import RecepcionView from '../views/RecepcionView.vue';
 import CheckinQrView from '../views/CheckinQrView.vue';
 import PantallasTurnosView from '../views/PantallasTurnosView.vue';
@@ -57,6 +58,7 @@ const router = createRouter({
     { path: '/pacientes', component: PacientesView },
     { path: '/citas', component: CitasView },
     { path: '/citas/hoy', component: CitasHoyView },
+    { path: '/estado-medico', component: EstadoMedicoView },
     { path: '/recepcion', component: RecepcionView },
     { path: '/checkin-qr', component: CheckinQrView },
     { path: '/busqueda-usuarios', component: BusquedaUsuariosView },

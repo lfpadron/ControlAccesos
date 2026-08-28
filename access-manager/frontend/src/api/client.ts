@@ -205,6 +205,17 @@ export type Medico = {
   updated_at: string;
 };
 
+export type MedicoEstado = {
+  id: string;
+  usuario_id?: string | null;
+  nombre: string;
+  apellidos: string;
+  nombre_visible?: string | null;
+  estado_atencion: string;
+  notas_estado?: string | null;
+  updated_at: string;
+};
+
 export type Operador = {
   id: string;
   usuario_id: string;
@@ -414,6 +425,8 @@ export type Cita = {
   consultorio?: string | null;
   piso?: string | null;
   medico?: string | null;
+  medico_estado_atencion: string;
+  medico_notas_estado?: string | null;
 };
 
 export type CitaSearchResult = {
@@ -829,6 +842,12 @@ export const listAccessiblePisos = (params: LocationCatalogParams = {}) =>
 export const listAccessibleConsultorios = (params: LocationCatalogParams = {}) =>
   apiFetch<Consultorio[]>(`/catalogos-operativos/consultorios${queryString(params)}`);
 export const listAccessibleMedicos = () => apiFetch<Medico[]>('/catalogos-operativos/medicos');
+export const listMedicosEstado = () => apiFetch<MedicoEstado[]>('/estado-medico/medicos');
+export const updateMedicoEstado = (medicoId: string, payload: { estado_atencion: string; notas_estado?: string | null }) =>
+  apiFetch<MedicoEstado>(`/estado-medico/medicos/${medicoId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 export const listOperadores = () => listResource<Operador>('operadores');
 export const listPuntosAcceso = () => listResource<PuntoAcceso>('puntos-acceso');
 export const listKioskos = () => listResource<Kiosko>('kioskos');

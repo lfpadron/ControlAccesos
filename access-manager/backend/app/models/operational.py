@@ -138,6 +138,10 @@ class Medico(TimestampMixin, Base):
             "'PACIENTE_TURNO_CONSULTORIO', 'TURNO_CONSULTORIO')",
             name="ck_medicos_plantilla_turno",
         ),
+        CheckConstraint(
+            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
+            name="ck_medicos_estado_atencion",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -151,6 +155,13 @@ class Medico(TimestampMixin, Base):
         server_default=TURNO_TEMPLATE_DEFAULT,
         nullable=False,
     )
+    estado_atencion: Mapped[str] = mapped_column(
+        String(32),
+        default="DISPONIBLE",
+        server_default="DISPONIBLE",
+        nullable=False,
+    )
+    notas_estado: Mapped[str | None] = mapped_column(String(100))
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

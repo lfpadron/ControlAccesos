@@ -39,6 +39,8 @@ from app.schemas.flow import (
     CitaRead,
     CitaSearchResult,
     CitaUpdate,
+    MedicoEstadoRead,
+    MedicoEstadoUpdate,
     MobileSessionResponse,
     PacienteCreate,
     PacienteRead,
@@ -86,6 +88,7 @@ citas_router = APIRouter()
 qr_router = APIRouter()
 mobile_router = APIRouter()
 catalogos_operativos_router = APIRouter()
+medico_estado_router = APIRouter()
 recepcion_router = APIRouter()
 reportes_router = APIRouter()
 
@@ -105,6 +108,8 @@ CatalogosOperativosUser = Depends(
         "reportes-recepcion",
     )
 )
+MedicoEstadoReadUser = Depends(require_permission("estado-medico", "app-medicos", "citas", "citas-hoy", "pacientes"))
+MedicoEstadoWriteUser = Depends(require_permission("estado-medico", "app-medicos", minimum="editar"))
 PacientesReadUser = Depends(require_permission("pacientes"))
 PacientesWriteUser = Depends(require_permission("pacientes", minimum="editar"))
 CitasAgendaReadUser = Depends(require_permission("citas"))
@@ -481,14 +486,7 @@ def institucion_assigned_to_medico(medico_id: UUID):
     )
 
 
-@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
-def list_medicos_operativos(
-    db: Session = Depends(get_db),
-    current_user: Usuario = CatalogosOperativosUser,
-) -> list[Medico]:
-    today = business_today()
-    if sync_medicos_for_medico_users(db, today):
-        db.commit()
+def medico_operativo_access_predicate(db: Session, current_user: Usuario, today: date):
     roles = active_role_codes(db, current_user)
     access_predicate = medico_catalog_access_predicate(db, current_user, today)
     if not roles.intersection(ADMIN_ROLE_CODES):
@@ -499,16 +497,91 @@ def list_medicos_operativos(
             )
         elif roles.intersection(ASSISTANT_MEDICO_ROLE_CODES) or user_has_direct_medico_assignments(db, current_user, today):
             access_predicate = medico_assigned_to_user_predicate(current_user, today)
-    query = (
+    return access_predicate
+
+
+def accessible_medicos_query(db: Session, current_user: Usuario):
+    today = business_today()
+    return (
         select(Medico)
-        .where(Medico.activo.is_(True), access_predicate)
+        .where(
+            Medico.activo.is_(True),
+            medico_operativo_access_predicate(db, current_user, today),
+        )
         .order_by(
             func.lower(func.coalesce(Medico.apellidos, "")),
             func.lower(func.coalesce(Medico.nombre, "")),
             Medico.id,
         )
     )
-    return list(db.execute(query).scalars())
+
+
+def accessible_medicos_for_user(db: Session, current_user: Usuario) -> list[Medico]:
+    today = business_today()
+    if sync_medicos_for_medico_users(db, today):
+        db.commit()
+    return list(db.execute(accessible_medicos_query(db, current_user)).scalars())
+
+
+def ensure_medico_estado_access(db: Session, current_user: Usuario, medico_id: UUID) -> Medico:
+    query = (
+        select(Medico)
+        .where(
+            Medico.id == medico_id,
+            Medico.activo.is_(True),
+            medico_operativo_access_predicate(db, current_user, business_today()),
+        )
+        .limit(1)
+    )
+    item = db.execute(query).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Médico no encontrado.")
+    return item
+
+
+@catalogos_operativos_router.get("/medicos", response_model=list[MedicoRead])
+def list_medicos_operativos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = CatalogosOperativosUser,
+) -> list[Medico]:
+    return accessible_medicos_for_user(db, current_user)
+
+
+@medico_estado_router.get("/medicos", response_model=list[MedicoEstadoRead])
+def list_estado_medicos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = MedicoEstadoReadUser,
+) -> list[Medico]:
+    return accessible_medicos_for_user(db, current_user)
+
+
+@medico_estado_router.patch("/medicos/{medico_id}", response_model=MedicoEstadoRead)
+def update_estado_medico(
+    medico_id: UUID,
+    payload: MedicoEstadoUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario = MedicoEstadoWriteUser,
+) -> Medico:
+    medico = ensure_medico_estado_access(db, current_user, medico_id)
+    before = audit_safe_dict(medico)
+    medico.estado_atencion = payload.estado_atencion
+    medico.notas_estado = payload.notas_estado
+    db.flush()
+    record_audit_event(
+        db,
+        evento="ESTADO_MEDICO_ACTUALIZADO",
+        entidad="medicos",
+        entidad_id=medico.id,
+        usuario_id=current_user.id,
+        canal="WEB",
+        ip_origen=client_ip(request),
+        valor_antes=before,
+        valor_despues=audit_safe_dict(medico),
+    )
+    db.commit()
+    db.refresh(medico)
+    return medico
 
 
 @catalogos_operativos_router.get("/instituciones", response_model=list[InstitucionRead])
@@ -711,13 +784,16 @@ def cita_zona_horaria(db: Session, cita: Cita) -> str:
 def cita_item(db: Session, cita: Cita) -> CitaListItem:
     payload = CitaRead.model_validate(cita).model_dump()
     paciente = db.get(Paciente, cita.paciente_id)
+    medico = db.get(Medico, cita.medico_id)
     return CitaListItem(
         **payload,
         paciente=patient_display_name(paciente),
         paciente_nombre_completo=patient_medical_name(paciente),
         consultorio=consultorio_label(db.get(Consultorio, cita.consultorio_id)),
         piso=piso_label(db.get(Piso, cita.piso_id)),
-        medico=medico_label(db.get(Medico, cita.medico_id)),
+        medico=medico_label(medico),
+        medico_estado_atencion=medico.estado_atencion if medico is not None else "DISPONIBLE",
+        medico_notas_estado=medico.notas_estado if medico is not None else None,
     )
 
 

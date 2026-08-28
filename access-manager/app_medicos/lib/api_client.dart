@@ -75,6 +75,29 @@ class ApiClient {
         .toList();
   }
 
+  Future<List<MedicoEstado>> listMedicosEstado() async {
+    final payload = await _request<List<dynamic>>(
+      'GET',
+      '/estado-medico/medicos',
+    );
+    return payload
+        .map((item) => MedicoEstado.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<MedicoEstado> updateMedicoEstado(
+    String medicoId, {
+    required String estadoAtencion,
+    String? notasEstado,
+  }) async {
+    final payload = await _request<Map<String, dynamic>>(
+      'PATCH',
+      '/estado-medico/medicos/$medicoId',
+      body: {'estado_atencion': estadoAtencion, 'notas_estado': notasEstado},
+    );
+    return MedicoEstado.fromJson(payload);
+  }
+
   Future<List<Consultorio>> listConsultorios({String? medicoId}) async {
     final payload = await _request<List<dynamic>>(
       'GET',

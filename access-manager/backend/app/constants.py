@@ -31,6 +31,7 @@ MENU_SCREEN_KEYS = (
     "pacientes",
     "citas",
     "citas-hoy",
+    "estado-medico",
     "recepcion",
     "checkin-qr",
     "contactos-institucionales",
@@ -64,6 +65,7 @@ ROLE_DEFAULT_PERMISSIONS = {
     "MEDICO": {
         "pacientes": "consultar",
         "citas": "consultar",
+        "estado-medico": "editar",
         "reportes-medicos": "consultar",
         "app-medicos": "editar",
     },

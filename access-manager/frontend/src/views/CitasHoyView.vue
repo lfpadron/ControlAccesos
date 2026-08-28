@@ -46,6 +46,7 @@ const qrPayload = ref('');
 const qrDataUrl = ref('');
 const ticket = ref<TicketResponse | null>(null);
 const selectedCita = ref<Cita | null>(null);
+const selectedDoctorStatusCita = ref<Cita | null>(null);
 const loading = ref(false);
 
 const filters = reactive({
@@ -173,6 +174,13 @@ const timeRangeLabel = computed(() => {
   return 'Todo el día';
 });
 
+const doctorStatusOptions = [
+  { value: 'AUSENTE', label: 'Ausente', tone: 'red', icon: 'x' },
+  { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
+  { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
+  { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
+];
+
 async function load() {
   loading.value = true;
   error.value = '';
@@ -224,6 +232,18 @@ async function run(action: () => Promise<unknown>, success: string) {
 function statusLabel(status: string) {
   if (status === 'NO_LLEGO') return 'No Se Presentó';
   return status;
+}
+
+function doctorStatusLabel(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.label ?? status;
+}
+
+function doctorStatusTone(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.tone ?? 'muted';
+}
+
+function doctorStatusIcon(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.icon ?? '';
 }
 
 function canCall(cita: Cita) {
@@ -310,12 +330,17 @@ function patientMedicalDisplay(cita: Cita) {
   return cita.paciente_nombre_completo || cita.paciente || cita.paciente_id;
 }
 
+function showDoctorStatusDialog(cita: Cita) {
+  selectedDoctorStatusCita.value = cita;
+}
+
 const exportColumns = [
   { key: 'fecha_cita', label: 'Fecha' },
   { key: 'hora_cita', label: 'Hora', value: (row: Cita) => row.hora_cita.slice(0, 5) },
   { key: 'folio_turno', label: 'Turno' },
   { key: 'paciente_nombre_completo', label: 'Paciente', value: patientMedicalDisplay },
   { key: 'medico', label: 'Médico' },
+  { key: 'medico_estado_atencion', label: 'Estado médico', value: (row: Cita) => doctorStatusLabel(row.medico_estado_atencion) },
   { key: 'consultorio', label: 'Consultorio' },
   { key: 'piso', label: 'Piso' },
   { key: 'estado', label: 'Estado' },
@@ -453,8 +478,9 @@ onMounted(async () => {
               <th>Turno</th>
               <th>Paciente</th>
               <th>Médico</th>
-              <th>Consultorio</th>
               <th>Estado</th>
+              <th>Consultorio</th>
+              <th>Estado cita</th>
               <th>Acciones</th>
             </tr>
           </thead>
@@ -464,6 +490,14 @@ onMounted(async () => {
               <td><strong>{{ cita.folio_turno }}</strong></td>
               <td>{{ patientMedicalDisplay(cita) }}</td>
               <td>{{ cita.medico || cita.medico_id }}</td>
+              <td>
+                <button class="table-status-button" type="button" @click="showDoctorStatusDialog(cita)">
+                  <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(cita.medico_estado_atencion)}`">
+                    {{ doctorStatusIcon(cita.medico_estado_atencion) }}
+                  </span>
+                  {{ doctorStatusLabel(cita.medico_estado_atencion) }}
+                </button>
+              </td>
               <td>{{ cita.consultorio || cita.consultorio_id }}</td>
               <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
               <td>
@@ -501,6 +535,40 @@ Torre {{ ticket.torre }}
 {{ ticket.piso }}
 Cita {{ ticket.hora }} hrs</pre>
       <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>
+    </div>
+
+    <div v-if="selectedDoctorStatusCita" class="modal-backdrop">
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="doctor-status-dialog-title">
+        <h2 id="doctor-status-dialog-title">Estado del médico</h2>
+        <dl class="dialog-details">
+          <div>
+            <dt>Médico</dt>
+            <dd>{{ selectedDoctorStatusCita.medico || selectedDoctorStatusCita.medico_id }}</dd>
+          </div>
+          <div>
+            <dt>Consultorio</dt>
+            <dd>{{ selectedDoctorStatusCita.consultorio || selectedDoctorStatusCita.consultorio_id }}</dd>
+          </div>
+          <div>
+            <dt>Estado</dt>
+            <dd>
+              <span class="doctor-status-value">
+                <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(selectedDoctorStatusCita.medico_estado_atencion)}`">
+                  {{ doctorStatusIcon(selectedDoctorStatusCita.medico_estado_atencion) }}
+                </span>
+                {{ doctorStatusLabel(selectedDoctorStatusCita.medico_estado_atencion) }}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Nota</dt>
+            <dd>{{ selectedDoctorStatusCita.medico_notas_estado || 'Sin nota.' }}</dd>
+          </div>
+        </dl>
+        <div class="actions-row">
+          <button type="button" @click="selectedDoctorStatusCita = null">Ok</button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
