@@ -715,6 +715,9 @@ function normalizePayload() {
 }
 
 function validatePayload(payload: Record<string, unknown>) {
+  if (config.value.key === 'clusters-turnos' && !payload.muestra_turnos && !payload.muestra_proxima_cita) {
+    return 'Seleccione Turnos, Próxima cita o ambos.';
+  }
   for (const field of config.value.fields) {
     if (!field.pattern || !(field.name in payload)) {
       continue;
@@ -836,7 +839,7 @@ function firstClusterLabel(value: unknown) {
 function cellValue(row: Row, column: CatalogColumn) {
   const value = row[column.name];
   if (column.boolean) {
-    return value ? 'Activo' : 'Inactivo';
+    return value ? column.trueLabel ?? 'Activo' : column.falseLabel ?? 'Inactivo';
   }
   if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
     return firstClusterLabel(value);

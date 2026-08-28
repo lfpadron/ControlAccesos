@@ -402,6 +402,13 @@ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object
 def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
+    muestra_turnos = data.get("muestra_turnos", getattr(item, "muestra_turnos", True))
+    muestra_proxima_cita = data.get("muestra_proxima_cita", getattr(item, "muestra_proxima_cita", False))
+    if not muestra_turnos and not muestra_proxima_cita:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Debe seleccionar Turnos, Próxima cita o ambos.",
+        )
     if complejo_id is not None:
         exists_or_404(db, Complejo, complejo_id, "Campus")
     if piso_id is not None:

@@ -98,7 +98,8 @@ class PantallaClusterConsultaRead(BaseModel):
 
 
 class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
-    pass
+    mostrar_turnos: bool = True
+    mostrar_proxima_cita: bool = False
 
 
 class PublicTurnoDisplay(BaseModel):
@@ -110,12 +111,22 @@ class PublicTurnoDisplay(BaseModel):
     resaltado: bool
 
 
+class PublicProximaCitaDisplay(BaseModel):
+    medico_id: UUID
+    medico: str
+    consultorio: str
+    estado_atencion: str
+    proxima_cita_estimada: datetime | None = None
+    hora_estimada_proxima_cita: str | None = None
+
+
 class PublicDisplayResponse(BaseModel):
     codigo_dispositivo: str
     nombre: str | None = None
     ultima_conexion: datetime
     config: PantallaTurnosPublicConfig
     turnos: list[PublicTurnoDisplay]
+    proximas_citas: list[PublicProximaCitaDisplay] = Field(default_factory=list)
 
 
 class TurnoDisplayRecienteRead(BaseModel):

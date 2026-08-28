@@ -35,6 +35,8 @@ export type CatalogColumn = {
   lookup?: LookupKey;
   options?: Array<{ value: string; label: string }>;
   boolean?: boolean;
+  trueLabel?: string;
+  falseLabel?: string;
 };
 
 export type CatalogConfig = {
@@ -221,6 +223,8 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+      { name: 'muestra_turnos', label: 'Turnos', type: 'checkbox', defaultValue: true },
+      { name: 'muestra_proxima_cita', label: 'Próxima cita', type: 'checkbox', defaultValue: false },
       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
@@ -228,6 +232,8 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'nombre', label: 'Nombre' },
       { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+      { name: 'muestra_turnos', label: 'Turno', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
+      { name: 'muestra_proxima_cita', label: 'Próxima cita', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
       { name: 'activo', label: 'Estado', boolean: true },
     ],
   },
@@ -274,7 +280,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 220 },
       {
         name: 'plantilla_turno',
-        label: 'Plantilla de turnos',
+        label: 'Plantilla de llamada',
         type: 'select',
         required: true,
         defaultValue: 'PACIENTE_CONSULTORIO',
@@ -286,7 +292,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'nombre_visible', label: 'Nombre visible' },
       { name: 'nombre', label: 'Nombre' },
       { name: 'apellidos', label: 'Apellidos' },
-      { name: 'plantilla_turno', label: 'Plantilla', options: turnoTemplateOptions },
+      { name: 'plantilla_turno', label: 'Plantilla de llamada', options: turnoTemplateOptions },
       { name: 'usuario_id', label: 'Usuario', lookup: 'usuarios' },
       { name: 'activo', label: 'Estado', boolean: true },
     ],

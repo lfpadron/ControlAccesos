@@ -2,19 +2,24 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import QRCode from 'qrcode';
-import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayTurno } from '../api/client';
+import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
 
 const VOICE_SETTING_KEY = 'access_manager_display_voice_enabled';
+type DisplayMode = 'turnos' | 'proxima_cita';
 
 const route = useRoute();
 const codigoDispositivo = computed(() => String(route.params.codigo_dispositivo ?? ''));
 const token = computed(() => (typeof route.query.token === 'string' ? route.query.token : undefined));
 const turnos = ref<PublicDisplayTurno[]>([]);
+const proximasCitas = ref<PublicDisplayProximaCita[]>([]);
+const displayMode = ref<DisplayMode>('turnos');
 const config = ref<PublicDisplayConfig>({
   polling_interval_seconds: 5,
   segundos_resaltado: 25,
   segundos_visible: 300,
   max_turnos_visibles: 10,
+  mostrar_turnos: true,
+  mostrar_proxima_cita: false,
 });
 const connected = ref(false);
 const lastUpdate = ref('');
@@ -35,6 +40,18 @@ const screenStyle = computed(() => ({
   '--display-new-size': `${config.value.font_size_turno_nuevo || 96}px`,
   '--display-normal-size': `${config.value.font_size_turno_normal || 64}px`,
 }));
+const effectiveDisplayMode = computed<DisplayMode>(() => {
+  if (turnos.value.length > 0) return 'turnos';
+  if (config.value.mostrar_proxima_cita && !config.value.mostrar_turnos) return 'proxima_cita';
+  return displayMode.value;
+});
+
+const doctorStatusOptions = [
+  { value: 'AUSENTE', label: 'Ausente', tone: 'red', icon: 'x' },
+  { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
+  { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
+  { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
+];
 
 function pollingMs() {
   const seconds = Math.min(10, Math.max(2, config.value.polling_interval_seconds || 5));
@@ -112,6 +129,36 @@ function announceTurnos(items: PublicDisplayTurno[]) {
   speak(text);
 }
 
+function doctorStatusLabel(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.label ?? status;
+}
+
+function doctorStatusTone(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.tone ?? 'muted';
+}
+
+function doctorStatusIcon(status: string) {
+  return doctorStatusOptions.find((item) => item.value === status)?.icon ?? '';
+}
+
+function estimatedTimeLabel(item: PublicDisplayProximaCita) {
+  if (item.hora_estimada_proxima_cita) return item.hora_estimada_proxima_cita;
+  if (!item.proxima_cita_estimada) return 'Sin estimar';
+  return new Date(item.proxima_cita_estimada).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+}
+
+function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
+  if (responseTurnos.length > 0) {
+    displayMode.value = 'turnos';
+    return;
+  }
+  if (config.value.mostrar_turnos && config.value.mostrar_proxima_cita) {
+    displayMode.value = displayMode.value === 'turnos' ? 'proxima_cita' : 'turnos';
+    return;
+  }
+  displayMode.value = config.value.mostrar_proxima_cita ? 'proxima_cita' : 'turnos';
+}
+
 function toggleVoice() {
   if (!voiceSupported.value) return;
   voiceEnabled.value = !voiceEnabled.value;
@@ -133,6 +180,8 @@ async function loadData() {
     );
     config.value = response.config;
     turnos.value = response.turnos;
+    proximasCitas.value = response.proximas_citas ?? [];
+    syncDisplayMode(response.turnos);
     displayName.value = response.nombre || response.codigo_dispositivo;
     if (hasLoadedTurnos) {
       announceTurnos(newHighlightedTurnos);
@@ -195,7 +244,7 @@ onUnmounted(() => {
       </button>
     </header>
 
-    <section class="turnos-stage" aria-live="polite">
+    <section v-if="effectiveDisplayMode === 'turnos'" class="turnos-stage" aria-live="polite">
       <article
         v-for="item in turnos"
         :key="`${item.turno}-${item.llamado_en}`"
@@ -209,6 +258,22 @@ onUnmounted(() => {
         </template>
       </article>
       <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
+    </section>
+    <section v-else class="next-appointments-stage" aria-live="polite">
+      <article v-for="item in proximasCitas" :key="item.medico_id" class="next-appointment-row">
+        <div>
+          <strong>{{ item.medico }}</strong>
+          <span>{{ item.consultorio }}</span>
+        </div>
+        <span class="doctor-status-value next-appointment-status">
+          <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
+            {{ doctorStatusIcon(item.estado_atencion) }}
+          </span>
+          {{ doctorStatusLabel(item.estado_atencion) }}
+        </span>
+        <time>{{ estimatedTimeLabel(item) }}</time>
+      </article>
+      <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
     </section>
 
     <footer v-if="error" class="display-error">{{ error }}</footer>

@@ -191,14 +191,24 @@ class ClusterTurnosCreate(BaseModel):
     complejo_id: UUID
     piso_id: UUID
     nombre: str = Field(min_length=1, max_length=180)
+    muestra_turnos: bool = True
+    muestra_proxima_cita: bool = False
     descripcion: str | None = None
     activo: bool = True
+
+    @model_validator(mode="after")
+    def validate_display_mode(self):
+        if not self.muestra_turnos and not self.muestra_proxima_cita:
+            raise ValueError("Debe seleccionar Turnos, Próxima cita o ambos.")
+        return self
 
 
 class ClusterTurnosUpdate(BaseModel):
     complejo_id: UUID | None = None
     piso_id: UUID | None = None
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    muestra_turnos: bool | None = None
+    muestra_proxima_cita: bool | None = None
     descripcion: str | None = None
     activo: bool | None = None
 
@@ -217,6 +227,7 @@ class MedicoCreate(BaseModel):
     apellidos: str = Field(min_length=1, max_length=180)
     nombre_visible: str | None = Field(default=None, max_length=220)
     plantilla_turno: str = Field(default=TURNO_TEMPLATE_DEFAULT, max_length=40)
+    duracion_cita_minutos: int = Field(default=60, ge=15, le=120)
     activo: bool = True
 
     @model_validator(mode="after")
@@ -232,6 +243,7 @@ class MedicoUpdate(BaseModel):
     apellidos: str | None = Field(default=None, min_length=1, max_length=180)
     nombre_visible: str | None = Field(default=None, max_length=220)
     plantilla_turno: str | None = Field(default=None, max_length=40)
+    duracion_cita_minutos: int | None = Field(default=None, ge=15, le=120)
     activo: bool | None = None
 
     @model_validator(mode="after")

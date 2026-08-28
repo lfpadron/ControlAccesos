@@ -64,6 +64,9 @@ const medicoLocationSyncToken = ref(0);
 const patientNotRegisteredMessage = 'Error: el paciente no está registrado. Verifique.';
 const tablePageSize = 20;
 const tablePage = ref(1);
+const DEFAULT_APPOINTMENT_DURATION = 60;
+const MIN_APPOINTMENT_DURATION = 15;
+const MAX_APPOINTMENT_DURATION = 120;
 
 const form = reactive({
   tipo: 'PROGRAMADA',
@@ -76,7 +79,7 @@ const form = reactive({
   piso_id: '',
   fecha_cita: todayLocalIso(),
   hora_cita: '09:00',
-  duracion_estimada: 30,
+  duracion_estimada: DEFAULT_APPOINTMENT_DURATION,
   origen: 'WEB',
   notas_operativas: '',
 });
@@ -122,6 +125,8 @@ const filteredConsultorios = computed(() => {
 
 const visibleCitas = computed(() => uniqueById(citas.value));
 const locationLockedUntilMedico = computed(() => !form.medico_id);
+const selectedMedico = computed(() => medicos.value.find((item) => item.id === form.medico_id) ?? null);
+const horaFin = computed(() => appointmentEndTime(form.hora_cita, Number(form.duracion_estimada)));
 const selectedPaciente = computed(() => pacientes.value.find((item) => item.id === form.paciente_id) ?? null);
 const selectedPacienteCelular = computed(() => selectedPaciente.value?.celular ?? '');
 const canGoPreviousCitasPage = computed(() => tablePage.value > 1);
@@ -193,6 +198,22 @@ function torreLabel(item: Torre) {
 
 function medicoLabel(item: Medico) {
   return [item.apellidos, item.nombre].filter(Boolean).join(' ');
+}
+
+function defaultDurationForMedico(medicoId = form.medico_id) {
+  return medicos.value.find((item) => item.id === medicoId)?.duracion_cita_minutos ?? DEFAULT_APPOINTMENT_DURATION;
+}
+
+function appointmentEndTime(startTime: string, durationMinutes: number) {
+  const [hourText, minuteText] = startTime.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isFinite(durationMinutes)) return '';
+  const totalMinutes = hour * 60 + minute + Math.max(0, Math.trunc(durationMinutes));
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const endHour = String(Math.floor(normalized / 60)).padStart(2, '0');
+  const endMinute = String(normalized % 60).padStart(2, '0');
+  return `${endHour}:${endMinute}`;
 }
 
 function patientDisplayName(paciente: Paciente) {
@@ -497,7 +518,6 @@ async function resetForm(options: ResetFormOptions = {}) {
   form.tipo = 'PROGRAMADA';
   form.fecha_cita = todayLocalIso();
   form.hora_cita = '09:00';
-  form.duracion_estimada = 30;
   form.origen = 'WEB';
   form.notas_operativas = '';
   if (!options.keepMedico) {
@@ -505,6 +525,7 @@ async function resetForm(options: ResetFormOptions = {}) {
   } else if (!form.medico_id) {
     form.medico_id = defaultMedicoId();
   }
+  form.duracion_estimada = defaultDurationForMedico(form.medico_id);
   form.paciente_id = '';
   pacienteSearch.value = '';
   await syncLocationForMedico(form.medico_id);
@@ -693,6 +714,7 @@ async function onMedicoChange(event?: Event) {
   error.value = '';
   const selectedMedicoId = event?.target instanceof HTMLSelectElement ? event.target.value : form.medico_id;
   form.medico_id = selectedMedicoId;
+  form.duracion_estimada = defaultDurationForMedico(selectedMedicoId);
   form.paciente_id = '';
   pacienteSearch.value = '';
   setTableFiltersForMedico(selectedMedicoId);
@@ -713,6 +735,11 @@ async function submit(confirmarDuplicado = false) {
   syncPaciente();
   if (!patientIsRegisteredForSelectedMedico()) {
     error.value = patientNotRegisteredMessage;
+    return;
+  }
+  const duration = Number(form.duracion_estimada);
+  if (!Number.isInteger(duration) || duration < MIN_APPOINTMENT_DURATION || duration > MAX_APPOINTMENT_DURATION) {
+    error.value = `La duración debe estar entre ${MIN_APPOINTMENT_DURATION} y ${MAX_APPOINTMENT_DURATION} minutos.`;
     return;
   }
   try {
@@ -786,7 +813,23 @@ onMounted(load);
             <label for="hora">Hora</label>
             <input id="hora" v-model="form.hora_cita" type="time" required />
           </div>
+          <div class="form-row">
+            <label for="duracion">Duración</label>
+            <input
+              id="duracion"
+              v-model.number="form.duracion_estimada"
+              type="number"
+              :min="MIN_APPOINTMENT_DURATION"
+              :max="MAX_APPOINTMENT_DURATION"
+              required
+            />
+          </div>
+          <div class="form-row">
+            <label for="hora-fin">Hora fin</label>
+            <input id="hora-fin" :value="horaFin" type="time" readonly />
+          </div>
         </div>
+        <p v-if="selectedMedico" class="message">Duración por omisión del médico: {{ selectedMedico.duracion_cita_minutos }} min.</p>
         <div class="form-row">
           <label for="medico">Médico</label>
           <select

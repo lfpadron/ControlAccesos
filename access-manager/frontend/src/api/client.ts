@@ -187,6 +187,8 @@ export type ClusterTurnos = {
   complejo_id: string;
   piso_id: string;
   nombre: string;
+  muestra_turnos: boolean;
+  muestra_proxima_cita: boolean;
   descripcion?: string | null;
   activo: boolean;
   created_at: string;
@@ -200,6 +202,7 @@ export type Medico = {
   apellidos: string;
   nombre_visible?: string | null;
   plantilla_turno: string;
+  duracion_cita_minutos: number;
   activo: boolean;
   created_at: string;
   updated_at: string;
@@ -320,6 +323,8 @@ export type PublicDisplayConfig = {
   segundos_resaltado: number;
   segundos_visible: number;
   max_turnos_visibles: number;
+  mostrar_turnos: boolean;
+  mostrar_proxima_cita: boolean;
 };
 
 export type PublicDisplayTurno = {
@@ -331,12 +336,22 @@ export type PublicDisplayTurno = {
   resaltado: boolean;
 };
 
+export type PublicDisplayProximaCita = {
+  medico_id: string;
+  medico: string;
+  consultorio: string;
+  estado_atencion: string;
+  proxima_cita_estimada?: string | null;
+  hora_estimada_proxima_cita?: string | null;
+};
+
 export type PublicDisplayResponse = {
   codigo_dispositivo: string;
   nombre?: string | null;
   ultima_conexion: string;
   config: PublicDisplayConfig;
   turnos: PublicDisplayTurno[];
+  proximas_citas: PublicDisplayProximaCita[];
 };
 
 export type TurnoDisplayReciente = {

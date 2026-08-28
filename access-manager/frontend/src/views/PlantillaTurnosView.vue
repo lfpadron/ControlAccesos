@@ -8,6 +8,7 @@ const usuarios = ref<Usuario[]>([]);
 const query = ref('');
 const selected = ref<Medico | null>(null);
 const selectedTemplate = ref('');
+const selectedDuration = ref(60);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
@@ -38,6 +39,10 @@ function templateLabel(value: string) {
   return turnoTemplateOptions.find((option) => option.value === value)?.label ?? value;
 }
 
+function durationValue(medico: Medico | null) {
+  return medico?.duracion_cita_minutos ?? 60;
+}
+
 const filteredMedicos = computed(() => {
   const needle = normalize(query.value);
   const sorted = [...medicos.value].sort((left, right) => {
@@ -55,6 +60,7 @@ const filteredMedicos = computed(() => {
 function selectMedico(medico: Medico) {
   selected.value = medico;
   selectedTemplate.value = medico.plantilla_turno;
+  selectedDuration.value = durationValue(medico);
   message.value = '';
   error.value = '';
 }
@@ -70,6 +76,7 @@ async function loadData() {
       const refreshed = medicosData.find((medico) => medico.id === selected.value?.id) ?? null;
       selected.value = refreshed;
       selectedTemplate.value = refreshed?.plantilla_turno ?? '';
+      selectedDuration.value = durationValue(refreshed);
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar médicos.';
@@ -78,19 +85,28 @@ async function loadData() {
   }
 }
 
-async function saveTemplate() {
+async function savePreferences() {
   if (!selected.value || !selectedTemplate.value) return;
+  const duration = Number(selectedDuration.value);
+  if (!Number.isInteger(duration) || duration < 15 || duration > 120) {
+    error.value = 'La duración debe estar entre 15 y 120 minutos.';
+    return;
+  }
   saving.value = true;
   error.value = '';
   message.value = '';
   try {
-    const saved = await updateMedico(selected.value.id, { plantilla_turno: selectedTemplate.value });
+    const saved = await updateMedico(selected.value.id, {
+      plantilla_turno: selectedTemplate.value,
+      duracion_cita_minutos: duration,
+    });
     medicos.value = medicos.value.map((medico) => (medico.id === saved.id ? saved : medico));
     selected.value = saved;
     selectedTemplate.value = saved.plantilla_turno;
-    message.value = 'Plantilla de turnos actualizada.';
+    selectedDuration.value = durationValue(saved);
+    message.value = 'Preferencias del médico actualizadas.';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible guardar la plantilla.';
+    error.value = err instanceof Error ? err.message : 'No fue posible guardar las preferencias.';
   } finally {
     saving.value = false;
   }
@@ -103,8 +119,8 @@ onMounted(loadData);
   <section class="page">
     <header class="page-header">
       <div>
-        <h1>Plantilla de turnos</h1>
-        <p>Asociación de formato de llamada para médicos.</p>
+        <h1>Preferencias del médico</h1>
+        <p>Formato de llamada y duración por omisión de citas.</p>
       </div>
     </header>
 
@@ -137,6 +153,7 @@ onMounted(loadData);
                 <th>Apellido(s)</th>
                 <th>Nombre</th>
                 <th>Correo</th>
+                <th>Duración</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -151,6 +168,7 @@ onMounted(loadData);
                 <td>{{ medico.apellidos }}</td>
                 <td>{{ medico.nombre }}</td>
                 <td>{{ medicoCorreo(medico) }}</td>
+                <td>{{ durationValue(medico) }} min</td>
                 <td>{{ medicoEstado(medico) }}</td>
               </tr>
             </tbody>
@@ -159,8 +177,8 @@ onMounted(loadData);
         <p v-if="!loading && filteredMedicos.length === 0" class="message">No hay médicos para mostrar.</p>
       </section>
 
-      <form class="panel form" @submit.prevent="saveTemplate">
-        <h2>Plantilla</h2>
+      <form class="panel form" @submit.prevent="savePreferences">
+        <h2>Preferencias</h2>
         <template v-if="selected">
           <div class="form-grid">
             <div class="form-row">
@@ -180,7 +198,7 @@ onMounted(loadData);
               <input :value="medicoEstado(selected)" disabled />
             </div>
             <div class="form-row full">
-              <label for="plantilla-turno">Plantilla de turnos</label>
+              <label for="plantilla-turno">Plantilla de llamada</label>
               <select id="plantilla-turno" v-model="selectedTemplate" required>
                 <option v-for="option in turnoTemplateOptions" :key="option.value" :value="option.value">
                   {{ option.label }}
@@ -188,6 +206,19 @@ onMounted(loadData);
               </select>
             </div>
             <p class="message">Actual: {{ templateLabel(selected.plantilla_turno) }}</p>
+            <div class="form-row full">
+              <h3>Duración de las citas</h3>
+              <label for="duracion-cita-minutos">Minutos por omisión</label>
+              <input
+                id="duracion-cita-minutos"
+                v-model.number="selectedDuration"
+                type="number"
+                min="15"
+                max="120"
+                required
+              />
+              <p class="message">Valor inicial: 60 minutos. Permitido: 15 a 120 minutos.</p>
+            </div>
           </div>
           <p v-if="message" class="message">{{ message }}</p>
           <p v-if="error" class="error">{{ error }}</p>
@@ -195,7 +226,7 @@ onMounted(loadData);
             <button type="submit" :disabled="saving">{{ saving ? 'Guardando...' : 'Guardar' }}</button>
           </div>
         </template>
-        <p v-else class="message">Seleccione un médico para asociar su plantilla de turnos.</p>
+        <p v-else class="message">Seleccione un médico para configurar sus preferencias.</p>
         <p v-if="!selected && error" class="error">{{ error }}</p>
       </form>
     </div>

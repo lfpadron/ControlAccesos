@@ -131,7 +131,7 @@ watch(
         <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
         <RouterLink to="/roles" :class="{ disabled: !canUse('/roles') }" :aria-disabled="!canUse('/roles')" @click="handleNav($event, '/roles')">Roles</RouterLink>
         <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
-        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Plantilla de turnos</RouterLink>
+        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Preferencias del médico</RouterLink>
         <span class="nav-section">Operación</span>
         <RouterLink to="/estado-medico" :class="{ disabled: !canUse('/estado-medico') }" :aria-disabled="!canUse('/estado-medico')" @click="handleNav($event, '/estado-medico')">Estado del médico</RouterLink>
         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>

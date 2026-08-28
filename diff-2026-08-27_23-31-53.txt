@@ -1,0 +1,1045 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 3127c0b..2ffe455 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -2,9 +2,10 @@ from __future__ import annotations
+ 
+ from datetime import UTC, datetime, timedelta
+ from uuid import UUID
++from zoneinfo import ZoneInfo
+ 
+ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+-from sqlalchemy import select
++from sqlalchemy import and_, func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.constants import (
+@@ -20,7 +21,17 @@ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster, TurnoDisplay
+ from app.models.flow import Cita, Paciente
+ from app.models.institucion import Institucion
+-from app.models.operational import ClusterTurnos, Consultorio, ConsultorioCluster, Medico, Piso, Torre
++from app.models.operational import (
++    AsignacionMedicoConsultorio,
++    ClusterTurnos,
++    Consultorio,
++    ConsultorioCluster,
++    Medico,
++    Piso,
++    Role,
++    Torre,
++    UsuarioRol,
++)
+ from app.models.usuario import Usuario
+ from app.schemas.display import (
+     CitaLlamarResponse,
+@@ -31,6 +42,7 @@ from app.schemas.display import (
+     PantallaTurnosRead,
+     PantallaTurnosUpdate,
+     PublicDisplayResponse,
++    PublicProximaCitaDisplay,
+     PublicTurnoDisplay,
+     TurnoDisplayRecienteRead,
+ )
+@@ -45,6 +57,7 @@ TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamad
+ CALL_INTERVAL = timedelta(minutes=5)
+ MAX_CALLS_PER_CITA = 3
+ TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
++DISPLAY_APPOINTMENT_STATES = {"AGENDADA", "QR_GENERADO", "LLEGO_LOBBY", "AUTORIZADO_PASAR", "EN_CONSULTA"}
+ 
+ 
+ def client_ip(request: Request) -> str | None:
+@@ -315,7 +328,11 @@ def apply_screen_token(data: dict) -> dict:
+     return data
+ 
+ 
+-def display_config(screen: PantallaTurnos | None) -> PantallaTurnosPublicConfig:
++def display_config(
++    screen: PantallaTurnos | None,
++    mostrar_turnos: bool = True,
++    mostrar_proxima_cita: bool = False,
++) -> PantallaTurnosPublicConfig:
+     return PantallaTurnosPublicConfig(
+         polling_interval_seconds=screen.polling_interval_seconds if screen else 5,
+         color_fondo=screen.color_fondo if screen else None,
+@@ -327,7 +344,141 @@ def display_config(screen: PantallaTurnos | None) -> PantallaTurnosPublicConfig:
+         segundos_resaltado=screen.segundos_resaltado if screen else 25,
+         segundos_visible=screen.segundos_visible if screen else 300,
+         max_turnos_visibles=screen.max_turnos_visibles if screen else 10,
++        mostrar_turnos=mostrar_turnos,
++        mostrar_proxima_cita=mostrar_proxima_cita,
++    )
++
++
++def safe_zone_info(value: str | None) -> ZoneInfo:
++    try:
++        return ZoneInfo(value or "UTC")
++    except Exception:
++        return ZoneInfo("UTC")
++
++
++def medico_label(medico: Medico) -> str:
++    return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}".strip()
++
++
++def display_flags_for_clusters(clusters: list[ClusterTurnos]) -> tuple[bool, bool]:
++    if not clusters:
++        return True, False
++    return (
++        any(cluster.muestra_turnos for cluster in clusters),
++        any(cluster.muestra_proxima_cita for cluster in clusters),
++    )
++
++
++def appointment_window_condition(start_at: datetime, end_at: datetime):
++    start_date = start_at.date()
++    end_date = end_at.date()
++    start_time = start_at.time().replace(tzinfo=None)
++    end_time = end_at.time().replace(tzinfo=None)
++    if start_date == end_date:
++        return and_(Cita.fecha_cita == start_date, Cita.hora_cita >= start_time, Cita.hora_cita <= end_time)
++    return or_(
++        and_(Cita.fecha_cita == start_date, Cita.hora_cita >= start_time),
++        and_(Cita.fecha_cita == end_date, Cita.hora_cita <= end_time),
++        and_(Cita.fecha_cita > start_date, Cita.fecha_cita < end_date),
++    )
++
++
++def appointment_medico_assignment_condition():
++    direct_assignment = (
++        select(AsignacionMedicoConsultorio.id)
++        .where(
++            AsignacionMedicoConsultorio.medico_id == Cita.medico_id,
++            AsignacionMedicoConsultorio.consultorio_id == Cita.consultorio_id,
++            AsignacionMedicoConsultorio.activo.is_(True),
++            AsignacionMedicoConsultorio.fecha_inicio <= Cita.fecha_cita,
++            or_(
++                AsignacionMedicoConsultorio.fecha_fin.is_(None),
++                AsignacionMedicoConsultorio.fecha_fin >= Cita.fecha_cita,
++            ),
++        )
++        .exists()
+     )
++    role_assignment = (
++        select(UsuarioRol.id)
++        .join(Role, Role.id == UsuarioRol.rol_id)
++        .where(
++            Role.codigo == "MEDICO",
++            Role.activo.is_(True),
++            UsuarioRol.activo.is_(True),
++            UsuarioRol.fecha_inicio <= Cita.fecha_cita,
++            or_(UsuarioRol.fecha_fin.is_(None), UsuarioRol.fecha_fin >= Cita.fecha_cita),
++            UsuarioRol.consultorio_id == Cita.consultorio_id,
++            or_(UsuarioRol.medico_id == Cita.medico_id, UsuarioRol.usuario_id == Medico.usuario_id),
++        )
++        .exists()
++    )
++    return or_(direct_assignment, role_assignment)
++
++
++def estimated_appointment_time(value: datetime | None, timezone: ZoneInfo) -> tuple[datetime | None, str | None]:
++    if value is None:
++        return None, None
++    estimated = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
++    return estimated, estimated.astimezone(timezone).strftime("%H:%M")
++
++
++def public_next_appointments(
++    db: Session,
++    screen: PantallaTurnos,
++    cluster_ids: list[UUID],
++    timestamp: datetime,
++) -> list[PublicProximaCitaDisplay]:
++    consultorio_ids = consultorio_ids_for_clusters(db, cluster_ids)
++    if screen.consultorio_id is not None:
++        consultorio_ids = [screen.consultorio_id] if screen.consultorio_id in set(consultorio_ids) else []
++    if not consultorio_ids:
++        return []
++
++    campus = db.get(Complejo, screen.complejo_id)
++    timezone = safe_zone_info(campus.zona_horaria if campus else None)
++    local_now = timestamp.astimezone(timezone)
++    start_at = local_now - timedelta(hours=1)
++    end_at = local_now + timedelta(hours=2)
++
++    rows = db.execute(
++        select(Cita, Medico, Consultorio)
++        .join(Medico, Medico.id == Cita.medico_id)
++        .join(Consultorio, Consultorio.id == Cita.consultorio_id)
++        .where(
++            Cita.complejo_id == screen.complejo_id,
++            Cita.consultorio_id.in_(consultorio_ids),
++            Cita.estado.in_(DISPLAY_APPOINTMENT_STATES),
++            Medico.activo.is_(True),
++            Consultorio.activo.is_(True),
++            appointment_window_condition(start_at, end_at),
++            appointment_medico_assignment_condition(),
++        )
++        .order_by(
++            func.lower(func.coalesce(Medico.apellidos, "")),
++            func.lower(func.coalesce(Medico.nombre, "")),
++            Cita.fecha_cita,
++            Cita.hora_cita,
++        )
++    ).all()
++
++    response: list[PublicProximaCitaDisplay] = []
++    seen_medicos: set[UUID] = set()
++    for _cita, medico, consultorio in rows:
++        if medico.id in seen_medicos:
++            continue
++        seen_medicos.add(medico.id)
++        estimated_at, estimated_time = estimated_appointment_time(medico.proxima_cita_estimada_at, timezone)
++        response.append(
++            PublicProximaCitaDisplay(
++                medico_id=medico.id,
++                medico=medico_label(medico),
++                consultorio=consultorio.nombre_visible or consultorio.codigo,
++                estado_atencion=medico.estado_atencion,
++                proxima_cita_estimada=estimated_at,
++                hora_estimada_proxima_cita=estimated_time,
++            )
++        )
++    return response
+ 
+ 
+ def sync_turno_states(db: Session, timestamp: datetime) -> None:
+@@ -611,6 +762,9 @@ def public_display_turnos(
+     screen_cluster_ids = cluster_ids_for_screen(db, screen.id)
+     if not screen_cluster_ids:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pantalla sin clústers asignados.")
++    screen_clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(screen_cluster_ids))).scalars())
++    mostrar_turnos, mostrar_proxima_cita = display_flags_for_clusters(screen_clusters)
++    proxima_cita_cluster_ids = [cluster.id for cluster in screen_clusters if cluster.muestra_proxima_cita]
+ 
+     query = select(TurnoDisplay).where(
+         TurnoDisplay.complejo_id == screen.complejo_id,
+@@ -620,8 +774,9 @@ def public_display_turnos(
+         TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
+     )
+ 
+-    config = display_config(screen)
++    config = display_config(screen, mostrar_turnos=mostrar_turnos, mostrar_proxima_cita=mostrar_proxima_cita)
+     turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).scalars())
++    proximas_citas = public_next_appointments(db, screen, proxima_cita_cluster_ids, timestamp) if mostrar_proxima_cita else []
+     db.commit()
+     return PublicDisplayResponse(
+         codigo_dispositivo=screen.codigo_dispositivo,
+@@ -639,6 +794,7 @@ def public_display_turnos(
+             )
+             for item in turnos
+         ],
++        proximas_citas=proximas_citas,
+     )
+ 
+ 
+@@ -785,6 +941,11 @@ def llamar_cita(
+     config = display_config(screen)
+     consultorio_text = consultorio_label(db, cita.consultorio_id)
+     texto_visible = render_turno_text(db, cita, consultorio_text)
++    medico = db.get(Medico, cita.medico_id)
++    appointment_duration = int(cita.duracion_estimada or (medico.duracion_cita_minutos if medico else 60))
++    proxima_cita_estimada_at = timestamp + timedelta(minutes=appointment_duration)
++    if medico is not None:
++        medico.proxima_cita_estimada_at = proxima_cita_estimada_at
+     llamado_numero = call_count + 1
+     first_item: TurnoDisplay | None = None
+     for cluster_id, pantalla_id in screen_by_cluster.items():
+@@ -824,6 +985,8 @@ def llamar_cita(
+             "turno": cita.folio_turno,
+             "texto": texto_visible,
+             "llamado_numero": llamado_numero,
++            "duracion_estimada": appointment_duration,
++            "proxima_cita_estimada_at": proxima_cita_estimada_at.isoformat(),
+         },
+     )
+     if llamado_numero >= MAX_CALLS_PER_CITA:
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index c709d99..f860830 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -402,6 +402,13 @@ def validate_sala_or_consultorio(db: Session, data: dict[str, Any], item: object
+ def validate_cluster_turnos(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     complejo_id = data.get("complejo_id", getattr(item, "complejo_id", None))
+     piso_id = data.get("piso_id", getattr(item, "piso_id", None))
++    muestra_turnos = data.get("muestra_turnos", getattr(item, "muestra_turnos", True))
++    muestra_proxima_cita = data.get("muestra_proxima_cita", getattr(item, "muestra_proxima_cita", False))
++    if not muestra_turnos and not muestra_proxima_cita:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Debe seleccionar Turnos, Próxima cita o ambos.",
++        )
+     if complejo_id is not None:
+         exists_or_404(db, Complejo, complejo_id, "Campus")
+     if piso_id is not None:
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index d5c2625..5daede6 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -1,9 +1,9 @@
+ from __future__ import annotations
+ 
+-from datetime import date, time
++from datetime import date, datetime, time
+ import uuid
+ 
+-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint, func
++from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint, func
+ from sqlalchemy.dialects.postgresql import UUID
+ from sqlalchemy.orm import Mapped, mapped_column
+ 
+@@ -105,13 +105,18 @@ class Consultorio(TimestampMixin, Base):
+ 
+ class ClusterTurnos(TimestampMixin, Base):
+     __tablename__ = "clusters_turnos"
+-    __table_args__ = (UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),)
++    __table_args__ = (
++        UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),
++        CheckConstraint("muestra_turnos OR muestra_proxima_cita", name="ck_clusters_turnos_modo_display"),
++    )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
+     piso_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("pisos.id"), nullable=False, index=True)
+     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+     descripcion: Mapped[str | None] = mapped_column(Text)
++    muestra_turnos: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
++    muestra_proxima_cita: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+@@ -142,6 +147,7 @@ class Medico(TimestampMixin, Base):
+             "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
+             name="ck_medicos_estado_atencion",
+         ),
++        CheckConstraint("duracion_cita_minutos BETWEEN 15 AND 120", name="ck_medicos_duracion_cita_minutos_range"),
+     )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+@@ -162,6 +168,8 @@ class Medico(TimestampMixin, Base):
+         nullable=False,
+     )
+     notas_estado: Mapped[str | None] = mapped_column(String(100))
++    duracion_cita_minutos: Mapped[int] = mapped_column(Integer, default=60, server_default="60", nullable=False)
++    proxima_cita_estimada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index a4e9d2e..1569578 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -98,7 +98,8 @@ class PantallaClusterConsultaRead(BaseModel):
+ 
+ 
+ class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
+-    pass
++    mostrar_turnos: bool = True
++    mostrar_proxima_cita: bool = False
+ 
+ 
+ class PublicTurnoDisplay(BaseModel):
+@@ -110,12 +111,22 @@ class PublicTurnoDisplay(BaseModel):
+     resaltado: bool
+ 
+ 
++class PublicProximaCitaDisplay(BaseModel):
++    medico_id: UUID
++    medico: str
++    consultorio: str
++    estado_atencion: str
++    proxima_cita_estimada: datetime | None = None
++    hora_estimada_proxima_cita: str | None = None
++
++
+ class PublicDisplayResponse(BaseModel):
+     codigo_dispositivo: str
+     nombre: str | None = None
+     ultima_conexion: datetime
+     config: PantallaTurnosPublicConfig
+     turnos: list[PublicTurnoDisplay]
++    proximas_citas: list[PublicProximaCitaDisplay] = Field(default_factory=list)
+ 
+ 
+ class TurnoDisplayRecienteRead(BaseModel):
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index b6dfd2f..7312faf 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -93,7 +93,7 @@ class CitaBase(BaseModel):
+     sala_prevista_id: UUID | None = None
+     fecha_cita: date
+     hora_cita: time
+-    duracion_estimada: int | None = Field(default=None, ge=1, le=720)
++    duracion_estimada: int = Field(default=60, ge=1, le=720)
+     origen: str | None = Field(default=None, max_length=80)
+     notas_operativas: str | None = None
+ 
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 94b6c7d..57a7c8e 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -191,14 +191,24 @@ class ClusterTurnosCreate(BaseModel):
+     complejo_id: UUID
+     piso_id: UUID
+     nombre: str = Field(min_length=1, max_length=180)
++    muestra_turnos: bool = True
++    muestra_proxima_cita: bool = False
+     descripcion: str | None = None
+     activo: bool = True
+ 
++    @model_validator(mode="after")
++    def validate_display_mode(self):
++        if not self.muestra_turnos and not self.muestra_proxima_cita:
++            raise ValueError("Debe seleccionar Turnos, Próxima cita o ambos.")
++        return self
++
+ 
+ class ClusterTurnosUpdate(BaseModel):
+     complejo_id: UUID | None = None
+     piso_id: UUID | None = None
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
++    muestra_turnos: bool | None = None
++    muestra_proxima_cita: bool | None = None
+     descripcion: str | None = None
+     activo: bool | None = None
+ 
+@@ -217,6 +227,7 @@ class MedicoCreate(BaseModel):
+     apellidos: str = Field(min_length=1, max_length=180)
+     nombre_visible: str | None = Field(default=None, max_length=220)
+     plantilla_turno: str = Field(default=TURNO_TEMPLATE_DEFAULT, max_length=40)
++    duracion_cita_minutos: int = Field(default=60, ge=15, le=120)
+     activo: bool = True
+ 
+     @model_validator(mode="after")
+@@ -232,6 +243,7 @@ class MedicoUpdate(BaseModel):
+     apellidos: str | None = Field(default=None, min_length=1, max_length=180)
+     nombre_visible: str | None = Field(default=None, max_length=220)
+     plantilla_turno: str | None = Field(default=None, max_length=40)
++    duracion_cita_minutos: int | None = Field(default=None, ge=15, le=120)
+     activo: bool | None = None
+ 
+     @model_validator(mode="after")
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 6ce2be9..38e4c87 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -131,7 +131,7 @@ watch(
+         <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
+         <RouterLink to="/roles" :class="{ disabled: !canUse('/roles') }" :aria-disabled="!canUse('/roles')" @click="handleNav($event, '/roles')">Roles</RouterLink>
+         <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
+-        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Plantilla de turnos</RouterLink>
++        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Preferencias del médico</RouterLink>
+         <span class="nav-section">Operación</span>
+         <RouterLink to="/estado-medico" :class="{ disabled: !canUse('/estado-medico') }" :aria-disabled="!canUse('/estado-medico')" @click="handleNav($event, '/estado-medico')">Estado del médico</RouterLink>
+         <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index c112978..954eaee 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -33,7 +33,7 @@ export const screens: ScreenDefinition[] = [
+   { key: 'busqueda-usuarios', label: 'Búsqueda de usuarios', path: '/busqueda-usuarios' },
+   { key: 'roles', label: 'Roles', path: '/roles' },
+   { key: 'usuario-roles', label: 'Asignación de usuarios', path: '/usuario-roles' },
+-  { key: 'plantilla-turnos', label: 'Plantilla de turnos', path: '/plantilla-turnos' },
++  { key: 'plantilla-turnos', label: 'Preferencias del médico', path: '/plantilla-turnos' },
+   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
+   { key: 'citas', label: 'Citas', path: '/citas' },
+   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 5935f4b..727ad4b 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -187,6 +187,8 @@ export type ClusterTurnos = {
+   complejo_id: string;
+   piso_id: string;
+   nombre: string;
++  muestra_turnos: boolean;
++  muestra_proxima_cita: boolean;
+   descripcion?: string | null;
+   activo: boolean;
+   created_at: string;
+@@ -200,6 +202,7 @@ export type Medico = {
+   apellidos: string;
+   nombre_visible?: string | null;
+   plantilla_turno: string;
++  duracion_cita_minutos: number;
+   activo: boolean;
+   created_at: string;
+   updated_at: string;
+@@ -320,6 +323,8 @@ export type PublicDisplayConfig = {
+   segundos_resaltado: number;
+   segundos_visible: number;
+   max_turnos_visibles: number;
++  mostrar_turnos: boolean;
++  mostrar_proxima_cita: boolean;
+ };
+ 
+ export type PublicDisplayTurno = {
+@@ -331,12 +336,22 @@ export type PublicDisplayTurno = {
+   resaltado: boolean;
+ };
+ 
++export type PublicDisplayProximaCita = {
++  medico_id: string;
++  medico: string;
++  consultorio: string;
++  estado_atencion: string;
++  proxima_cita_estimada?: string | null;
++  hora_estimada_proxima_cita?: string | null;
++};
++
+ export type PublicDisplayResponse = {
+   codigo_dispositivo: string;
+   nombre?: string | null;
+   ultima_conexion: string;
+   config: PublicDisplayConfig;
+   turnos: PublicDisplayTurno[];
++  proximas_citas: PublicDisplayProximaCita[];
+ };
+ 
+ export type TurnoDisplayReciente = {
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 10908d1..402b08a 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -35,6 +35,8 @@ export type CatalogColumn = {
+   lookup?: LookupKey;
+   options?: Array<{ value: string; label: string }>;
+   boolean?: boolean;
++  trueLabel?: string;
++  falseLabel?: string;
+ };
+ 
+ export type CatalogConfig = {
+@@ -221,6 +223,8 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
++      { name: 'muestra_turnos', label: 'Turnos', type: 'checkbox', defaultValue: true },
++      { name: 'muestra_proxima_cita', label: 'Próxima cita', type: 'checkbox', defaultValue: false },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+@@ -228,6 +232,8 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'nombre', label: 'Nombre' },
+       { name: 'complejo_id', label: 'Campus', lookup: 'complejos' },
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
++      { name: 'muestra_turnos', label: 'Turno', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
++      { name: 'muestra_proxima_cita', label: 'Próxima cita', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
+@@ -274,7 +280,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'nombre_visible', label: 'Nombre visible', maxLength: 220 },
+       {
+         name: 'plantilla_turno',
+-        label: 'Plantilla de turnos',
++        label: 'Plantilla de llamada',
+         type: 'select',
+         required: true,
+         defaultValue: 'PACIENTE_CONSULTORIO',
+@@ -286,7 +292,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'nombre_visible', label: 'Nombre visible' },
+       { name: 'nombre', label: 'Nombre' },
+       { name: 'apellidos', label: 'Apellidos' },
+-      { name: 'plantilla_turno', label: 'Plantilla', options: turnoTemplateOptions },
++      { name: 'plantilla_turno', label: 'Plantilla de llamada', options: turnoTemplateOptions },
+       { name: 'usuario_id', label: 'Usuario', lookup: 'usuarios' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 16a070e..1ce2081 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1015,6 +1015,53 @@ pre {
+   text-align: center;
+ }
+ 
++.next-appointments-stage {
++  align-content: center;
++  display: grid;
++  gap: 0.85rem;
++  margin: 0 auto;
++  max-width: 1400px;
++  width: 100%;
++}
++
++.next-appointment-row {
++  align-items: center;
++  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
++  display: grid;
++  gap: 1.2rem;
++  grid-template-columns: minmax(280px, 1.4fr) minmax(220px, 0.8fr) minmax(160px, 0.4fr);
++  padding: 1rem 0;
++}
++
++.next-appointment-row div {
++  display: grid;
++  gap: 0.35rem;
++  min-width: 0;
++}
++
++.next-appointment-row strong {
++  font-size: 2.65rem;
++  line-height: 1.08;
++  overflow-wrap: anywhere;
++}
++
++.next-appointment-row > div > span {
++  font-size: 1.8rem;
++  font-weight: 750;
++  opacity: 0.86;
++  overflow-wrap: anywhere;
++}
++
++.next-appointment-row time {
++  font-size: 3.1rem;
++  font-weight: 850;
++  text-align: right;
++}
++
++.next-appointment-status {
++  justify-self: start;
++}
++
+ .display-error {
+   color: #fecaca;
+   text-align: right;
+@@ -1236,6 +1283,23 @@ pre {
+     grid-template-columns: 1fr;
+   }
+ 
++  .next-appointment-row {
++    grid-template-columns: 1fr;
++  }
++
++  .next-appointment-row strong {
++    font-size: 2rem;
++  }
++
++  .next-appointment-row > div > span {
++    font-size: 1.35rem;
++  }
++
++  .next-appointment-row time {
++    font-size: 2.4rem;
++    text-align: left;
++  }
++
+   .turno-preview-item,
+   .contact-medium,
+   .qr-reader-form,
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 82acc59..839f336 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -715,6 +715,9 @@ function normalizePayload() {
+ }
+ 
+ function validatePayload(payload: Record<string, unknown>) {
++  if (config.value.key === 'clusters-turnos' && !payload.muestra_turnos && !payload.muestra_proxima_cita) {
++    return 'Seleccione Turnos, Próxima cita o ambos.';
++  }
+   for (const field of config.value.fields) {
+     if (!field.pattern || !(field.name in payload)) {
+       continue;
+@@ -836,7 +839,7 @@ function firstClusterLabel(value: unknown) {
+ function cellValue(row: Row, column: CatalogColumn) {
+   const value = row[column.name];
+   if (column.boolean) {
+-    return value ? 'Activo' : 'Inactivo';
++    return value ? column.trueLabel ?? 'Activo' : column.falseLabel ?? 'Inactivo';
+   }
+   if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
+     return firstClusterLabel(value);
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index e0c3b35..805419e 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -64,6 +64,9 @@ const medicoLocationSyncToken = ref(0);
+ const patientNotRegisteredMessage = 'Error: el paciente no está registrado. Verifique.';
+ const tablePageSize = 20;
+ const tablePage = ref(1);
++const DEFAULT_APPOINTMENT_DURATION = 60;
++const MIN_APPOINTMENT_DURATION = 15;
++const MAX_APPOINTMENT_DURATION = 120;
+ 
+ const form = reactive({
+   tipo: 'PROGRAMADA',
+@@ -76,7 +79,7 @@ const form = reactive({
+   piso_id: '',
+   fecha_cita: todayLocalIso(),
+   hora_cita: '09:00',
+-  duracion_estimada: 30,
++  duracion_estimada: DEFAULT_APPOINTMENT_DURATION,
+   origen: 'WEB',
+   notas_operativas: '',
+ });
+@@ -122,6 +125,8 @@ const filteredConsultorios = computed(() => {
+ 
+ const visibleCitas = computed(() => uniqueById(citas.value));
+ const locationLockedUntilMedico = computed(() => !form.medico_id);
++const selectedMedico = computed(() => medicos.value.find((item) => item.id === form.medico_id) ?? null);
++const horaFin = computed(() => appointmentEndTime(form.hora_cita, Number(form.duracion_estimada)));
+ const selectedPaciente = computed(() => pacientes.value.find((item) => item.id === form.paciente_id) ?? null);
+ const selectedPacienteCelular = computed(() => selectedPaciente.value?.celular ?? '');
+ const canGoPreviousCitasPage = computed(() => tablePage.value > 1);
+@@ -195,6 +200,22 @@ function medicoLabel(item: Medico) {
+   return [item.apellidos, item.nombre].filter(Boolean).join(' ');
+ }
+ 
++function defaultDurationForMedico(medicoId = form.medico_id) {
++  return medicos.value.find((item) => item.id === medicoId)?.duracion_cita_minutos ?? DEFAULT_APPOINTMENT_DURATION;
++}
++
++function appointmentEndTime(startTime: string, durationMinutes: number) {
++  const [hourText, minuteText] = startTime.split(':');
++  const hour = Number(hourText);
++  const minute = Number(minuteText);
++  if (!Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isFinite(durationMinutes)) return '';
++  const totalMinutes = hour * 60 + minute + Math.max(0, Math.trunc(durationMinutes));
++  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
++  const endHour = String(Math.floor(normalized / 60)).padStart(2, '0');
++  const endMinute = String(normalized % 60).padStart(2, '0');
++  return `${endHour}:${endMinute}`;
++}
++
+ function patientDisplayName(paciente: Paciente) {
+   const legalName = [paciente.nombre, paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   return paciente.nombre_preferido || legalName || paciente.folio_paciente;
+@@ -497,7 +518,6 @@ async function resetForm(options: ResetFormOptions = {}) {
+   form.tipo = 'PROGRAMADA';
+   form.fecha_cita = todayLocalIso();
+   form.hora_cita = '09:00';
+-  form.duracion_estimada = 30;
+   form.origen = 'WEB';
+   form.notas_operativas = '';
+   if (!options.keepMedico) {
+@@ -505,6 +525,7 @@ async function resetForm(options: ResetFormOptions = {}) {
+   } else if (!form.medico_id) {
+     form.medico_id = defaultMedicoId();
+   }
++  form.duracion_estimada = defaultDurationForMedico(form.medico_id);
+   form.paciente_id = '';
+   pacienteSearch.value = '';
+   await syncLocationForMedico(form.medico_id);
+@@ -693,6 +714,7 @@ async function onMedicoChange(event?: Event) {
+   error.value = '';
+   const selectedMedicoId = event?.target instanceof HTMLSelectElement ? event.target.value : form.medico_id;
+   form.medico_id = selectedMedicoId;
++  form.duracion_estimada = defaultDurationForMedico(selectedMedicoId);
+   form.paciente_id = '';
+   pacienteSearch.value = '';
+   setTableFiltersForMedico(selectedMedicoId);
+@@ -715,6 +737,11 @@ async function submit(confirmarDuplicado = false) {
+     error.value = patientNotRegisteredMessage;
+     return;
+   }
++  const duration = Number(form.duracion_estimada);
++  if (!Number.isInteger(duration) || duration < MIN_APPOINTMENT_DURATION || duration > MAX_APPOINTMENT_DURATION) {
++    error.value = `La duración debe estar entre ${MIN_APPOINTMENT_DURATION} y ${MAX_APPOINTMENT_DURATION} minutos.`;
++    return;
++  }
+   try {
+     const { institucion_id: _institucionId, torre_id: _torreId, ...payload } = form;
+     await createCita({ ...payload }, confirmarDuplicado);
+@@ -786,7 +813,23 @@ onMounted(load);
+             <label for="hora">Hora</label>
+             <input id="hora" v-model="form.hora_cita" type="time" required />
+           </div>
++          <div class="form-row">
++            <label for="duracion">Duración</label>
++            <input
++              id="duracion"
++              v-model.number="form.duracion_estimada"
++              type="number"
++              :min="MIN_APPOINTMENT_DURATION"
++              :max="MAX_APPOINTMENT_DURATION"
++              required
++            />
++          </div>
++          <div class="form-row">
++            <label for="hora-fin">Hora fin</label>
++            <input id="hora-fin" :value="horaFin" type="time" readonly />
++          </div>
+         </div>
++        <p v-if="selectedMedico" class="message">Duración por omisión del médico: {{ selectedMedico.duracion_cita_minutos }} min.</p>
+         <div class="form-row">
+           <label for="medico">Médico</label>
+           <select
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 594a79a..75162e2 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -2,19 +2,24 @@
+ import { computed, onMounted, onUnmounted, ref } from 'vue';
+ import { useRoute } from 'vue-router';
+ import QRCode from 'qrcode';
+-import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayTurno } from '../api/client';
++import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
+ 
+ const VOICE_SETTING_KEY = 'access_manager_display_voice_enabled';
++type DisplayMode = 'turnos' | 'proxima_cita';
+ 
+ const route = useRoute();
+ const codigoDispositivo = computed(() => String(route.params.codigo_dispositivo ?? ''));
+ const token = computed(() => (typeof route.query.token === 'string' ? route.query.token : undefined));
+ const turnos = ref<PublicDisplayTurno[]>([]);
++const proximasCitas = ref<PublicDisplayProximaCita[]>([]);
++const displayMode = ref<DisplayMode>('turnos');
+ const config = ref<PublicDisplayConfig>({
+   polling_interval_seconds: 5,
+   segundos_resaltado: 25,
+   segundos_visible: 300,
+   max_turnos_visibles: 10,
++  mostrar_turnos: true,
++  mostrar_proxima_cita: false,
+ });
+ const connected = ref(false);
+ const lastUpdate = ref('');
+@@ -35,6 +40,18 @@ const screenStyle = computed(() => ({
+   '--display-new-size': `${config.value.font_size_turno_nuevo || 96}px`,
+   '--display-normal-size': `${config.value.font_size_turno_normal || 64}px`,
+ }));
++const effectiveDisplayMode = computed<DisplayMode>(() => {
++  if (turnos.value.length > 0) return 'turnos';
++  if (config.value.mostrar_proxima_cita && !config.value.mostrar_turnos) return 'proxima_cita';
++  return displayMode.value;
++});
++
++const doctorStatusOptions = [
++  { value: 'AUSENTE', label: 'Ausente', tone: 'red', icon: 'x' },
++  { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
++  { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
++  { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
++];
+ 
+ function pollingMs() {
+   const seconds = Math.min(10, Math.max(2, config.value.polling_interval_seconds || 5));
+@@ -112,6 +129,36 @@ function announceTurnos(items: PublicDisplayTurno[]) {
+   speak(text);
+ }
+ 
++function doctorStatusLabel(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.label ?? status;
++}
++
++function doctorStatusTone(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.tone ?? 'muted';
++}
++
++function doctorStatusIcon(status: string) {
++  return doctorStatusOptions.find((item) => item.value === status)?.icon ?? '';
++}
++
++function estimatedTimeLabel(item: PublicDisplayProximaCita) {
++  if (item.hora_estimada_proxima_cita) return item.hora_estimada_proxima_cita;
++  if (!item.proxima_cita_estimada) return 'Sin estimar';
++  return new Date(item.proxima_cita_estimada).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
++}
++
++function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
++  if (responseTurnos.length > 0) {
++    displayMode.value = 'turnos';
++    return;
++  }
++  if (config.value.mostrar_turnos && config.value.mostrar_proxima_cita) {
++    displayMode.value = displayMode.value === 'turnos' ? 'proxima_cita' : 'turnos';
++    return;
++  }
++  displayMode.value = config.value.mostrar_proxima_cita ? 'proxima_cita' : 'turnos';
++}
++
+ function toggleVoice() {
+   if (!voiceSupported.value) return;
+   voiceEnabled.value = !voiceEnabled.value;
+@@ -133,6 +180,8 @@ async function loadData() {
+     );
+     config.value = response.config;
+     turnos.value = response.turnos;
++    proximasCitas.value = response.proximas_citas ?? [];
++    syncDisplayMode(response.turnos);
+     displayName.value = response.nombre || response.codigo_dispositivo;
+     if (hasLoadedTurnos) {
+       announceTurnos(newHighlightedTurnos);
+@@ -195,7 +244,7 @@ onUnmounted(() => {
+       </button>
+     </header>
+ 
+-    <section class="turnos-stage" aria-live="polite">
++    <section v-if="effectiveDisplayMode === 'turnos'" class="turnos-stage" aria-live="polite">
+       <article
+         v-for="item in turnos"
+         :key="`${item.turno}-${item.llamado_en}`"
+@@ -210,6 +259,22 @@ onUnmounted(() => {
+       </article>
+       <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
+     </section>
++    <section v-else class="next-appointments-stage" aria-live="polite">
++      <article v-for="item in proximasCitas" :key="item.medico_id" class="next-appointment-row">
++        <div>
++          <strong>{{ item.medico }}</strong>
++          <span>{{ item.consultorio }}</span>
++        </div>
++        <span class="doctor-status-value next-appointment-status">
++          <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
++            {{ doctorStatusIcon(item.estado_atencion) }}
++          </span>
++          {{ doctorStatusLabel(item.estado_atencion) }}
++        </span>
++        <time>{{ estimatedTimeLabel(item) }}</time>
++      </article>
++      <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
++    </section>
+ 
+     <footer v-if="error" class="display-error">{{ error }}</footer>
+   </main>
+diff --git a/access-manager/frontend/src/views/PlantillaTurnosView.vue b/access-manager/frontend/src/views/PlantillaTurnosView.vue
+index 458fe92..6cd717e 100644
+--- a/access-manager/frontend/src/views/PlantillaTurnosView.vue
++++ b/access-manager/frontend/src/views/PlantillaTurnosView.vue
+@@ -8,6 +8,7 @@ const usuarios = ref<Usuario[]>([]);
+ const query = ref('');
+ const selected = ref<Medico | null>(null);
+ const selectedTemplate = ref('');
++const selectedDuration = ref(60);
+ const loading = ref(false);
+ const saving = ref(false);
+ const error = ref('');
+@@ -38,6 +39,10 @@ function templateLabel(value: string) {
+   return turnoTemplateOptions.find((option) => option.value === value)?.label ?? value;
+ }
+ 
++function durationValue(medico: Medico | null) {
++  return medico?.duracion_cita_minutos ?? 60;
++}
++
+ const filteredMedicos = computed(() => {
+   const needle = normalize(query.value);
+   const sorted = [...medicos.value].sort((left, right) => {
+@@ -55,6 +60,7 @@ const filteredMedicos = computed(() => {
+ function selectMedico(medico: Medico) {
+   selected.value = medico;
+   selectedTemplate.value = medico.plantilla_turno;
++  selectedDuration.value = durationValue(medico);
+   message.value = '';
+   error.value = '';
+ }
+@@ -70,6 +76,7 @@ async function loadData() {
+       const refreshed = medicosData.find((medico) => medico.id === selected.value?.id) ?? null;
+       selected.value = refreshed;
+       selectedTemplate.value = refreshed?.plantilla_turno ?? '';
++      selectedDuration.value = durationValue(refreshed);
+     }
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar médicos.';
+@@ -78,19 +85,28 @@ async function loadData() {
+   }
+ }
+ 
+-async function saveTemplate() {
++async function savePreferences() {
+   if (!selected.value || !selectedTemplate.value) return;
++  const duration = Number(selectedDuration.value);
++  if (!Number.isInteger(duration) || duration < 15 || duration > 120) {
++    error.value = 'La duración debe estar entre 15 y 120 minutos.';
++    return;
++  }
+   saving.value = true;
+   error.value = '';
+   message.value = '';
+   try {
+-    const saved = await updateMedico(selected.value.id, { plantilla_turno: selectedTemplate.value });
++    const saved = await updateMedico(selected.value.id, {
++      plantilla_turno: selectedTemplate.value,
++      duracion_cita_minutos: duration,
++    });
+     medicos.value = medicos.value.map((medico) => (medico.id === saved.id ? saved : medico));
+     selected.value = saved;
+     selectedTemplate.value = saved.plantilla_turno;
+-    message.value = 'Plantilla de turnos actualizada.';
++    selectedDuration.value = durationValue(saved);
++    message.value = 'Preferencias del médico actualizadas.';
+   } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible guardar la plantilla.';
++    error.value = err instanceof Error ? err.message : 'No fue posible guardar las preferencias.';
+   } finally {
+     saving.value = false;
+   }
+@@ -103,8 +119,8 @@ onMounted(loadData);
+   <section class="page">
+     <header class="page-header">
+       <div>
+-        <h1>Plantilla de turnos</h1>
+-        <p>Asociación de formato de llamada para médicos.</p>
++        <h1>Preferencias del médico</h1>
++        <p>Formato de llamada y duración por omisión de citas.</p>
+       </div>
+     </header>
+ 
+@@ -137,6 +153,7 @@ onMounted(loadData);
+                 <th>Apellido(s)</th>
+                 <th>Nombre</th>
+                 <th>Correo</th>
++                <th>Duración</th>
+                 <th>Estado</th>
+               </tr>
+             </thead>
+@@ -151,6 +168,7 @@ onMounted(loadData);
+                 <td>{{ medico.apellidos }}</td>
+                 <td>{{ medico.nombre }}</td>
+                 <td>{{ medicoCorreo(medico) }}</td>
++                <td>{{ durationValue(medico) }} min</td>
+                 <td>{{ medicoEstado(medico) }}</td>
+               </tr>
+             </tbody>
+@@ -159,8 +177,8 @@ onMounted(loadData);
+         <p v-if="!loading && filteredMedicos.length === 0" class="message">No hay médicos para mostrar.</p>
+       </section>
+ 
+-      <form class="panel form" @submit.prevent="saveTemplate">
+-        <h2>Plantilla</h2>
++      <form class="panel form" @submit.prevent="savePreferences">
++        <h2>Preferencias</h2>
+         <template v-if="selected">
+           <div class="form-grid">
+             <div class="form-row">
+@@ -180,7 +198,7 @@ onMounted(loadData);
+               <input :value="medicoEstado(selected)" disabled />
+             </div>
+             <div class="form-row full">
+-              <label for="plantilla-turno">Plantilla de turnos</label>
++              <label for="plantilla-turno">Plantilla de llamada</label>
+               <select id="plantilla-turno" v-model="selectedTemplate" required>
+                 <option v-for="option in turnoTemplateOptions" :key="option.value" :value="option.value">
+                   {{ option.label }}
+@@ -188,6 +206,19 @@ onMounted(loadData);
+               </select>
+             </div>
+             <p class="message">Actual: {{ templateLabel(selected.plantilla_turno) }}</p>
++            <div class="form-row full">
++              <h3>Duración de las citas</h3>
++              <label for="duracion-cita-minutos">Minutos por omisión</label>
++              <input
++                id="duracion-cita-minutos"
++                v-model.number="selectedDuration"
++                type="number"
++                min="15"
++                max="120"
++                required
++              />
++              <p class="message">Valor inicial: 60 minutos. Permitido: 15 a 120 minutos.</p>
++            </div>
+           </div>
+           <p v-if="message" class="message">{{ message }}</p>
+           <p v-if="error" class="error">{{ error }}</p>
+@@ -195,7 +226,7 @@ onMounted(loadData);
+             <button type="submit" :disabled="saving">{{ saving ? 'Guardando...' : 'Guardar' }}</button>
+           </div>
+         </template>
+-        <p v-else class="message">Seleccione un médico para asociar su plantilla de turnos.</p>
++        <p v-else class="message">Seleccione un médico para configurar sus preferencias.</p>
+         <p v-if="!selected && error" class="error">{{ error }}</p>
+       </form>
+     </div>

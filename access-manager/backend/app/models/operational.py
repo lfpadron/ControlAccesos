@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -105,13 +105,18 @@ class Consultorio(TimestampMixin, Base):
 
 class ClusterTurnos(TimestampMixin, Base):
     __tablename__ = "clusters_turnos"
-    __table_args__ = (UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),)
+    __table_args__ = (
+        UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),
+        CheckConstraint("muestra_turnos OR muestra_proxima_cita", name="ck_clusters_turnos_modo_display"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     complejo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("complejos.id"), nullable=False, index=True)
     piso_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("pisos.id"), nullable=False, index=True)
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
+    muestra_turnos: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    muestra_proxima_cita: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 
@@ -142,6 +147,7 @@ class Medico(TimestampMixin, Base):
             "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
             name="ck_medicos_estado_atencion",
         ),
+        CheckConstraint("duracion_cita_minutos BETWEEN 15 AND 120", name="ck_medicos_duracion_cita_minutos_range"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -162,6 +168,8 @@ class Medico(TimestampMixin, Base):
         nullable=False,
     )
     notas_estado: Mapped[str | None] = mapped_column(String(100))
+    duracion_cita_minutos: Mapped[int] = mapped_column(Integer, default=60, server_default="60", nullable=False)
+    proxima_cita_estimada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

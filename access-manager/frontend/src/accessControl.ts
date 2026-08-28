@@ -33,7 +33,7 @@ export const screens: ScreenDefinition[] = [
   { key: 'busqueda-usuarios', label: 'Búsqueda de usuarios', path: '/busqueda-usuarios' },
   { key: 'roles', label: 'Roles', path: '/roles' },
   { key: 'usuario-roles', label: 'Asignación de usuarios', path: '/usuario-roles' },
-  { key: 'plantilla-turnos', label: 'Plantilla de turnos', path: '/plantilla-turnos' },
+  { key: 'plantilla-turnos', label: 'Preferencias del médico', path: '/plantilla-turnos' },
   { key: 'pacientes', label: 'Pacientes', path: '/pacientes' },
   { key: 'citas', label: 'Citas', path: '/citas' },
   { key: 'citas-hoy', label: 'Citas de hoy', path: '/citas/hoy' },

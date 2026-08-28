@@ -93,7 +93,7 @@ class CitaBase(BaseModel):
     sala_prevista_id: UUID | None = None
     fecha_cita: date
     hora_cita: time
-    duracion_estimada: int | None = Field(default=None, ge=1, le=720)
+    duracion_estimada: int = Field(default=60, ge=1, le=720)
     origen: str | None = Field(default=None, max_length=80)
     notas_operativas: str | None = None
 
