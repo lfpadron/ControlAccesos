@@ -454,22 +454,20 @@ def public_next_appointments(
             appointment_medico_assignment_condition(),
         )
         .order_by(
-            func.lower(func.coalesce(Medico.apellidos, "")),
-            func.lower(func.coalesce(Medico.nombre, "")),
+            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
             Cita.fecha_cita,
             Cita.hora_cita,
+            func.lower(func.coalesce(Medico.apellidos, "")),
+            func.lower(func.coalesce(Medico.nombre, "")),
         )
     ).all()
 
     response: list[PublicProximaCitaDisplay] = []
-    seen_medicos: set[UUID] = set()
-    for _cita, medico, consultorio in rows:
-        if medico.id in seen_medicos:
-            continue
-        seen_medicos.add(medico.id)
+    for cita, medico, consultorio in rows:
         estimated_at, estimated_time = estimated_appointment_time(medico.proxima_cita_estimada_at, timezone)
         response.append(
             PublicProximaCitaDisplay(
+                folio_turno=cita.folio_turno,
                 medico_id=medico.id,
                 medico=medico_label(medico),
                 consultorio=consultorio.nombre_visible or consultorio.codigo,

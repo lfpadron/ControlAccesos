@@ -112,6 +112,7 @@ class PublicTurnoDisplay(BaseModel):
 
 
 class PublicProximaCitaDisplay(BaseModel):
+    folio_turno: str
     medico_id: UUID
     medico: str
     consultorio: str

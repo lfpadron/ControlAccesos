@@ -1,0 +1,696 @@
+diff --git a/access-manager/app_medicos/lib/main.dart b/access-manager/app_medicos/lib/main.dart
+index dd354c8..1638af7 100644
+--- a/access-manager/app_medicos/lib/main.dart
++++ b/access-manager/app_medicos/lib/main.dart
+@@ -1735,6 +1735,12 @@ class _DoctorStatusScreenState extends State<DoctorStatusScreen> {
+                               onPressed: _saving
+                                   ? null
+                                   : () => _setStatus(status.value),
++                              style: status.value == 'NO_MOSTRAR'
++                                  ? OutlinedButton.styleFrom(
++                                      foregroundColor: status.color,
++                                      side: BorderSide(color: status.color),
++                                    )
++                                  : null,
+                               icon: Icon(status.icon, color: status.color),
+                               label: Text(status.label),
+                             ),
+@@ -2330,6 +2336,12 @@ const doctorStatusMetas = [
+     icon: Icons.check,
+     color: Color(0xFF11845B),
+   ),
++  DoctorStatusMeta(
++    value: 'NO_MOSTRAR',
++    label: 'No mostrar',
++    icon: Icons.visibility_off_outlined,
++    color: Color(0xFF4B5563),
++  ),
+ ];
+ 
+ DoctorStatusMeta doctorStatusMeta(String value) {
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 2ffe455..f0e8fcd 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -454,22 +454,20 @@ def public_next_appointments(
+             appointment_medico_assignment_condition(),
+         )
+         .order_by(
+-            func.lower(func.coalesce(Medico.apellidos, "")),
+-            func.lower(func.coalesce(Medico.nombre, "")),
++            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
+             Cita.fecha_cita,
+             Cita.hora_cita,
++            func.lower(func.coalesce(Medico.apellidos, "")),
++            func.lower(func.coalesce(Medico.nombre, "")),
+         )
+     ).all()
+ 
+     response: list[PublicProximaCitaDisplay] = []
+-    seen_medicos: set[UUID] = set()
+-    for _cita, medico, consultorio in rows:
+-        if medico.id in seen_medicos:
+-            continue
+-        seen_medicos.add(medico.id)
++    for cita, medico, consultorio in rows:
+         estimated_at, estimated_time = estimated_appointment_time(medico.proxima_cita_estimada_at, timezone)
+         response.append(
+             PublicProximaCitaDisplay(
++                folio_turno=cita.folio_turno,
+                 medico_id=medico.id,
+                 medico=medico_label(medico),
+                 consultorio=consultorio.nombre_visible or consultorio.codigo,
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index 5daede6..070e0ea 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -144,7 +144,7 @@ class Medico(TimestampMixin, Base):
+             name="ck_medicos_plantilla_turno",
+         ),
+         CheckConstraint(
+-            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
++            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE', 'NO_MOSTRAR')",
+             name="ck_medicos_estado_atencion",
+         ),
+         CheckConstraint("duracion_cita_minutos BETWEEN 15 AND 120", name="ck_medicos_duracion_cita_minutos_range"),
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index cd1b474..c98d1df 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -112,6 +112,7 @@ class PublicTurnoDisplay(BaseModel):
+ 
+ 
+ class PublicProximaCitaDisplay(BaseModel):
++    folio_turno: str
+     medico_id: UUID
+     medico: str
+     consultorio: str
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 7312faf..296b6a7 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -19,7 +19,7 @@ ESTADOS_CITA = {
+     "EXPIRADA",
+ }
+ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM", "API_EXTERNA"}
+-ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
++ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
+ 
+ 
+ class PacienteBase(BaseModel):
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 22ee589..fa807e1 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -149,7 +149,7 @@ def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth
+     estado_response = client.get("/api/estado-medico/medicos", headers=auth_headers)
+     assert estado_response.status_code == 200, estado_response.text
+     estado_medico = next(item for item in estado_response.json() if item["id"] == medico["id"])
+-    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
++    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
+ 
+     update_response = client.patch(
+         f"/api/estado-medico/medicos/{medico['id']}",
+@@ -198,6 +198,184 @@ def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth
+     assert reset_response.status_code == 200, reset_response.text
+ 
+ 
++def test_public_display_next_appointments_table_data(client: TestClient, auth_headers: dict[str, str]) -> None:
++    suffix = uuid4().hex[:8]
++
++    institucion = assert_created(
++        client.post(
++            "/api/instituciones",
++            headers=auth_headers,
++            json={"nombre": f"Institucion Proximas {suffix}"},
++        )
++    )
++    complejo = assert_created(
++        client.post(
++            "/api/complejos",
++            headers=auth_headers,
++            json={
++                "institucion_id": institucion["id"],
++                "nombre": f"Campus Proximas {suffix}",
++                "zona_horaria": "America/Mexico_City",
++            },
++        )
++    )
++    torre = assert_created(
++        client.post(
++            "/api/torres",
++            headers=auth_headers,
++            json={"complejo_id": complejo["id"], "nombre": f"Torre Proximas {suffix}", "numero_pisos": 1},
++        )
++    )
++    pisos_response = client.get("/api/pisos", headers=auth_headers)
++    assert pisos_response.status_code == 200, pisos_response.text
++    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
++    cluster = assert_created(
++        client.post(
++            "/api/clusters-turnos",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "nombre": f"Cluster Proximas {suffix}",
++                "muestra_turnos": False,
++                "muestra_proxima_cita": True,
++            },
++        )
++    )
++    pantalla = assert_created(
++        client.post(
++            "/api/pantallas-turnos",
++            headers=auth_headers,
++            json={
++                "codigo_dispositivo": f"display-proximas-{suffix}",
++                "nombre": f"Pantalla Proximas {suffix}",
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++
++    consultorio_b = assert_created(
++        client.post(
++            "/api/consultorios",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "codigo": f"B-{suffix}",
++                "nombre_visible": f"Consultorio B {suffix}",
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++    consultorio_a = assert_created(
++        client.post(
++            "/api/consultorios",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "codigo": f"A-{suffix}",
++                "nombre_visible": f"Consultorio A {suffix}",
++                "cluster_ids": [cluster["id"]],
++            },
++        )
++    )
++    medico_b = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={"nombre": "Medico", "apellidos": f"B {suffix}", "nombre_visible": f"Dr. B {suffix}"},
++        )
++    )
++    medico_a = assert_created(
++        client.post(
++            "/api/medicos",
++            headers=auth_headers,
++            json={"nombre": "Medico", "apellidos": f"A {suffix}", "nombre_visible": f"Dr. A {suffix}"},
++        )
++    )
++    for medico, consultorio in ((medico_b, consultorio_b), (medico_a, consultorio_a)):
++        assert_created(
++            client.post(
++                "/api/asignaciones-medico-consultorio",
++                headers=auth_headers,
++                json={
++                    "medico_id": medico["id"],
++                    "consultorio_id": consultorio["id"],
++                    "fecha_inicio": "2026-06-01",
++                },
++            )
++        )
++    hidden_response = client.patch(
++        f"/api/estado-medico/medicos/{medico_a['id']}",
++        headers=auth_headers,
++        json={"estado_atencion": "NO_MOSTRAR", "notas_estado": None},
++    )
++    assert hidden_response.status_code == 200, hidden_response.text
++
++    paciente_b = assert_created(
++        client.post(
++            "/api/pacientes",
++            headers=auth_headers,
++            json={"nombre": "Paciente", "apellido_paterno": f"B {suffix}", "celular": f"556{suffix[:7]}"},
++        )
++    )
++    paciente_a = assert_created(
++        client.post(
++            "/api/pacientes",
++            headers=auth_headers,
++            json={"nombre": "Paciente", "apellido_paterno": f"A {suffix}", "celular": f"557{suffix[:7]}"},
++        )
++    )
++    appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=45)
++    cita_b = assert_created(
++        client.post(
++            "/api/citas",
++            headers=auth_headers,
++            json={
++                "tipo": "PROGRAMADA",
++                "paciente_id": paciente_b["id"],
++                "medico_id": medico_b["id"],
++                "consultorio_id": consultorio_b["id"],
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "fecha_cita": appointment_at.date().isoformat(),
++                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
++                "origen": "TEST_PROXIMAS",
++            },
++        )
++    )
++    cita_a = assert_created(
++        client.post(
++            "/api/citas",
++            headers=auth_headers,
++            json={
++                "tipo": "PROGRAMADA",
++                "paciente_id": paciente_a["id"],
++                "medico_id": medico_a["id"],
++                "consultorio_id": consultorio_a["id"],
++                "complejo_id": complejo["id"],
++                "piso_id": piso["id"],
++                "fecha_cita": appointment_at.date().isoformat(),
++                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
++                "origen": "TEST_PROXIMAS",
++            },
++        )
++    )
++
++    public_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
++    assert public_response.status_code == 200, public_response.text
++    payload = public_response.json()
++    assert payload["config"]["mostrar_proxima_cita"] is True
++    proximas = payload["proximas_citas"]
++    assert [item["consultorio"] for item in proximas[:2]] == [consultorio_a["nombre_visible"], consultorio_b["nombre_visible"]]
++    assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
++    assert proximas[0]["medico"] == medico_a["nombre_visible"]
++    assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
++
++
+ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+     initial_password = "Temporal123!"
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 727ad4b..68ac43b 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -337,6 +337,7 @@ export type PublicDisplayTurno = {
+ };
+ 
+ export type PublicDisplayProximaCita = {
++  folio_turno: string;
+   medico_id: string;
+   medico: string;
+   consultorio: string;
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 1ce2081..8484090 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -717,6 +717,11 @@ th {
+   justify-content: center;
+ }
+ 
++.doctor-status-button-muted {
++  background: #e5e7eb;
++  color: #374151;
++}
++
+ .table-status-button {
+   background: transparent;
+   color: #17202a;
+@@ -874,10 +879,31 @@ pre {
+   padding: 1.5rem;
+ }
+ 
++.display-topbar {
++  align-items: center;
++  display: grid;
++  gap: 1rem;
++  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
++  min-height: 56px;
++}
++
++.display-topbar-spacer {
++  grid-column: 1;
++}
++
++.display-topbar h1 {
++  font-size: 3.4rem;
++  grid-column: 2;
++  line-height: 1;
++  margin: 0;
++  text-align: center;
++}
++
+ .display-status {
+   align-items: center;
+   display: flex;
+   gap: 1rem;
++  grid-column: 3;
+   justify-content: flex-end;
+   min-height: 42px;
+   opacity: 0.78;
+@@ -893,6 +919,13 @@ pre {
+   color: #a7f3d0;
+ }
+ 
++.display-clock {
++  background: rgba(255, 255, 255, 0.1);
++  border-radius: 999px;
++  font-weight: 850;
++  padding: 0.35rem 0.7rem;
++}
++
+ .display-voice-button {
+   align-items: center;
+   background: rgba(255, 255, 255, 0.1);
+@@ -1018,44 +1051,56 @@ pre {
+ .next-appointments-stage {
+   align-content: center;
+   display: grid;
+-  gap: 0.85rem;
+   margin: 0 auto;
+   max-width: 1400px;
+   width: 100%;
+ }
+ 
+-.next-appointment-row {
+-  align-items: center;
+-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+-  display: grid;
+-  gap: 1.2rem;
+-  grid-template-columns: minmax(280px, 1.4fr) minmax(220px, 0.8fr) minmax(160px, 0.4fr);
+-  padding: 1rem 0;
++.next-appointments-table-wrap {
++  overflow-x: auto;
+ }
+ 
+-.next-appointment-row div {
+-  display: grid;
+-  gap: 0.35rem;
+-  min-width: 0;
++.next-appointments-table {
++  border-collapse: collapse;
++  color: var(--display-text);
++  font-size: 1.7rem;
++  margin: 0;
++  table-layout: fixed;
++  width: 100%;
+ }
+ 
+-.next-appointment-row strong {
+-  font-size: 2.65rem;
+-  line-height: 1.08;
+-  overflow-wrap: anywhere;
++.next-appointments-table th,
++.next-appointments-table td {
++  border: 0;
++  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
++  padding: 0.95rem 1rem;
++  text-align: left;
++  vertical-align: middle;
+ }
+ 
+-.next-appointment-row > div > span {
+-  font-size: 1.8rem;
+-  font-weight: 750;
+-  opacity: 0.86;
++.next-appointments-table th {
++  background: transparent;
++  color: var(--display-text);
++  font-size: 1rem;
++  letter-spacing: 0;
++  opacity: 0.72;
++  text-transform: uppercase;
++}
++
++.next-appointments-table td {
++  font-weight: 760;
+   overflow-wrap: anywhere;
+ }
+ 
+-.next-appointment-row time {
+-  font-size: 3.1rem;
++.next-appointments-table td:nth-child(4),
++.next-appointments-table td:nth-child(5) {
++  white-space: nowrap;
++}
++
++.next-appointments-table td:nth-child(4) strong,
++.next-appointments-table time {
++  font-size: 2.65rem;
+   font-weight: 850;
+-  text-align: right;
+ }
+ 
+ .next-appointment-status {
+@@ -1283,21 +1328,32 @@ pre {
+     grid-template-columns: 1fr;
+   }
+ 
+-  .next-appointment-row {
++  .display-topbar {
+     grid-template-columns: 1fr;
++    padding-top: 4.6rem;
++  }
++
++  .display-topbar-spacer {
++    display: none;
++  }
++
++  .display-topbar h1,
++  .display-status {
++    grid-column: auto;
+   }
+ 
+-  .next-appointment-row strong {
++  .display-topbar h1 {
+     font-size: 2rem;
+   }
+ 
+-  .next-appointment-row > div > span {
+-    font-size: 1.35rem;
++  .display-status {
++    flex-wrap: wrap;
++    justify-content: center;
+   }
+ 
+-  .next-appointment-row time {
+-    font-size: 2.4rem;
+-    text-align: left;
++  .next-appointments-table {
++    font-size: 1rem;
++    min-width: 760px;
+   }
+ 
+   .turno-preview-item,
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 9b204e8..69021f7 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -179,6 +179,7 @@ const doctorStatusOptions = [
+   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
+   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
+   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
++  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
+ ];
+ 
+ async function load() {
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 23474c7..d96bc69 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -23,6 +23,7 @@ const config = ref<PublicDisplayConfig>({
+ });
+ const connected = ref(false);
+ const lastUpdate = ref('');
++const currentTime = ref('');
+ const error = ref('');
+ const displayQr = ref('');
+ const displayName = ref('');
+@@ -30,6 +31,7 @@ const voiceSupported = ref(false);
+ const voiceEnabled = ref(false);
+ let timer: number | undefined;
+ let turnoTimingTimer: number | undefined;
++let clockTimer: number | undefined;
+ let knownTurnoKeys = new Set<string>();
+ let hasLoadedTurnos = false;
+ let serverClockOffsetMs = 0;
+@@ -54,6 +56,7 @@ const doctorStatusOptions = [
+   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
+   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
+   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
++  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
+ ];
+ 
+ function pollingMs() {
+@@ -212,6 +215,19 @@ function estimatedTimeLabel(item: PublicDisplayProximaCita) {
+   return new Date(item.proxima_cita_estimada).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+ }
+ 
++function currentTimeLabel() {
++  return new Date(currentServerTimeMs()).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
++}
++
++function updateClock() {
++  currentTime.value = currentTimeLabel();
++}
++
++function availabilityLabel(status: string) {
++  if (status === 'NO_MOSTRAR') return '';
++  return doctorStatusLabel(status);
++}
++
+ function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
+   if (responseTurnos.some((item) => item.resaltado)) {
+     displayMode.value = 'turnos';
+@@ -241,6 +257,7 @@ async function loadData() {
+     const response = await getPublicDisplayTurnos(codigoDispositivo.value, token.value);
+     config.value = response.config;
+     syncServerClock(response.ultima_conexion);
++    updateClock();
+     const responseTurnos = normalizeTurnoTimings(response.turnos);
+     const nextKeys = new Set(responseTurnos.map(turnoKey));
+     const newHighlightedTurnos = responseTurnos.filter(
+@@ -269,6 +286,8 @@ async function loadData() {
+ 
+ onMounted(async () => {
+   loadVoicePreference();
++  updateClock();
++  clockTimer = window.setInterval(updateClock, 1000);
+   try {
+     displayQr.value = await QRCode.toDataURL(window.location.href || codigoDispositivo.value, { margin: 1, width: 96 });
+   } catch {
+@@ -280,6 +299,7 @@ onMounted(async () => {
+ onUnmounted(() => {
+   window.clearTimeout(timer);
+   window.clearTimeout(turnoTimingTimer);
++  window.clearInterval(clockTimer);
+   if (voiceSupported.value) {
+     window.speechSynthesis.cancel();
+   }
+@@ -292,25 +312,30 @@ onUnmounted(() => {
+       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
+       <span>{{ displayName || codigoDispositivo }}</span>
+     </aside>
+-    <header class="display-status">
+-      <span :class="{ connected }">{{ connected ? 'Conectada' : 'Sin conexión' }}</span>
+-      <span v-if="lastUpdate">Última actualización: {{ lastUpdate }}</span>
+-      <button
+-        class="display-voice-button"
+-        type="button"
+-        :class="{ active: voiceEnabled }"
+-        :disabled="!voiceSupported"
+-        :aria-pressed="voiceEnabled"
+-        :title="voiceSupported ? (voiceEnabled ? 'Silenciar voz' : 'Activar voz') : 'Voz no disponible en este navegador'"
+-        @click="toggleVoice"
+-      >
+-        <svg aria-hidden="true" viewBox="0 0 24 24">
+-          <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+-          <path v-if="voiceEnabled" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
+-          <path v-else d="m17 9 4 6M21 9l-4 6" />
+-        </svg>
+-        <span>{{ voiceEnabled ? 'Voz activa' : 'Voz apagada' }}</span>
+-      </button>
++    <header class="display-topbar">
++      <div class="display-topbar-spacer" aria-hidden="true"></div>
++      <h1 v-if="effectiveDisplayMode === 'proxima_cita'">Citas próximas</h1>
++      <div class="display-status">
++        <span :class="{ connected }">{{ connected ? 'Conectada' : 'Sin conexión' }}</span>
++        <span v-if="lastUpdate">Última actualización: {{ lastUpdate }}</span>
++        <button
++          class="display-voice-button"
++          type="button"
++          :class="{ active: voiceEnabled }"
++          :disabled="!voiceSupported"
++          :aria-pressed="voiceEnabled"
++          :title="voiceSupported ? (voiceEnabled ? 'Silenciar voz' : 'Activar voz') : 'Voz no disponible en este navegador'"
++          @click="toggleVoice"
++        >
++          <svg aria-hidden="true" viewBox="0 0 24 24">
++            <path d="M4 9v6h4l5 4V5L8 9H4Z" />
++            <path v-if="voiceEnabled" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
++            <path v-else d="m17 9 4 6M21 9l-4 6" />
++          </svg>
++          <span>{{ voiceEnabled ? 'Voz activa' : 'Voz apagada' }}</span>
++        </button>
++        <time class="display-clock">{{ currentTime }}</time>
++      </div>
+     </header>
+ 
+     <section v-if="effectiveDisplayMode === 'turnos'" class="turnos-stage" aria-live="polite">
+@@ -329,19 +354,35 @@ onUnmounted(() => {
+       <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
+     </section>
+     <section v-else class="next-appointments-stage" aria-live="polite">
+-      <article v-for="item in proximasCitas" :key="item.medico_id" class="next-appointment-row">
+-        <div>
+-          <strong>{{ item.medico }}</strong>
+-          <span>{{ item.consultorio }}</span>
+-        </div>
+-        <span class="doctor-status-value next-appointment-status">
+-          <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
+-            {{ doctorStatusIcon(item.estado_atencion) }}
+-          </span>
+-          {{ doctorStatusLabel(item.estado_atencion) }}
+-        </span>
+-        <time>{{ estimatedTimeLabel(item) }}</time>
+-      </article>
++      <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
++        <table class="next-appointments-table">
++          <thead>
++            <tr>
++              <th>Consultorio</th>
++              <th>Médico</th>
++              <th>Disponibilidad</th>
++              <th>Cita</th>
++              <th>Hora aproximada</th>
++            </tr>
++          </thead>
++          <tbody>
++            <tr v-for="item in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}`">
++              <td>{{ item.consultorio }}</td>
++              <td>{{ item.medico }}</td>
++              <td>
++                <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">
++                  <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
++                    {{ doctorStatusIcon(item.estado_atencion) }}
++                  </span>
++                  {{ availabilityLabel(item.estado_atencion) }}
++                </span>
++              </td>
++              <td><strong>{{ item.folio_turno }}</strong></td>
++              <td><time>{{ estimatedTimeLabel(item) }}</time></td>
++            </tr>
++          </tbody>
++        </table>
++      </div>
+       <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
+     </section>
+ 
+diff --git a/access-manager/frontend/src/views/EstadoMedicoView.vue b/access-manager/frontend/src/views/EstadoMedicoView.vue
+index 3246995..f75a49b 100644
+--- a/access-manager/frontend/src/views/EstadoMedicoView.vue
++++ b/access-manager/frontend/src/views/EstadoMedicoView.vue
+@@ -23,6 +23,7 @@ const statusOptions = [
+   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
+   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
+   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
++  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
+ ];
+ 
+ const selectedMedico = computed(() => medicos.value.find((medico) => medico.id === selectedMedicoId.value) ?? null);
+@@ -182,6 +183,7 @@ onMounted(load);
+           v-for="statusOption in statusOptions"
+           :key="statusOption.value"
+           class="doctor-status-button"
++          :class="`doctor-status-button-${statusOption.tone}`"
+           type="button"
+           :disabled="saving || !selectedMedico"
+           @click="setEstado(statusOption.value)"

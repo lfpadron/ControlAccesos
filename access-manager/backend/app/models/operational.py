@@ -144,7 +144,7 @@ class Medico(TimestampMixin, Base):
             name="ck_medicos_plantilla_turno",
         ),
         CheckConstraint(
-            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE')",
+            "estado_atencion IN ('AUSENTE', 'NO_DISPONIBLE', 'EN_CONSULTA', 'DISPONIBLE', 'NO_MOSTRAR')",
             name="ck_medicos_estado_atencion",
         ),
         CheckConstraint("duracion_cita_minutos BETWEEN 15 AND 120", name="ck_medicos_duracion_cita_minutos_range"),

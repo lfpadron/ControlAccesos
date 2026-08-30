@@ -23,6 +23,7 @@ const statusOptions = [
   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
+  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
 ];
 
 const selectedMedico = computed(() => medicos.value.find((medico) => medico.id === selectedMedicoId.value) ?? null);
@@ -182,6 +183,7 @@ onMounted(load);
           v-for="statusOption in statusOptions"
           :key="statusOption.value"
           class="doctor-status-button"
+          :class="`doctor-status-button-${statusOption.tone}`"
           type="button"
           :disabled="saving || !selectedMedico"
           @click="setEstado(statusOption.value)"

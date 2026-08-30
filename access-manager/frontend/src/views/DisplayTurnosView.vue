@@ -23,6 +23,7 @@ const config = ref<PublicDisplayConfig>({
 });
 const connected = ref(false);
 const lastUpdate = ref('');
+const currentTime = ref('');
 const error = ref('');
 const displayQr = ref('');
 const displayName = ref('');
@@ -30,6 +31,7 @@ const voiceSupported = ref(false);
 const voiceEnabled = ref(false);
 let timer: number | undefined;
 let turnoTimingTimer: number | undefined;
+let clockTimer: number | undefined;
 let knownTurnoKeys = new Set<string>();
 let hasLoadedTurnos = false;
 let serverClockOffsetMs = 0;
@@ -54,6 +56,7 @@ const doctorStatusOptions = [
   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
+  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
 ];
 
 function pollingMs() {
@@ -212,6 +215,19 @@ function estimatedTimeLabel(item: PublicDisplayProximaCita) {
   return new Date(item.proxima_cita_estimada).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
 }
 
+function currentTimeLabel() {
+  return new Date(currentServerTimeMs()).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+}
+
+function updateClock() {
+  currentTime.value = currentTimeLabel();
+}
+
+function availabilityLabel(status: string) {
+  if (status === 'NO_MOSTRAR') return '';
+  return doctorStatusLabel(status);
+}
+
 function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
   if (responseTurnos.some((item) => item.resaltado)) {
     displayMode.value = 'turnos';
@@ -241,6 +257,7 @@ async function loadData() {
     const response = await getPublicDisplayTurnos(codigoDispositivo.value, token.value);
     config.value = response.config;
     syncServerClock(response.ultima_conexion);
+    updateClock();
     const responseTurnos = normalizeTurnoTimings(response.turnos);
     const nextKeys = new Set(responseTurnos.map(turnoKey));
     const newHighlightedTurnos = responseTurnos.filter(
@@ -269,6 +286,8 @@ async function loadData() {
 
 onMounted(async () => {
   loadVoicePreference();
+  updateClock();
+  clockTimer = window.setInterval(updateClock, 1000);
   try {
     displayQr.value = await QRCode.toDataURL(window.location.href || codigoDispositivo.value, { margin: 1, width: 96 });
   } catch {
@@ -280,6 +299,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.clearTimeout(timer);
   window.clearTimeout(turnoTimingTimer);
+  window.clearInterval(clockTimer);
   if (voiceSupported.value) {
     window.speechSynthesis.cancel();
   }
@@ -292,25 +312,30 @@ onUnmounted(() => {
       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
       <span>{{ displayName || codigoDispositivo }}</span>
     </aside>
-    <header class="display-status">
-      <span :class="{ connected }">{{ connected ? 'Conectada' : 'Sin conexión' }}</span>
-      <span v-if="lastUpdate">Última actualización: {{ lastUpdate }}</span>
-      <button
-        class="display-voice-button"
-        type="button"
-        :class="{ active: voiceEnabled }"
-        :disabled="!voiceSupported"
-        :aria-pressed="voiceEnabled"
-        :title="voiceSupported ? (voiceEnabled ? 'Silenciar voz' : 'Activar voz') : 'Voz no disponible en este navegador'"
-        @click="toggleVoice"
-      >
-        <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="M4 9v6h4l5 4V5L8 9H4Z" />
-          <path v-if="voiceEnabled" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
-          <path v-else d="m17 9 4 6M21 9l-4 6" />
-        </svg>
-        <span>{{ voiceEnabled ? 'Voz activa' : 'Voz apagada' }}</span>
-      </button>
+    <header class="display-topbar">
+      <div class="display-topbar-spacer" aria-hidden="true"></div>
+      <h1 v-if="effectiveDisplayMode === 'proxima_cita'">Citas próximas</h1>
+      <div class="display-status">
+        <span :class="{ connected }">{{ connected ? 'Conectada' : 'Sin conexión' }}</span>
+        <span v-if="lastUpdate">Última actualización: {{ lastUpdate }}</span>
+        <button
+          class="display-voice-button"
+          type="button"
+          :class="{ active: voiceEnabled }"
+          :disabled="!voiceSupported"
+          :aria-pressed="voiceEnabled"
+          :title="voiceSupported ? (voiceEnabled ? 'Silenciar voz' : 'Activar voz') : 'Voz no disponible en este navegador'"
+          @click="toggleVoice"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+            <path v-if="voiceEnabled" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
+            <path v-else d="m17 9 4 6M21 9l-4 6" />
+          </svg>
+          <span>{{ voiceEnabled ? 'Voz activa' : 'Voz apagada' }}</span>
+        </button>
+        <time class="display-clock">{{ currentTime }}</time>
+      </div>
     </header>
 
     <section v-if="effectiveDisplayMode === 'turnos'" class="turnos-stage" aria-live="polite">
@@ -329,19 +354,35 @@ onUnmounted(() => {
       <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
     </section>
     <section v-else class="next-appointments-stage" aria-live="polite">
-      <article v-for="item in proximasCitas" :key="item.medico_id" class="next-appointment-row">
-        <div>
-          <strong>{{ item.medico }}</strong>
-          <span>{{ item.consultorio }}</span>
-        </div>
-        <span class="doctor-status-value next-appointment-status">
-          <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
-            {{ doctorStatusIcon(item.estado_atencion) }}
-          </span>
-          {{ doctorStatusLabel(item.estado_atencion) }}
-        </span>
-        <time>{{ estimatedTimeLabel(item) }}</time>
-      </article>
+      <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
+        <table class="next-appointments-table">
+          <thead>
+            <tr>
+              <th>Consultorio</th>
+              <th>Médico</th>
+              <th>Disponibilidad</th>
+              <th>Cita</th>
+              <th>Hora aproximada</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}`">
+              <td>{{ item.consultorio }}</td>
+              <td>{{ item.medico }}</td>
+              <td>
+                <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">
+                  <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">
+                    {{ doctorStatusIcon(item.estado_atencion) }}
+                  </span>
+                  {{ availabilityLabel(item.estado_atencion) }}
+                </span>
+              </td>
+              <td><strong>{{ item.folio_turno }}</strong></td>
+              <td><time>{{ estimatedTimeLabel(item) }}</time></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
     </section>
 

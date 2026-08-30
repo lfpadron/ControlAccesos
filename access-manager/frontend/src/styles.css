@@ -717,6 +717,11 @@ th {
   justify-content: center;
 }
 
+.doctor-status-button-muted {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 .table-status-button {
   background: transparent;
   color: #17202a;
@@ -874,10 +879,31 @@ pre {
   padding: 1.5rem;
 }
 
+.display-topbar {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
+  min-height: 56px;
+}
+
+.display-topbar-spacer {
+  grid-column: 1;
+}
+
+.display-topbar h1 {
+  font-size: 3.4rem;
+  grid-column: 2;
+  line-height: 1;
+  margin: 0;
+  text-align: center;
+}
+
 .display-status {
   align-items: center;
   display: flex;
   gap: 1rem;
+  grid-column: 3;
   justify-content: flex-end;
   min-height: 42px;
   opacity: 0.78;
@@ -891,6 +917,13 @@ pre {
 
 .display-status .connected {
   color: #a7f3d0;
+}
+
+.display-clock {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  font-weight: 850;
+  padding: 0.35rem 0.7rem;
 }
 
 .display-voice-button {
@@ -1018,44 +1051,56 @@ pre {
 .next-appointments-stage {
   align-content: center;
   display: grid;
-  gap: 0.85rem;
   margin: 0 auto;
   max-width: 1400px;
   width: 100%;
 }
 
-.next-appointment-row {
-  align-items: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  display: grid;
-  gap: 1.2rem;
-  grid-template-columns: minmax(280px, 1.4fr) minmax(220px, 0.8fr) minmax(160px, 0.4fr);
-  padding: 1rem 0;
+.next-appointments-table-wrap {
+  overflow-x: auto;
 }
 
-.next-appointment-row div {
-  display: grid;
-  gap: 0.35rem;
-  min-width: 0;
+.next-appointments-table {
+  border-collapse: collapse;
+  color: var(--display-text);
+  font-size: 1.7rem;
+  margin: 0;
+  table-layout: fixed;
+  width: 100%;
 }
 
-.next-appointment-row strong {
+.next-appointments-table th,
+.next-appointments-table td {
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 0.95rem 1rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.next-appointments-table th {
+  background: transparent;
+  color: var(--display-text);
+  font-size: 1rem;
+  letter-spacing: 0;
+  opacity: 0.72;
+  text-transform: uppercase;
+}
+
+.next-appointments-table td {
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.next-appointments-table td:nth-child(4),
+.next-appointments-table td:nth-child(5) {
+  white-space: nowrap;
+}
+
+.next-appointments-table td:nth-child(4) strong,
+.next-appointments-table time {
   font-size: 2.65rem;
-  line-height: 1.08;
-  overflow-wrap: anywhere;
-}
-
-.next-appointment-row > div > span {
-  font-size: 1.8rem;
-  font-weight: 750;
-  opacity: 0.86;
-  overflow-wrap: anywhere;
-}
-
-.next-appointment-row time {
-  font-size: 3.1rem;
   font-weight: 850;
-  text-align: right;
 }
 
 .next-appointment-status {
@@ -1283,21 +1328,32 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .next-appointment-row {
+  .display-topbar {
     grid-template-columns: 1fr;
+    padding-top: 4.6rem;
   }
 
-  .next-appointment-row strong {
+  .display-topbar-spacer {
+    display: none;
+  }
+
+  .display-topbar h1,
+  .display-status {
+    grid-column: auto;
+  }
+
+  .display-topbar h1 {
     font-size: 2rem;
   }
 
-  .next-appointment-row > div > span {
-    font-size: 1.35rem;
+  .display-status {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
-  .next-appointment-row time {
-    font-size: 2.4rem;
-    text-align: left;
+  .next-appointments-table {
+    font-size: 1rem;
+    min-width: 760px;
   }
 
   .turno-preview-item,

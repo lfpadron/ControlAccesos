@@ -337,6 +337,7 @@ export type PublicDisplayTurno = {
 };
 
 export type PublicDisplayProximaCita = {
+  folio_turno: string;
   medico_id: string;
   medico: string;
   consultorio: string;

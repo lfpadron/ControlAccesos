@@ -1735,6 +1735,12 @@ class _DoctorStatusScreenState extends State<DoctorStatusScreen> {
                               onPressed: _saving
                                   ? null
                                   : () => _setStatus(status.value),
+                              style: status.value == 'NO_MOSTRAR'
+                                  ? OutlinedButton.styleFrom(
+                                      foregroundColor: status.color,
+                                      side: BorderSide(color: status.color),
+                                    )
+                                  : null,
                               icon: Icon(status.icon, color: status.color),
                               label: Text(status.label),
                             ),
@@ -2329,6 +2335,12 @@ const doctorStatusMetas = [
     label: 'Disponible',
     icon: Icons.check,
     color: Color(0xFF11845B),
+  ),
+  DoctorStatusMeta(
+    value: 'NO_MOSTRAR',
+    label: 'No mostrar',
+    icon: Icons.visibility_off_outlined,
+    color: Color(0xFF4B5563),
   ),
 ];
 

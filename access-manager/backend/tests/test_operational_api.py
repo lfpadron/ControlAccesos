@@ -149,7 +149,7 @@ def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth
     estado_response = client.get("/api/estado-medico/medicos", headers=auth_headers)
     assert estado_response.status_code == 200, estado_response.text
     estado_medico = next(item for item in estado_response.json() if item["id"] == medico["id"])
-    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE"}
+    assert estado_medico["estado_atencion"] in {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
 
     update_response = client.patch(
         f"/api/estado-medico/medicos/{medico['id']}",
@@ -196,6 +196,184 @@ def test_estado_medico_updates_and_appears_in_citas_hoy(client: TestClient, auth
         json={"estado_atencion": "DISPONIBLE", "notas_estado": None},
     )
     assert reset_response.status_code == 200, reset_response.text
+
+
+def test_public_display_next_appointments_table_data(client: TestClient, auth_headers: dict[str, str]) -> None:
+    suffix = uuid4().hex[:8]
+
+    institucion = assert_created(
+        client.post(
+            "/api/instituciones",
+            headers=auth_headers,
+            json={"nombre": f"Institucion Proximas {suffix}"},
+        )
+    )
+    complejo = assert_created(
+        client.post(
+            "/api/complejos",
+            headers=auth_headers,
+            json={
+                "institucion_id": institucion["id"],
+                "nombre": f"Campus Proximas {suffix}",
+                "zona_horaria": "America/Mexico_City",
+            },
+        )
+    )
+    torre = assert_created(
+        client.post(
+            "/api/torres",
+            headers=auth_headers,
+            json={"complejo_id": complejo["id"], "nombre": f"Torre Proximas {suffix}", "numero_pisos": 1},
+        )
+    )
+    pisos_response = client.get("/api/pisos", headers=auth_headers)
+    assert pisos_response.status_code == 200, pisos_response.text
+    piso = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 1)
+    cluster = assert_created(
+        client.post(
+            "/api/clusters-turnos",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "nombre": f"Cluster Proximas {suffix}",
+                "muestra_turnos": False,
+                "muestra_proxima_cita": True,
+            },
+        )
+    )
+    pantalla = assert_created(
+        client.post(
+            "/api/pantallas-turnos",
+            headers=auth_headers,
+            json={
+                "codigo_dispositivo": f"display-proximas-{suffix}",
+                "nombre": f"Pantalla Proximas {suffix}",
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+
+    consultorio_b = assert_created(
+        client.post(
+            "/api/consultorios",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "codigo": f"B-{suffix}",
+                "nombre_visible": f"Consultorio B {suffix}",
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+    consultorio_a = assert_created(
+        client.post(
+            "/api/consultorios",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "codigo": f"A-{suffix}",
+                "nombre_visible": f"Consultorio A {suffix}",
+                "cluster_ids": [cluster["id"]],
+            },
+        )
+    )
+    medico_b = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={"nombre": "Medico", "apellidos": f"B {suffix}", "nombre_visible": f"Dr. B {suffix}"},
+        )
+    )
+    medico_a = assert_created(
+        client.post(
+            "/api/medicos",
+            headers=auth_headers,
+            json={"nombre": "Medico", "apellidos": f"A {suffix}", "nombre_visible": f"Dr. A {suffix}"},
+        )
+    )
+    for medico, consultorio in ((medico_b, consultorio_b), (medico_a, consultorio_a)):
+        assert_created(
+            client.post(
+                "/api/asignaciones-medico-consultorio",
+                headers=auth_headers,
+                json={
+                    "medico_id": medico["id"],
+                    "consultorio_id": consultorio["id"],
+                    "fecha_inicio": "2026-06-01",
+                },
+            )
+        )
+    hidden_response = client.patch(
+        f"/api/estado-medico/medicos/{medico_a['id']}",
+        headers=auth_headers,
+        json={"estado_atencion": "NO_MOSTRAR", "notas_estado": None},
+    )
+    assert hidden_response.status_code == 200, hidden_response.text
+
+    paciente_b = assert_created(
+        client.post(
+            "/api/pacientes",
+            headers=auth_headers,
+            json={"nombre": "Paciente", "apellido_paterno": f"B {suffix}", "celular": f"556{suffix[:7]}"},
+        )
+    )
+    paciente_a = assert_created(
+        client.post(
+            "/api/pacientes",
+            headers=auth_headers,
+            json={"nombre": "Paciente", "apellido_paterno": f"A {suffix}", "celular": f"557{suffix[:7]}"},
+        )
+    )
+    appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=45)
+    cita_b = assert_created(
+        client.post(
+            "/api/citas",
+            headers=auth_headers,
+            json={
+                "tipo": "PROGRAMADA",
+                "paciente_id": paciente_b["id"],
+                "medico_id": medico_b["id"],
+                "consultorio_id": consultorio_b["id"],
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "fecha_cita": appointment_at.date().isoformat(),
+                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
+                "origen": "TEST_PROXIMAS",
+            },
+        )
+    )
+    cita_a = assert_created(
+        client.post(
+            "/api/citas",
+            headers=auth_headers,
+            json={
+                "tipo": "PROGRAMADA",
+                "paciente_id": paciente_a["id"],
+                "medico_id": medico_a["id"],
+                "consultorio_id": consultorio_a["id"],
+                "complejo_id": complejo["id"],
+                "piso_id": piso["id"],
+                "fecha_cita": appointment_at.date().isoformat(),
+                "hora_cita": appointment_at.time().replace(second=0, microsecond=0).isoformat(timespec="minutes"),
+                "origen": "TEST_PROXIMAS",
+            },
+        )
+    )
+
+    public_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
+    assert public_response.status_code == 200, public_response.text
+    payload = public_response.json()
+    assert payload["config"]["mostrar_proxima_cita"] is True
+    proximas = payload["proximas_citas"]
+    assert [item["consultorio"] for item in proximas[:2]] == [consultorio_a["nombre_visible"], consultorio_b["nombre_visible"]]
+    assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
+    assert proximas[0]["medico"] == medico_a["nombre_visible"]
+    assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
 
 
 def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:

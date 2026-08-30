@@ -179,6 +179,7 @@ const doctorStatusOptions = [
   { value: 'NO_DISPONIBLE', label: 'No disponible', tone: 'orange', icon: '!' },
   { value: 'EN_CONSULTA', label: 'En consulta', tone: 'yellow', icon: '' },
   { value: 'DISPONIBLE', label: 'Disponible', tone: 'green', icon: '✓' },
+  { value: 'NO_MOSTRAR', label: 'No mostrar', tone: 'muted', icon: '' },
 ];
 
 async function load() {
