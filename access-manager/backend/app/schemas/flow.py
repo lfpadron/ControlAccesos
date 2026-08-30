@@ -19,6 +19,8 @@ ESTADOS_CITA = {
     "EXPIRADA",
 }
 CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM", "API_EXTERNA"}
+TIPOS_CHECKIN = {"LECTOR_QR_APP", "KIOSKO", "RECEPCION_MANUAL", "RECEPCION_QR"}
+TIPOS_CANCELACION = {"MANUAL", "SISTEMA"}
 ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
 
 
@@ -148,6 +150,14 @@ class CitaRead(BaseModel):
     hora_cita: time
     duracion_estimada: int | None
     folio_turno: str
+    fecha_hora_checkin: datetime | None = None
+    fecha_hora_autorizar: datetime | None = None
+    fecha_hora_llamar: datetime | None = None
+    fecha_hora_cancelar: datetime | None = None
+    tipo_checkin: str | None = None
+    usuario_checkin_id: UUID | None = None
+    tipo_cancelacion: str | None = None
+    usuario_cancelacion_id: UUID | None = None
     origen: str | None
     notas_operativas: str | None
     creada_por: UUID | None
@@ -309,6 +319,13 @@ class ReceptionCitaItem(BaseModel):
     medico_id: UUID
     medico: str
     checkin_at: datetime | None = None
+    tipo_checkin: str | None = None
+    usuario_checkin_id: UUID | None = None
+    fecha_hora_autorizar: datetime | None = None
+    fecha_hora_llamar: datetime | None = None
+    fecha_hora_cancelar: datetime | None = None
+    tipo_cancelacion: str | None = None
+    usuario_cancelacion_id: UUID | None = None
     can_cancel_checkin: bool = False
 
 
@@ -374,6 +391,14 @@ class ReporteCitaItem(BaseModel):
     consultorio: str
     estado: str
     se_presento: bool
+    fecha_hora_checkin: datetime | None = None
+    fecha_hora_autorizar: datetime | None = None
+    fecha_hora_llamar: datetime | None = None
+    fecha_hora_cancelar: datetime | None = None
+    tipo_checkin: str | None = None
+    usuario_checkin_id: UUID | None = None
+    tipo_cancelacion: str | None = None
+    usuario_cancelacion_id: UUID | None = None
 
 
 class ReporteAgrupadoItem(BaseModel):

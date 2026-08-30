@@ -945,6 +945,7 @@ def llamar_cita(
     if medico is not None:
         medico.proxima_cita_estimada_at = proxima_cita_estimada_at
     llamado_numero = call_count + 1
+    cita.fecha_hora_llamar = timestamp
     first_item: TurnoDisplay | None = None
     for cluster_id, pantalla_id in screen_by_cluster.items():
         item = TurnoDisplay(

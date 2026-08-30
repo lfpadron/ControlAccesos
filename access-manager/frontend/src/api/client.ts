@@ -431,6 +431,14 @@ export type Cita = {
   hora_cita: string;
   duracion_estimada?: number | null;
   folio_turno: string;
+  fecha_hora_checkin?: string | null;
+  fecha_hora_autorizar?: string | null;
+  fecha_hora_llamar?: string | null;
+  fecha_hora_cancelar?: string | null;
+  tipo_checkin?: string | null;
+  usuario_checkin_id?: string | null;
+  tipo_cancelacion?: string | null;
+  usuario_cancelacion_id?: string | null;
   origen?: string | null;
   notas_operativas?: string | null;
   creada_por?: string | null;
@@ -559,6 +567,14 @@ export type ReporteCitaItem = {
   consultorio: string;
   estado: string;
   se_presento: boolean;
+  fecha_hora_checkin?: string | null;
+  fecha_hora_autorizar?: string | null;
+  fecha_hora_llamar?: string | null;
+  fecha_hora_cancelar?: string | null;
+  tipo_checkin?: string | null;
+  usuario_checkin_id?: string | null;
+  tipo_cancelacion?: string | null;
+  usuario_cancelacion_id?: string | null;
 };
 
 export type ReporteAgrupadoItem = {
@@ -623,6 +639,13 @@ export type ReceptionCita = {
   medico_id: string;
   medico: string;
   checkin_at?: string | null;
+  tipo_checkin?: string | null;
+  usuario_checkin_id?: string | null;
+  fecha_hora_autorizar?: string | null;
+  fecha_hora_llamar?: string | null;
+  fecha_hora_cancelar?: string | null;
+  tipo_cancelacion?: string | null;
+  usuario_cancelacion_id?: string | null;
   can_cancel_checkin: boolean;
 };
 
@@ -1139,7 +1162,7 @@ export function getTicket(citaId: string) {
 }
 
 export function checkinLobby(citaId: string, canal = 'RECEPCION') {
-  return apiFetchPublic<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
+  return apiFetch<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
     method: 'POST',
     body: JSON.stringify({ canal }),
   });

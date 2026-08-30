@@ -230,6 +230,36 @@ async function run(action: () => Promise<unknown>, success: string) {
   }
 }
 
+function shortDateTime(value?: string | null) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
+  return new Intl.DateTimeFormat('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
+function checkinTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    LECTOR_QR_APP: 'Lector QR app',
+    KIOSKO: 'Kiosko',
+    RECEPCION_MANUAL: 'Recepción manual',
+    RECEPCION_QR: 'Recepción QR',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
+function cancelTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    MANUAL: 'Manual',
+    SISTEMA: 'Sistema',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
 function statusLabel(status: string) {
   if (status === 'NO_LLEGO') return 'No Se Presentó';
   return status;
@@ -346,6 +376,14 @@ const exportColumns = [
   { key: 'piso', label: 'Piso' },
   { key: 'estado', label: 'Estado' },
   { key: 'tipo', label: 'Tipo' },
+  { key: 'fecha_hora_checkin', label: 'Check-in', value: (row: Cita) => shortDateTime(row.fecha_hora_checkin) },
+  { key: 'tipo_checkin', label: 'Tipo check-in', value: (row: Cita) => checkinTypeLabel(row.tipo_checkin) },
+  { key: 'usuario_checkin_id', label: 'Usuario check-in' },
+  { key: 'fecha_hora_autorizar', label: 'Autorización', value: (row: Cita) => shortDateTime(row.fecha_hora_autorizar) },
+  { key: 'fecha_hora_llamar', label: 'Llamado', value: (row: Cita) => shortDateTime(row.fecha_hora_llamar) },
+  { key: 'fecha_hora_cancelar', label: 'Cancelación', value: (row: Cita) => shortDateTime(row.fecha_hora_cancelar) },
+  { key: 'tipo_cancelacion', label: 'Tipo cancelación', value: (row: Cita) => cancelTypeLabel(row.tipo_cancelacion) },
+  { key: 'usuario_cancelacion_id', label: 'Usuario cancelación' },
 ];
 
 async function exportCitas(format: 'excel' | 'csv' | 'json') {
@@ -482,6 +520,10 @@ onMounted(async () => {
               <th>Estado</th>
               <th>Consultorio</th>
               <th>Estado cita</th>
+              <th>Check-in</th>
+              <th>Autorización</th>
+              <th>Llamado</th>
+              <th>Cancelación</th>
               <th>Acciones</th>
             </tr>
           </thead>
@@ -501,6 +543,18 @@ onMounted(async () => {
               </td>
               <td>{{ cita.consultorio || cita.consultorio_id }}</td>
               <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
+              <td>
+                {{ shortDateTime(cita.fecha_hora_checkin) }}
+                <br v-if="cita.tipo_checkin" />
+                <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
+              </td>
+              <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
+              <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
+              <td>
+                {{ shortDateTime(cita.fecha_hora_cancelar) }}
+                <br v-if="cita.tipo_cancelacion" />
+                <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
+              </td>
               <td>
                 <div class="inline-actions">
                   <button class="small" type="button" @click="showQr(cita)">QR</button>

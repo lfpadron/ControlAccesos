@@ -1,0 +1,902 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index f0e8fcd..30b100a 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -945,6 +945,7 @@ def llamar_cita(
+     if medico is not None:
+         medico.proxima_cita_estimada_at = proxima_cita_estimada_at
+     llamado_numero = call_count + 1
++    cita.fecha_hora_llamar = timestamp
+     first_item: TurnoDisplay | None = None
+     for cluster_id, pantalla_id in screen_by_cluster.items():
+         item = TurnoDisplay(
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index ebe3ec3..d629baf 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, aliased
+ 
+ from app.constants import default_permissions_for_role
+ from app.core.database import get_db
+-from app.core.security import require_permission
++from app.core.security import get_optional_current_user, require_permission
+ from app.models.complejo import Complejo
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
+@@ -134,6 +134,18 @@ def client_ip(request: Request) -> str | None:
+     return request.client.host if request.client else None
+ 
+ 
++def checkin_type_for(canal: str, dispositivo_id: str | None = None, *, via_qr: bool = False) -> str | None:
++    channel = canal.upper()
++    device = (dispositivo_id or "").lower()
++    if channel == "RECEPCION":
++        return "RECEPCION_QR" if via_qr or device == "recepcion-qr" else "RECEPCION_MANUAL"
++    if channel == "APP_MOVIL":
++        return "LECTOR_QR_APP"
++    if channel == "KIOSKO":
++        return "KIOSKO"
++    return None
++
++
+ def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object:
+     item = db.get(model, item_id)
+     if item is None:
+@@ -1099,6 +1111,7 @@ def create_arrival_event(
+     sala_id: UUID | None = None,
+     usuario_id: UUID | None = None,
+     dispositivo_id: str | None = None,
++    tipo_checkin: str | None = None,
+ ) -> EventoLlegada:
+     timestamp = now_utc()
+     event = EventoLlegada(
+@@ -1114,6 +1127,9 @@ def create_arrival_event(
+     db.add(event)
+     if tipo == "CHECKIN_LOBBY":
+         cita.estado = "LLEGO_LOBBY"
++        cita.fecha_hora_checkin = timestamp
++        cita.tipo_checkin = tipo_checkin or checkin_type_for(canal, dispositivo_id)
++        cita.usuario_checkin_id = usuario_id
+     db.flush()
+     return event
+ 
+@@ -1130,6 +1146,12 @@ def latest_lobby_checkin(db: Session, cita_id: UUID) -> EventoLlegada | None:
+     ).scalar_one_or_none()
+ 
+ 
++def apply_checkin_metadata_from_event(cita: Cita, event: EventoLlegada | None) -> None:
++    cita.fecha_hora_checkin = event.created_at if event else None
++    cita.tipo_checkin = checkin_type_for(event.canal, event.dispositivo_id) if event else None
++    cita.usuario_checkin_id = event.usuario_id if event else None
++
++
+ def event_created_at_utc(event: EventoLlegada) -> datetime:
+     created_at = event.created_at
+     return created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
+@@ -1175,7 +1197,7 @@ def qr_context_response(
+         fecha_label=cita_fecha_label(cita),
+         torre=torre_label(torre),
+         piso=piso_label(piso),
+-        checkin_at=checkin_event.created_at if checkin_event else None,
++        checkin_at=cita.fecha_hora_checkin or (checkin_event.created_at if checkin_event else None),
+     )
+ 
+ 
+@@ -1286,6 +1308,7 @@ def confirm_qr_checkin(
+         payload.sala_id,
+         current_user.id if current_user else None,
+         payload.dispositivo_id,
++        checkin_type_for(payload.canal, payload.dispositivo_id, via_qr=True),
+     )
+     if result.qr_token is not None:
+         result.qr_token.estado = "USADO"
+@@ -1430,7 +1453,14 @@ def reception_cita_item(db: Session, row: tuple[Cita, Paciente, Medico, Consulto
+         piso=piso_label(piso) or "",
+         medico_id=medico.id,
+         medico=medico_last_first_name(medico),
+-        checkin_at=checkin_event.created_at if checkin_event else None,
++        checkin_at=cita.fecha_hora_checkin or (checkin_event.created_at if checkin_event else None),
++        tipo_checkin=cita.tipo_checkin,
++        usuario_checkin_id=cita.usuario_checkin_id,
++        fecha_hora_autorizar=cita.fecha_hora_autorizar,
++        fecha_hora_llamar=cita.fecha_hora_llamar,
++        fecha_hora_cancelar=cita.fecha_hora_cancelar,
++        tipo_cancelacion=cita.tipo_cancelacion,
++        usuario_cancelacion_id=cita.usuario_cancelacion_id,
+         can_cancel_checkin=can_cancel_lobby_checkin(checkin_event) and cita.estado == "LLEGO_LOBBY",
+     )
+ 
+@@ -1534,7 +1564,14 @@ def reception_checkin_cita(
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
+     ensure_cita_access(db, current_user, cita.id, business_today())
+     if cita.estado == "LLEGO_LOBBY":
+-        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++        return CheckinResponse(
++            resultado="VERDE",
++            mensaje="Check-in registrado.",
++            cita_id=cita.id,
++            folio_turno=cita.folio_turno,
++            estado_cita=cita.estado,
++            checkin_at=cita.fecha_hora_checkin,
++        )
+     return authenticated_lobby_checkin(cita, payload, request, db, current_user)
+ 
+ 
+@@ -1562,6 +1599,7 @@ def reception_cancel_checkin(
+     before = audit_safe_dict(cita)
+     db.delete(event)
+     db.flush()
++    apply_checkin_metadata_from_event(cita, latest_lobby_checkin(db, cita.id))
+     cita.estado = state_after_checkin_cancel(db, cita.id, timestamp)
+     db.flush()
+     record_audit_event(
+@@ -2086,11 +2124,27 @@ def update_cita(
+     return item
+ 
+ 
+-def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request, db: Session, current_user: Usuario) -> CitaActionResponse:
++def set_cita_state(
++    cita_id: UUID,
++    state: str,
++    event_name: str,
++    request: Request,
++    db: Session,
++    current_user: Usuario,
++    *,
++    tipo_cancelacion: str | None = None,
++) -> CitaActionResponse:
+     item = exists_or_404(db, Cita, cita_id, "Cita")
+     ensure_cita_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
++    timestamp = now_utc()
+     item.estado = state
++    if state == "AUTORIZADO_PASAR":
++        item.fecha_hora_autorizar = timestamp
++    elif state == "CANCELADA":
++        item.fecha_hora_cancelar = timestamp
++        item.tipo_cancelacion = tipo_cancelacion or "MANUAL"
++        item.usuario_cancelacion_id = current_user.id
+     db.flush()
+     record_audit_event(
+         db,
+@@ -2112,7 +2166,7 @@ def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request,
+ def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     ensure_cita_access(db, current_user, cita_id, business_today())
+     cancel_qr(db, cita_id)
+-    return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user)
++    return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user, tipo_cancelacion="MANUAL")
+ 
+ 
+ @citas_router.patch("/{cita_id}/autorizar-pasar", response_model=CitaActionResponse)
+@@ -2237,6 +2291,7 @@ def authenticated_lobby_checkin(
+             payload.sala_id,
+             current_user.id,
+             payload.dispositivo_id,
++            checkin_type_for(payload.canal, payload.dispositivo_id),
+         )
+         record_audit_event(
+             db,
+@@ -2250,7 +2305,14 @@ def authenticated_lobby_checkin(
+         )
+         db.commit()
+         db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++    return CheckinResponse(
++        resultado=resultado,
++        mensaje=mensaje,
++        cita_id=cita.id,
++        folio_turno=cita.folio_turno,
++        estado_cita=cita.estado,
++        checkin_at=cita.fecha_hora_checkin,
++    )
+ 
+ 
+ def parse_month(value: str | None, fallback: date) -> date:
+@@ -2387,7 +2449,15 @@ def report_cita_item(db: Session, row) -> ReporteCitaItem:
+         piso=piso_label(piso) or "",
+         consultorio=consultorio_label(consultorio) or consultorio.codigo,
+         estado=cita.estado,
+-        se_presento=latest_lobby_checkin(db, cita.id) is not None,
++        se_presento=cita.fecha_hora_checkin is not None or latest_lobby_checkin(db, cita.id) is not None,
++        fecha_hora_checkin=cita.fecha_hora_checkin,
++        fecha_hora_autorizar=cita.fecha_hora_autorizar,
++        fecha_hora_llamar=cita.fecha_hora_llamar,
++        fecha_hora_cancelar=cita.fecha_hora_cancelar,
++        tipo_checkin=cita.tipo_checkin,
++        usuario_checkin_id=cita.usuario_checkin_id,
++        tipo_cancelacion=cita.tipo_cancelacion,
++        usuario_cancelacion_id=cita.usuario_cancelacion_id,
+     )
+ 
+ 
+@@ -2457,7 +2527,11 @@ def reporte_medicos_pacientes(
+                 medico=medico_last_first_name(last_medico) if last_medico else None,
+                 fecha_ultima_cita=last_cita.fecha_cita if last_cita else None,
+                 hora_ultima_cita=last_cita.hora_cita if last_cita else None,
+-                se_presento=latest_lobby_checkin(db, last_cita.id) is not None if last_cita else None,
++                se_presento=(
++                    last_cita.fecha_hora_checkin is not None or latest_lobby_checkin(db, last_cita.id) is not None
++                    if last_cita
++                    else None
++                ),
+             )
+         )
+     return result
+@@ -2687,25 +2761,49 @@ def mobile_validar_qr(
+ 
+ 
+ @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)
+-def checkin_lobby_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db)):
++def checkin_lobby_cita(
++    cita_id: UUID,
++    payload: CheckinRequest,
++    request: Request,
++    db: Session = Depends(get_db),
++    current_user: Usuario | None = Depends(get_optional_current_user),
++):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
+     if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
+         return CheckinResponse(resultado="ROJO", mensaje=f"La cita está en estado {cita.estado}.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+     resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
+     if resultado != "ROJO":
+-        event = create_arrival_event(db, cita, "CHECKIN_LOBBY", payload.canal, request, payload.sala_id, dispositivo_id=payload.dispositivo_id)
++        event = create_arrival_event(
++            db,
++            cita,
++            "CHECKIN_LOBBY",
++            payload.canal,
++            request,
++            payload.sala_id,
++            current_user.id if current_user else None,
++            payload.dispositivo_id,
++            checkin_type_for(payload.canal, payload.dispositivo_id),
++        )
+         record_audit_event(
+             db,
+             evento="CHECKIN_LOBBY",
+             entidad="eventos_llegada",
+             entidad_id=event.id,
++            usuario_id=current_user.id if current_user else None,
+             canal=payload.canal,
+             ip_origen=client_ip(request),
+             valor_despues={"cita_id": str(cita.id), "resultado": resultado},
+         )
+         db.commit()
+         db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++    return CheckinResponse(
++        resultado=resultado,
++        mensaje=mensaje,
++        cita_id=cita.id,
++        folio_turno=cita.folio_turno,
++        estado_cita=cita.estado,
++        checkin_at=cita.fecha_hora_checkin,
++    )
+ 
+ 
+ @citas_router.post("/{cita_id}/checkin-sala", response_model=CheckinResponse)
+diff --git a/access-manager/backend/app/api/kiosks.py b/access-manager/backend/app/api/kiosks.py
+index f4e44a8..bd6538e 100644
+--- a/access-manager/backend/app/api/kiosks.py
++++ b/access-manager/backend/app/api/kiosks.py
+@@ -314,6 +314,7 @@ def kiosko_checkin_lobby(
+             request,
+             payload.sala_id,
+             dispositivo_id=payload.dispositivo_id or kiosko.codigo_dispositivo,
++            tipo_checkin="KIOSKO",
+         )
+         if mark_qr_used is not None:
+             mark_qr_used.estado = "USADO"
+@@ -329,7 +330,14 @@ def kiosko_checkin_lobby(
+     kiosko.ultima_conexion = datetime.now(UTC)
+     db.commit()
+     db.refresh(cita)
+-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
++    return CheckinResponse(
++        resultado=resultado,
++        mensaje=mensaje,
++        cita_id=cita.id,
++        folio_turno=cita.folio_turno,
++        estado_cita=cita.estado,
++        checkin_at=cita.fecha_hora_checkin,
++    )
+ 
+ 
+ @router.get("/kioskos/public/{codigo_dispositivo}/config", response_model=KioskoPublicConfig)
+diff --git a/access-manager/backend/app/core/security.py b/access-manager/backend/app/core/security.py
+index b1e15ac..9450a73 100644
+--- a/access-manager/backend/app/core/security.py
++++ b/access-manager/backend/app/core/security.py
+@@ -18,6 +18,7 @@ from app.models.usuario import Usuario
+ 
+ password_hasher = PasswordHasher()
+ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
++optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+ ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
+ 
+ 
+@@ -41,11 +42,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
+     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+ 
+ 
+-def get_current_user(
+-    request: Request,
+-    token: str = Depends(oauth2_scheme),
+-    db: Session = Depends(get_db),
+-) -> Usuario:
++def resolve_current_user_from_token(token: str, db: Session) -> Usuario:
+     settings = get_settings()
+     credentials_error = HTTPException(
+         status_code=status.HTTP_401_UNAUTHORIZED,
+@@ -64,11 +61,36 @@ def get_current_user(
+     user = db.execute(select(Usuario).where(Usuario.id == user_id)).scalar_one_or_none()
+     if user is None or user.estado != "ACTIVO":
+         raise credentials_error
++    return user
++
++
++def ensure_password_is_current(request: Request, user: Usuario) -> None:
+     if user.force_password_change and request.url.path not in {"/api/auth/me", "/api/auth/password"}:
+         raise HTTPException(
+             status_code=status.HTTP_403_FORBIDDEN,
+             detail="Debe cambiar su contraseña antes de continuar.",
+         )
++
++
++def get_current_user(
++    request: Request,
++    token: str = Depends(oauth2_scheme),
++    db: Session = Depends(get_db),
++) -> Usuario:
++    user = resolve_current_user_from_token(token, db)
++    ensure_password_is_current(request, user)
++    return user
++
++
++def get_optional_current_user(
++    request: Request,
++    token: str | None = Depends(optional_oauth2_scheme),
++    db: Session = Depends(get_db),
++) -> Usuario | None:
++    if token is None:
++        return None
++    user = resolve_current_user_from_token(token, db)
++    ensure_password_is_current(request, user)
+     return user
+ 
+ 
+diff --git a/access-manager/backend/app/models/flow.py b/access-manager/backend/app/models/flow.py
+index 9311606..1300f3f 100644
+--- a/access-manager/backend/app/models/flow.py
++++ b/access-manager/backend/app/models/flow.py
+@@ -60,6 +60,12 @@ class Cita(TimestampMixin, Base):
+             "'EN_CONSULTA', 'FINALIZADA', 'NO_LLEGO', 'CANCELADA', 'EXPIRADA')",
+             name="estado_valido",
+         ),
++        CheckConstraint(
++            "tipo_checkin IS NULL OR tipo_checkin IN "
++            "('LECTOR_QR_APP', 'KIOSKO', 'RECEPCION_MANUAL', 'RECEPCION_QR')",
++            name="tipo_checkin_valido",
++        ),
++        CheckConstraint("tipo_cancelacion IS NULL OR tipo_cancelacion IN ('MANUAL', 'SISTEMA')", name="tipo_cancelacion_valido"),
+     )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+@@ -76,6 +82,14 @@ class Cita(TimestampMixin, Base):
+     hora_cita: Mapped[time] = mapped_column(Time, nullable=False)
+     duracion_estimada: Mapped[int | None] = mapped_column(Integer)
+     folio_turno: Mapped[str] = mapped_column(String(4), nullable=False)
++    fecha_hora_checkin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
++    fecha_hora_autorizar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
++    fecha_hora_llamar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
++    fecha_hora_cancelar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
++    tipo_checkin: Mapped[str | None] = mapped_column(String(32))
++    usuario_checkin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
++    tipo_cancelacion: Mapped[str | None] = mapped_column(String(24))
++    usuario_cancelacion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
+     origen: Mapped[str | None] = mapped_column(String(80))
+     notas_operativas: Mapped[str | None] = mapped_column(Text)
+     creada_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 296b6a7..84931bb 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -19,6 +19,8 @@ ESTADOS_CITA = {
+     "EXPIRADA",
+ }
+ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM", "API_EXTERNA"}
++TIPOS_CHECKIN = {"LECTOR_QR_APP", "KIOSKO", "RECEPCION_MANUAL", "RECEPCION_QR"}
++TIPOS_CANCELACION = {"MANUAL", "SISTEMA"}
+ ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
+ 
+ 
+@@ -148,6 +150,14 @@ class CitaRead(BaseModel):
+     hora_cita: time
+     duracion_estimada: int | None
+     folio_turno: str
++    fecha_hora_checkin: datetime | None = None
++    fecha_hora_autorizar: datetime | None = None
++    fecha_hora_llamar: datetime | None = None
++    fecha_hora_cancelar: datetime | None = None
++    tipo_checkin: str | None = None
++    usuario_checkin_id: UUID | None = None
++    tipo_cancelacion: str | None = None
++    usuario_cancelacion_id: UUID | None = None
+     origen: str | None
+     notas_operativas: str | None
+     creada_por: UUID | None
+@@ -309,6 +319,13 @@ class ReceptionCitaItem(BaseModel):
+     medico_id: UUID
+     medico: str
+     checkin_at: datetime | None = None
++    tipo_checkin: str | None = None
++    usuario_checkin_id: UUID | None = None
++    fecha_hora_autorizar: datetime | None = None
++    fecha_hora_llamar: datetime | None = None
++    fecha_hora_cancelar: datetime | None = None
++    tipo_cancelacion: str | None = None
++    usuario_cancelacion_id: UUID | None = None
+     can_cancel_checkin: bool = False
+ 
+ 
+@@ -374,6 +391,14 @@ class ReporteCitaItem(BaseModel):
+     consultorio: str
+     estado: str
+     se_presento: bool
++    fecha_hora_checkin: datetime | None = None
++    fecha_hora_autorizar: datetime | None = None
++    fecha_hora_llamar: datetime | None = None
++    fecha_hora_cancelar: datetime | None = None
++    tipo_checkin: str | None = None
++    usuario_checkin_id: UUID | None = None
++    tipo_cancelacion: str | None = None
++    usuario_cancelacion_id: UUID | None = None
+ 
+ 
+ class ReporteAgrupadoItem(BaseModel):
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index fa807e1..d18e3d5 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -1740,6 +1740,51 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     assert checkin_response.status_code == 200, checkin_response.text
+     assert checkin_response.json()["resultado"] == "VERDE"
+     assert checkin_response.json()["estado_cita"] == "LLEGO_LOBBY"
++    assert checkin_response.json()["checkin_at"] is not None
++
++    cita_checkin_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
++    assert cita_checkin_response.status_code == 200, cita_checkin_response.text
++    cita_checkin = cita_checkin_response.json()
++    assert cita_checkin["fecha_hora_checkin"] is not None
++    assert cita_checkin["tipo_checkin"] == "LECTOR_QR_APP"
++    assert cita_checkin["usuario_checkin_id"] == recepcionista_user["id"]
++
++    authorize_response = client.patch(f"/api/citas/{cita['id']}/autorizar-pasar", headers=auth_headers)
++    assert authorize_response.status_code == 200, authorize_response.text
++    assert authorize_response.json()["estado"] == "AUTORIZADO_PASAR"
++
++    call_response = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
++    assert call_response["turno"] == cita["folio_turno"]
++
++    admin_me_response = client.get("/api/auth/me", headers=auth_headers)
++    assert admin_me_response.status_code == 200, admin_me_response.text
++    admin_user = admin_me_response.json()
++    cancel_response = client.patch(f"/api/citas/{cita['id']}/cancelar", headers=auth_headers)
++    assert cancel_response.status_code == 200, cancel_response.text
++    assert cancel_response.json()["estado"] == "CANCELADA"
++
++    cita_operativa_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
++    assert cita_operativa_response.status_code == 200, cita_operativa_response.text
++    cita_operativa = cita_operativa_response.json()
++    assert cita_operativa["fecha_hora_autorizar"] is not None
++    assert cita_operativa["fecha_hora_llamar"] is not None
++    assert cita_operativa["fecha_hora_cancelar"] is not None
++    assert cita_operativa["tipo_cancelacion"] == "MANUAL"
++    assert cita_operativa["usuario_cancelacion_id"] == admin_user["id"]
++
++    report_response = client.get(
++        "/api/reportes/medicos/citas",
++        headers=auth_headers,
++        params={"fecha_desde": appointment_at.date().isoformat(), "fecha_hasta": appointment_at.date().isoformat()},
++    )
++    assert report_response.status_code == 200, report_response.text
++    report_cita = next(item for item in report_response.json() if item["cita_id"] == cita["id"])
++    assert report_cita["fecha_hora_checkin"] == cita_operativa["fecha_hora_checkin"]
++    assert report_cita["tipo_checkin"] == "LECTOR_QR_APP"
++    assert report_cita["fecha_hora_autorizar"] == cita_operativa["fecha_hora_autorizar"]
++    assert report_cita["fecha_hora_llamar"] == cita_operativa["fecha_hora_llamar"]
++    assert report_cita["fecha_hora_cancelar"] == cita_operativa["fecha_hora_cancelar"]
++    assert report_cita["tipo_cancelacion"] == "MANUAL"
+ 
+     audit_response = client.get("/api/auditoria", headers=auth_headers)
+     audit_items = audit_response.json()
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 68ac43b..ee4d280 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -431,6 +431,14 @@ export type Cita = {
+   hora_cita: string;
+   duracion_estimada?: number | null;
+   folio_turno: string;
++  fecha_hora_checkin?: string | null;
++  fecha_hora_autorizar?: string | null;
++  fecha_hora_llamar?: string | null;
++  fecha_hora_cancelar?: string | null;
++  tipo_checkin?: string | null;
++  usuario_checkin_id?: string | null;
++  tipo_cancelacion?: string | null;
++  usuario_cancelacion_id?: string | null;
+   origen?: string | null;
+   notas_operativas?: string | null;
+   creada_por?: string | null;
+@@ -559,6 +567,14 @@ export type ReporteCitaItem = {
+   consultorio: string;
+   estado: string;
+   se_presento: boolean;
++  fecha_hora_checkin?: string | null;
++  fecha_hora_autorizar?: string | null;
++  fecha_hora_llamar?: string | null;
++  fecha_hora_cancelar?: string | null;
++  tipo_checkin?: string | null;
++  usuario_checkin_id?: string | null;
++  tipo_cancelacion?: string | null;
++  usuario_cancelacion_id?: string | null;
+ };
+ 
+ export type ReporteAgrupadoItem = {
+@@ -623,6 +639,13 @@ export type ReceptionCita = {
+   medico_id: string;
+   medico: string;
+   checkin_at?: string | null;
++  tipo_checkin?: string | null;
++  usuario_checkin_id?: string | null;
++  fecha_hora_autorizar?: string | null;
++  fecha_hora_llamar?: string | null;
++  fecha_hora_cancelar?: string | null;
++  tipo_cancelacion?: string | null;
++  usuario_cancelacion_id?: string | null;
+   can_cancel_checkin: boolean;
+ };
+ 
+@@ -1139,7 +1162,7 @@ export function getTicket(citaId: string) {
+ }
+ 
+ export function checkinLobby(citaId: string, canal = 'RECEPCION') {
+-  return apiFetchPublic<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
++  return apiFetch<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
+     method: 'POST',
+     body: JSON.stringify({ canal }),
+   });
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index 69021f7..acb818c 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -230,6 +230,36 @@ async function run(action: () => Promise<unknown>, success: string) {
+   }
+ }
+ 
++function shortDateTime(value?: string | null) {
++  if (!value) return '-';
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
++  return new Intl.DateTimeFormat('es-MX', {
++    day: '2-digit',
++    month: '2-digit',
++    hour: '2-digit',
++    minute: '2-digit',
++  }).format(parsed);
++}
++
++function checkinTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    LECTOR_QR_APP: 'Lector QR app',
++    KIOSKO: 'Kiosko',
++    RECEPCION_MANUAL: 'Recepción manual',
++    RECEPCION_QR: 'Recepción QR',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
++function cancelTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    MANUAL: 'Manual',
++    SISTEMA: 'Sistema',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
+ function statusLabel(status: string) {
+   if (status === 'NO_LLEGO') return 'No Se Presentó';
+   return status;
+@@ -346,6 +376,14 @@ const exportColumns = [
+   { key: 'piso', label: 'Piso' },
+   { key: 'estado', label: 'Estado' },
+   { key: 'tipo', label: 'Tipo' },
++  { key: 'fecha_hora_checkin', label: 'Check-in', value: (row: Cita) => shortDateTime(row.fecha_hora_checkin) },
++  { key: 'tipo_checkin', label: 'Tipo check-in', value: (row: Cita) => checkinTypeLabel(row.tipo_checkin) },
++  { key: 'usuario_checkin_id', label: 'Usuario check-in' },
++  { key: 'fecha_hora_autorizar', label: 'Autorización', value: (row: Cita) => shortDateTime(row.fecha_hora_autorizar) },
++  { key: 'fecha_hora_llamar', label: 'Llamado', value: (row: Cita) => shortDateTime(row.fecha_hora_llamar) },
++  { key: 'fecha_hora_cancelar', label: 'Cancelación', value: (row: Cita) => shortDateTime(row.fecha_hora_cancelar) },
++  { key: 'tipo_cancelacion', label: 'Tipo cancelación', value: (row: Cita) => cancelTypeLabel(row.tipo_cancelacion) },
++  { key: 'usuario_cancelacion_id', label: 'Usuario cancelación' },
+ ];
+ 
+ async function exportCitas(format: 'excel' | 'csv' | 'json') {
+@@ -482,6 +520,10 @@ onMounted(async () => {
+               <th>Estado</th>
+               <th>Consultorio</th>
+               <th>Estado cita</th>
++              <th>Check-in</th>
++              <th>Autorización</th>
++              <th>Llamado</th>
++              <th>Cancelación</th>
+               <th>Acciones</th>
+             </tr>
+           </thead>
+@@ -501,6 +543,18 @@ onMounted(async () => {
+               </td>
+               <td>{{ cita.consultorio || cita.consultorio_id }}</td>
+               <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
++              <td>
++                {{ shortDateTime(cita.fecha_hora_checkin) }}
++                <br v-if="cita.tipo_checkin" />
++                <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
++              </td>
++              <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
++              <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
++              <td>
++                {{ shortDateTime(cita.fecha_hora_cancelar) }}
++                <br v-if="cita.tipo_cancelacion" />
++                <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
++              </td>
+               <td>
+                 <div class="inline-actions">
+                   <button class="small" type="button" @click="showQr(cita)">QR</button>
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index 805419e..d1dac75 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -236,6 +236,36 @@ function statusLabel(status: string) {
+   return status;
+ }
+ 
++function shortDateTime(value?: string | null) {
++  if (!value) return '-';
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
++  return new Intl.DateTimeFormat('es-MX', {
++    day: '2-digit',
++    month: '2-digit',
++    hour: '2-digit',
++    minute: '2-digit',
++  }).format(parsed);
++}
++
++function checkinTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    LECTOR_QR_APP: 'Lector QR app',
++    KIOSKO: 'Kiosko',
++    RECEPCION_MANUAL: 'Recepción manual',
++    RECEPCION_QR: 'Recepción QR',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
++function cancelTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    MANUAL: 'Manual',
++    SISTEMA: 'Sistema',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
+ function normalizeAutocompleteText(text: string) {
+   return text
+     .normalize('NFD')
+@@ -1008,6 +1038,10 @@ onMounted(load);
+                 <th>Paciente</th>
+                 <th>Consultorio</th>
+                 <th>Estado</th>
++                <th>Check-in</th>
++                <th>Autorización</th>
++                <th>Llamado</th>
++                <th>Cancelación</th>
+               </tr>
+             </thead>
+             <tbody>
+@@ -1018,6 +1052,18 @@ onMounted(load);
+                 <td>{{ cita.paciente || cita.paciente_id }}</td>
+                 <td>{{ cita.consultorio || cita.consultorio_id }}</td>
+                 <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
++                <td>
++                  {{ shortDateTime(cita.fecha_hora_checkin) }}
++                  <br v-if="cita.tipo_checkin" />
++                  <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
++                </td>
++                <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
++                <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
++                <td>
++                  {{ shortDateTime(cita.fecha_hora_cancelar) }}
++                  <br v-if="cita.tipo_cancelacion" />
++                  <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
++                </td>
+               </tr>
+             </tbody>
+           </table>
+diff --git a/access-manager/frontend/src/views/RecepcionView.vue b/access-manager/frontend/src/views/RecepcionView.vue
+index 700822a..61dfa99 100644
+--- a/access-manager/frontend/src/views/RecepcionView.vue
++++ b/access-manager/frontend/src/views/RecepcionView.vue
+@@ -374,6 +374,36 @@ function formatDateTime(cita: ReceptionCita) {
+   return `${cita.fecha_cita} ${cita.hora_cita.slice(0, 5)}`;
+ }
+ 
++function shortDateTime(value?: string | null) {
++  if (!value) return '-';
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
++  return new Intl.DateTimeFormat('es-MX', {
++    day: '2-digit',
++    month: '2-digit',
++    hour: '2-digit',
++    minute: '2-digit',
++  }).format(parsed);
++}
++
++function checkinTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    LECTOR_QR_APP: 'Lector QR app',
++    KIOSKO: 'Kiosko',
++    RECEPCION_MANUAL: 'Recepción manual',
++    RECEPCION_QR: 'Recepción QR',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
++function cancelTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    MANUAL: 'Manual',
++    SISTEMA: 'Sistema',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
+ function checkinLabel(cita: ReceptionCita) {
+   return cita.estado === 'LLEGO_LOBBY' ? 'Registrado' : 'Checkin';
+ }
+@@ -491,12 +521,16 @@ onMounted(async () => {
+           <thead>
+             <tr>
+               <th>Checkin</th>
++              <th>Registro</th>
+               <th><button class="table-sort-button" type="button" @click="setSort('paciente')">Paciente{{ sortIndicator('paciente') }}</button></th>
+               <th><button class="table-sort-button" type="button" @click="setSort('fecha_hora')">Fecha y hora{{ sortIndicator('fecha_hora') }}</button></th>
+               <th>Consultorio</th>
+               <th>Torre</th>
+               <th>Piso</th>
+               <th><button class="table-sort-button" type="button" @click="setSort('medico')">Médico{{ sortIndicator('medico') }}</button></th>
++              <th>Autorización</th>
++              <th>Llamado</th>
++              <th>Cancelación</th>
+             </tr>
+           </thead>
+           <tbody>
+@@ -511,12 +545,24 @@ onMounted(async () => {
+                   </button>
+                 </div>
+               </td>
++              <td>
++                {{ shortDateTime(cita.checkin_at) }}
++                <br v-if="cita.tipo_checkin" />
++                <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
++              </td>
+               <td>{{ cita.paciente }}</td>
+               <td>{{ formatDateTime(cita) }}</td>
+               <td>{{ cita.consultorio }}</td>
+               <td>{{ cita.torre }}</td>
+               <td>{{ cita.piso }}</td>
+               <td>{{ cita.medico }}</td>
++              <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
++              <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
++              <td>
++                {{ shortDateTime(cita.fecha_hora_cancelar) }}
++                <br v-if="cita.tipo_cancelacion" />
++                <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
++              </td>
+             </tr>
+           </tbody>
+         </table>
+diff --git a/access-manager/frontend/src/views/ReportesMedicosView.vue b/access-manager/frontend/src/views/ReportesMedicosView.vue
+index 858dee1..8e1b176 100644
+--- a/access-manager/frontend/src/views/ReportesMedicosView.vue
++++ b/access-manager/frontend/src/views/ReportesMedicosView.vue
+@@ -73,6 +73,37 @@ function shortTime(value: string | null | undefined) {
+   return value ? value.slice(0, 5) : '-';
+ }
+ 
++function shortDateTime(value?: string | null) {
++  if (!value) return '-';
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
++  return new Intl.DateTimeFormat('es-MX', {
++    year: 'numeric',
++    month: '2-digit',
++    day: '2-digit',
++    hour: '2-digit',
++    minute: '2-digit',
++  }).format(parsed);
++}
++
++function checkinTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    LECTOR_QR_APP: 'Lector QR app',
++    KIOSKO: 'Kiosko',
++    RECEPCION_MANUAL: 'Recepción manual',
++    RECEPCION_QR: 'Recepción QR',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
++function cancelTypeLabel(value?: string | null) {
++  const labels: Record<string, string> = {
++    MANUAL: 'Manual',
++    SISTEMA: 'Sistema',
++  };
++  return value ? labels[value] ?? value : '-';
++}
++
+ function groupedRows(): ReportRow[] {
+   if (groupedIsHourly.value) {
+     return (agrupado.value as ReporteHorarioItem[]).map((row) => ({
+@@ -106,7 +137,16 @@ const citaColumns: ExportColumn<ReporteCitaItem>[] = [
+   { key: 'torre', label: 'Torre' },
+   { key: 'piso', label: 'Piso' },
+   { key: 'consultorio', label: 'Consultorio' },
++  { key: 'estado', label: 'Estado' },
+   { key: 'se_presento', label: 'Se presentó', value: (row) => presented(row.se_presento) },
++  { key: 'fecha_hora_checkin', label: 'Check-in', value: (row) => shortDateTime(row.fecha_hora_checkin) },
++  { key: 'tipo_checkin', label: 'Tipo check-in', value: (row) => checkinTypeLabel(row.tipo_checkin) },
++  { key: 'usuario_checkin_id', label: 'Usuario check-in' },
++  { key: 'fecha_hora_autorizar', label: 'Autorización', value: (row) => shortDateTime(row.fecha_hora_autorizar) },
++  { key: 'fecha_hora_llamar', label: 'Llamado', value: (row) => shortDateTime(row.fecha_hora_llamar) },
++  { key: 'fecha_hora_cancelar', label: 'Cancelación', value: (row) => shortDateTime(row.fecha_hora_cancelar) },
++  { key: 'tipo_cancelacion', label: 'Tipo cancelación', value: (row) => cancelTypeLabel(row.tipo_cancelacion) },
++  { key: 'usuario_cancelacion_id', label: 'Usuario cancelación' },
+ ];
+ 
+ const groupedColumns = computed<ExportColumn<ReportRow>[]>(() => {
+@@ -298,7 +338,12 @@ onMounted(async () => {
+               <th>Paciente</th>
+               <th>Médico</th>
+               <th>Consultorio</th>
++              <th>Estado</th>
+               <th>Se presentó</th>
++              <th>Check-in</th>
++              <th>Autorización</th>
++              <th>Llamado</th>
++              <th>Cancelación</th>
+             </tr>
+           </thead>
+           <tbody>
+@@ -308,7 +353,20 @@ onMounted(async () => {
+               <td>{{ row.paciente }}</td>
+               <td>{{ row.medico }}</td>
+               <td>{{ [row.campus, row.torre, row.piso, row.consultorio].filter(Boolean).join(' · ') }}</td>
++              <td>{{ row.estado }}</td>
+               <td>{{ presented(row.se_presento) }}</td>
++              <td>
++                {{ shortDateTime(row.fecha_hora_checkin) }}
++                <br v-if="row.tipo_checkin" />
++                <small v-if="row.tipo_checkin">{{ checkinTypeLabel(row.tipo_checkin) }}</small>
++              </td>
++              <td>{{ shortDateTime(row.fecha_hora_autorizar) }}</td>
++              <td>{{ shortDateTime(row.fecha_hora_llamar) }}</td>
++              <td>
++                {{ shortDateTime(row.fecha_hora_cancelar) }}
++                <br v-if="row.tipo_cancelacion" />
++                <small v-if="row.tipo_cancelacion">{{ cancelTypeLabel(row.tipo_cancelacion) }}</small>
++              </td>
+             </tr>
+           </tbody>
+         </table>

@@ -314,6 +314,7 @@ def kiosko_checkin_lobby(
             request,
             payload.sala_id,
             dispositivo_id=payload.dispositivo_id or kiosko.codigo_dispositivo,
+            tipo_checkin="KIOSKO",
         )
         if mark_qr_used is not None:
             mark_qr_used.estado = "USADO"
@@ -329,7 +330,14 @@ def kiosko_checkin_lobby(
     kiosko.ultima_conexion = datetime.now(UTC)
     db.commit()
     db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+    return CheckinResponse(
+        resultado=resultado,
+        mensaje=mensaje,
+        cita_id=cita.id,
+        folio_turno=cita.folio_turno,
+        estado_cita=cita.estado,
+        checkin_at=cita.fecha_hora_checkin,
+    )
 
 
 @router.get("/kioskos/public/{codigo_dispositivo}/config", response_model=KioskoPublicConfig)

@@ -18,6 +18,7 @@ from app.models.usuario import Usuario
 
 password_hasher = PasswordHasher()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 ACCESS_ORDER = {"sin": 0, "consultar": 1, "editar": 2}
 
 
@@ -41,11 +42,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def get_current_user(
-    request: Request,
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> Usuario:
+def resolve_current_user_from_token(token: str, db: Session) -> Usuario:
     settings = get_settings()
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -64,11 +61,36 @@ def get_current_user(
     user = db.execute(select(Usuario).where(Usuario.id == user_id)).scalar_one_or_none()
     if user is None or user.estado != "ACTIVO":
         raise credentials_error
+    return user
+
+
+def ensure_password_is_current(request: Request, user: Usuario) -> None:
     if user.force_password_change and request.url.path not in {"/api/auth/me", "/api/auth/password"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Debe cambiar su contraseña antes de continuar.",
         )
+
+
+def get_current_user(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> Usuario:
+    user = resolve_current_user_from_token(token, db)
+    ensure_password_is_current(request, user)
+    return user
+
+
+def get_optional_current_user(
+    request: Request,
+    token: str | None = Depends(optional_oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> Usuario | None:
+    if token is None:
+        return None
+    user = resolve_current_user_from_token(token, db)
+    ensure_password_is_current(request, user)
     return user
 
 

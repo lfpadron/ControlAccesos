@@ -236,6 +236,36 @@ function statusLabel(status: string) {
   return status;
 }
 
+function shortDateTime(value?: string | null) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
+  return new Intl.DateTimeFormat('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
+function checkinTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    LECTOR_QR_APP: 'Lector QR app',
+    KIOSKO: 'Kiosko',
+    RECEPCION_MANUAL: 'Recepción manual',
+    RECEPCION_QR: 'Recepción QR',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
+function cancelTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    MANUAL: 'Manual',
+    SISTEMA: 'Sistema',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
 function normalizeAutocompleteText(text: string) {
   return text
     .normalize('NFD')
@@ -1008,6 +1038,10 @@ onMounted(load);
                 <th>Paciente</th>
                 <th>Consultorio</th>
                 <th>Estado</th>
+                <th>Check-in</th>
+                <th>Autorización</th>
+                <th>Llamado</th>
+                <th>Cancelación</th>
               </tr>
             </thead>
             <tbody>
@@ -1018,6 +1052,18 @@ onMounted(load);
                 <td>{{ cita.paciente || cita.paciente_id }}</td>
                 <td>{{ cita.consultorio || cita.consultorio_id }}</td>
                 <td><span class="status muted">{{ statusLabel(cita.estado) }}</span></td>
+                <td>
+                  {{ shortDateTime(cita.fecha_hora_checkin) }}
+                  <br v-if="cita.tipo_checkin" />
+                  <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
+                </td>
+                <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
+                <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
+                <td>
+                  {{ shortDateTime(cita.fecha_hora_cancelar) }}
+                  <br v-if="cita.tipo_cancelacion" />
+                  <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
+                </td>
               </tr>
             </tbody>
           </table>

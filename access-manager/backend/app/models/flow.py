@@ -60,6 +60,12 @@ class Cita(TimestampMixin, Base):
             "'EN_CONSULTA', 'FINALIZADA', 'NO_LLEGO', 'CANCELADA', 'EXPIRADA')",
             name="estado_valido",
         ),
+        CheckConstraint(
+            "tipo_checkin IS NULL OR tipo_checkin IN "
+            "('LECTOR_QR_APP', 'KIOSKO', 'RECEPCION_MANUAL', 'RECEPCION_QR')",
+            name="tipo_checkin_valido",
+        ),
+        CheckConstraint("tipo_cancelacion IS NULL OR tipo_cancelacion IN ('MANUAL', 'SISTEMA')", name="tipo_cancelacion_valido"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -76,6 +82,14 @@ class Cita(TimestampMixin, Base):
     hora_cita: Mapped[time] = mapped_column(Time, nullable=False)
     duracion_estimada: Mapped[int | None] = mapped_column(Integer)
     folio_turno: Mapped[str] = mapped_column(String(4), nullable=False)
+    fecha_hora_checkin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fecha_hora_autorizar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fecha_hora_llamar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fecha_hora_cancelar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tipo_checkin: Mapped[str | None] = mapped_column(String(32))
+    usuario_checkin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
+    tipo_cancelacion: Mapped[str | None] = mapped_column(String(24))
+    usuario_cancelacion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)
     origen: Mapped[str | None] = mapped_column(String(80))
     notas_operativas: Mapped[str | None] = mapped_column(Text)
     creada_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("usuarios.id"), index=True)

@@ -73,6 +73,37 @@ function shortTime(value: string | null | undefined) {
   return value ? value.slice(0, 5) : '-';
 }
 
+function shortDateTime(value?: string | null) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
+  return new Intl.DateTimeFormat('es-MX', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
+function checkinTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    LECTOR_QR_APP: 'Lector QR app',
+    KIOSKO: 'Kiosko',
+    RECEPCION_MANUAL: 'Recepción manual',
+    RECEPCION_QR: 'Recepción QR',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
+function cancelTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    MANUAL: 'Manual',
+    SISTEMA: 'Sistema',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
 function groupedRows(): ReportRow[] {
   if (groupedIsHourly.value) {
     return (agrupado.value as ReporteHorarioItem[]).map((row) => ({
@@ -106,7 +137,16 @@ const citaColumns: ExportColumn<ReporteCitaItem>[] = [
   { key: 'torre', label: 'Torre' },
   { key: 'piso', label: 'Piso' },
   { key: 'consultorio', label: 'Consultorio' },
+  { key: 'estado', label: 'Estado' },
   { key: 'se_presento', label: 'Se presentó', value: (row) => presented(row.se_presento) },
+  { key: 'fecha_hora_checkin', label: 'Check-in', value: (row) => shortDateTime(row.fecha_hora_checkin) },
+  { key: 'tipo_checkin', label: 'Tipo check-in', value: (row) => checkinTypeLabel(row.tipo_checkin) },
+  { key: 'usuario_checkin_id', label: 'Usuario check-in' },
+  { key: 'fecha_hora_autorizar', label: 'Autorización', value: (row) => shortDateTime(row.fecha_hora_autorizar) },
+  { key: 'fecha_hora_llamar', label: 'Llamado', value: (row) => shortDateTime(row.fecha_hora_llamar) },
+  { key: 'fecha_hora_cancelar', label: 'Cancelación', value: (row) => shortDateTime(row.fecha_hora_cancelar) },
+  { key: 'tipo_cancelacion', label: 'Tipo cancelación', value: (row) => cancelTypeLabel(row.tipo_cancelacion) },
+  { key: 'usuario_cancelacion_id', label: 'Usuario cancelación' },
 ];
 
 const groupedColumns = computed<ExportColumn<ReportRow>[]>(() => {
@@ -298,7 +338,12 @@ onMounted(async () => {
               <th>Paciente</th>
               <th>Médico</th>
               <th>Consultorio</th>
+              <th>Estado</th>
               <th>Se presentó</th>
+              <th>Check-in</th>
+              <th>Autorización</th>
+              <th>Llamado</th>
+              <th>Cancelación</th>
             </tr>
           </thead>
           <tbody>
@@ -308,7 +353,20 @@ onMounted(async () => {
               <td>{{ row.paciente }}</td>
               <td>{{ row.medico }}</td>
               <td>{{ [row.campus, row.torre, row.piso, row.consultorio].filter(Boolean).join(' · ') }}</td>
+              <td>{{ row.estado }}</td>
               <td>{{ presented(row.se_presento) }}</td>
+              <td>
+                {{ shortDateTime(row.fecha_hora_checkin) }}
+                <br v-if="row.tipo_checkin" />
+                <small v-if="row.tipo_checkin">{{ checkinTypeLabel(row.tipo_checkin) }}</small>
+              </td>
+              <td>{{ shortDateTime(row.fecha_hora_autorizar) }}</td>
+              <td>{{ shortDateTime(row.fecha_hora_llamar) }}</td>
+              <td>
+                {{ shortDateTime(row.fecha_hora_cancelar) }}
+                <br v-if="row.tipo_cancelacion" />
+                <small v-if="row.tipo_cancelacion">{{ cancelTypeLabel(row.tipo_cancelacion) }}</small>
+              </td>
             </tr>
           </tbody>
         </table>

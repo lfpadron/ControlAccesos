@@ -1740,6 +1740,51 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     assert checkin_response.status_code == 200, checkin_response.text
     assert checkin_response.json()["resultado"] == "VERDE"
     assert checkin_response.json()["estado_cita"] == "LLEGO_LOBBY"
+    assert checkin_response.json()["checkin_at"] is not None
+
+    cita_checkin_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
+    assert cita_checkin_response.status_code == 200, cita_checkin_response.text
+    cita_checkin = cita_checkin_response.json()
+    assert cita_checkin["fecha_hora_checkin"] is not None
+    assert cita_checkin["tipo_checkin"] == "LECTOR_QR_APP"
+    assert cita_checkin["usuario_checkin_id"] == recepcionista_user["id"]
+
+    authorize_response = client.patch(f"/api/citas/{cita['id']}/autorizar-pasar", headers=auth_headers)
+    assert authorize_response.status_code == 200, authorize_response.text
+    assert authorize_response.json()["estado"] == "AUTORIZADO_PASAR"
+
+    call_response = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
+    assert call_response["turno"] == cita["folio_turno"]
+
+    admin_me_response = client.get("/api/auth/me", headers=auth_headers)
+    assert admin_me_response.status_code == 200, admin_me_response.text
+    admin_user = admin_me_response.json()
+    cancel_response = client.patch(f"/api/citas/{cita['id']}/cancelar", headers=auth_headers)
+    assert cancel_response.status_code == 200, cancel_response.text
+    assert cancel_response.json()["estado"] == "CANCELADA"
+
+    cita_operativa_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
+    assert cita_operativa_response.status_code == 200, cita_operativa_response.text
+    cita_operativa = cita_operativa_response.json()
+    assert cita_operativa["fecha_hora_autorizar"] is not None
+    assert cita_operativa["fecha_hora_llamar"] is not None
+    assert cita_operativa["fecha_hora_cancelar"] is not None
+    assert cita_operativa["tipo_cancelacion"] == "MANUAL"
+    assert cita_operativa["usuario_cancelacion_id"] == admin_user["id"]
+
+    report_response = client.get(
+        "/api/reportes/medicos/citas",
+        headers=auth_headers,
+        params={"fecha_desde": appointment_at.date().isoformat(), "fecha_hasta": appointment_at.date().isoformat()},
+    )
+    assert report_response.status_code == 200, report_response.text
+    report_cita = next(item for item in report_response.json() if item["cita_id"] == cita["id"])
+    assert report_cita["fecha_hora_checkin"] == cita_operativa["fecha_hora_checkin"]
+    assert report_cita["tipo_checkin"] == "LECTOR_QR_APP"
+    assert report_cita["fecha_hora_autorizar"] == cita_operativa["fecha_hora_autorizar"]
+    assert report_cita["fecha_hora_llamar"] == cita_operativa["fecha_hora_llamar"]
+    assert report_cita["fecha_hora_cancelar"] == cita_operativa["fecha_hora_cancelar"]
+    assert report_cita["tipo_cancelacion"] == "MANUAL"
 
     audit_response = client.get("/api/auditoria", headers=auth_headers)
     audit_items = audit_response.json()

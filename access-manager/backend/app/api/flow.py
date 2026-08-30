@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.constants import default_permissions_for_role
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import get_optional_current_user, require_permission
 from app.models.complejo import Complejo
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.flow import Cita, EventoLlegada, MedicoPaciente, Paciente, QrToken
@@ -132,6 +132,18 @@ def business_today() -> date:
 
 def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+def checkin_type_for(canal: str, dispositivo_id: str | None = None, *, via_qr: bool = False) -> str | None:
+    channel = canal.upper()
+    device = (dispositivo_id or "").lower()
+    if channel == "RECEPCION":
+        return "RECEPCION_QR" if via_qr or device == "recepcion-qr" else "RECEPCION_MANUAL"
+    if channel == "APP_MOVIL":
+        return "LECTOR_QR_APP"
+    if channel == "KIOSKO":
+        return "KIOSKO"
+    return None
 
 
 def exists_or_404(db: Session, model: type, item_id: UUID, label: str) -> object:
@@ -1099,6 +1111,7 @@ def create_arrival_event(
     sala_id: UUID | None = None,
     usuario_id: UUID | None = None,
     dispositivo_id: str | None = None,
+    tipo_checkin: str | None = None,
 ) -> EventoLlegada:
     timestamp = now_utc()
     event = EventoLlegada(
@@ -1114,6 +1127,9 @@ def create_arrival_event(
     db.add(event)
     if tipo == "CHECKIN_LOBBY":
         cita.estado = "LLEGO_LOBBY"
+        cita.fecha_hora_checkin = timestamp
+        cita.tipo_checkin = tipo_checkin or checkin_type_for(canal, dispositivo_id)
+        cita.usuario_checkin_id = usuario_id
     db.flush()
     return event
 
@@ -1128,6 +1144,12 @@ def latest_lobby_checkin(db: Session, cita_id: UUID) -> EventoLlegada | None:
         .order_by(EventoLlegada.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def apply_checkin_metadata_from_event(cita: Cita, event: EventoLlegada | None) -> None:
+    cita.fecha_hora_checkin = event.created_at if event else None
+    cita.tipo_checkin = checkin_type_for(event.canal, event.dispositivo_id) if event else None
+    cita.usuario_checkin_id = event.usuario_id if event else None
 
 
 def event_created_at_utc(event: EventoLlegada) -> datetime:
@@ -1175,7 +1197,7 @@ def qr_context_response(
         fecha_label=cita_fecha_label(cita),
         torre=torre_label(torre),
         piso=piso_label(piso),
-        checkin_at=checkin_event.created_at if checkin_event else None,
+        checkin_at=cita.fecha_hora_checkin or (checkin_event.created_at if checkin_event else None),
     )
 
 
@@ -1286,6 +1308,7 @@ def confirm_qr_checkin(
         payload.sala_id,
         current_user.id if current_user else None,
         payload.dispositivo_id,
+        checkin_type_for(payload.canal, payload.dispositivo_id, via_qr=True),
     )
     if result.qr_token is not None:
         result.qr_token.estado = "USADO"
@@ -1430,7 +1453,14 @@ def reception_cita_item(db: Session, row: tuple[Cita, Paciente, Medico, Consulto
         piso=piso_label(piso) or "",
         medico_id=medico.id,
         medico=medico_last_first_name(medico),
-        checkin_at=checkin_event.created_at if checkin_event else None,
+        checkin_at=cita.fecha_hora_checkin or (checkin_event.created_at if checkin_event else None),
+        tipo_checkin=cita.tipo_checkin,
+        usuario_checkin_id=cita.usuario_checkin_id,
+        fecha_hora_autorizar=cita.fecha_hora_autorizar,
+        fecha_hora_llamar=cita.fecha_hora_llamar,
+        fecha_hora_cancelar=cita.fecha_hora_cancelar,
+        tipo_cancelacion=cita.tipo_cancelacion,
+        usuario_cancelacion_id=cita.usuario_cancelacion_id,
         can_cancel_checkin=can_cancel_lobby_checkin(checkin_event) and cita.estado == "LLEGO_LOBBY",
     )
 
@@ -1534,7 +1564,14 @@ def reception_checkin_cita(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada para hoy.")
     ensure_cita_access(db, current_user, cita.id, business_today())
     if cita.estado == "LLEGO_LOBBY":
-        return CheckinResponse(resultado="VERDE", mensaje="Check-in registrado.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+        return CheckinResponse(
+            resultado="VERDE",
+            mensaje="Check-in registrado.",
+            cita_id=cita.id,
+            folio_turno=cita.folio_turno,
+            estado_cita=cita.estado,
+            checkin_at=cita.fecha_hora_checkin,
+        )
     return authenticated_lobby_checkin(cita, payload, request, db, current_user)
 
 
@@ -1562,6 +1599,7 @@ def reception_cancel_checkin(
     before = audit_safe_dict(cita)
     db.delete(event)
     db.flush()
+    apply_checkin_metadata_from_event(cita, latest_lobby_checkin(db, cita.id))
     cita.estado = state_after_checkin_cancel(db, cita.id, timestamp)
     db.flush()
     record_audit_event(
@@ -2086,11 +2124,27 @@ def update_cita(
     return item
 
 
-def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request, db: Session, current_user: Usuario) -> CitaActionResponse:
+def set_cita_state(
+    cita_id: UUID,
+    state: str,
+    event_name: str,
+    request: Request,
+    db: Session,
+    current_user: Usuario,
+    *,
+    tipo_cancelacion: str | None = None,
+) -> CitaActionResponse:
     item = exists_or_404(db, Cita, cita_id, "Cita")
     ensure_cita_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
+    timestamp = now_utc()
     item.estado = state
+    if state == "AUTORIZADO_PASAR":
+        item.fecha_hora_autorizar = timestamp
+    elif state == "CANCELADA":
+        item.fecha_hora_cancelar = timestamp
+        item.tipo_cancelacion = tipo_cancelacion or "MANUAL"
+        item.usuario_cancelacion_id = current_user.id
     db.flush()
     record_audit_event(
         db,
@@ -2112,7 +2166,7 @@ def set_cita_state(cita_id: UUID, state: str, event_name: str, request: Request,
 def cancelar_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     ensure_cita_access(db, current_user, cita_id, business_today())
     cancel_qr(db, cita_id)
-    return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user)
+    return set_cita_state(cita_id, "CANCELADA", "CITA_CANCELADA", request, db, current_user, tipo_cancelacion="MANUAL")
 
 
 @citas_router.patch("/{cita_id}/autorizar-pasar", response_model=CitaActionResponse)
@@ -2237,6 +2291,7 @@ def authenticated_lobby_checkin(
             payload.sala_id,
             current_user.id,
             payload.dispositivo_id,
+            checkin_type_for(payload.canal, payload.dispositivo_id),
         )
         record_audit_event(
             db,
@@ -2250,7 +2305,14 @@ def authenticated_lobby_checkin(
         )
         db.commit()
         db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+    return CheckinResponse(
+        resultado=resultado,
+        mensaje=mensaje,
+        cita_id=cita.id,
+        folio_turno=cita.folio_turno,
+        estado_cita=cita.estado,
+        checkin_at=cita.fecha_hora_checkin,
+    )
 
 
 def parse_month(value: str | None, fallback: date) -> date:
@@ -2387,7 +2449,15 @@ def report_cita_item(db: Session, row) -> ReporteCitaItem:
         piso=piso_label(piso) or "",
         consultorio=consultorio_label(consultorio) or consultorio.codigo,
         estado=cita.estado,
-        se_presento=latest_lobby_checkin(db, cita.id) is not None,
+        se_presento=cita.fecha_hora_checkin is not None or latest_lobby_checkin(db, cita.id) is not None,
+        fecha_hora_checkin=cita.fecha_hora_checkin,
+        fecha_hora_autorizar=cita.fecha_hora_autorizar,
+        fecha_hora_llamar=cita.fecha_hora_llamar,
+        fecha_hora_cancelar=cita.fecha_hora_cancelar,
+        tipo_checkin=cita.tipo_checkin,
+        usuario_checkin_id=cita.usuario_checkin_id,
+        tipo_cancelacion=cita.tipo_cancelacion,
+        usuario_cancelacion_id=cita.usuario_cancelacion_id,
     )
 
 
@@ -2457,7 +2527,11 @@ def reporte_medicos_pacientes(
                 medico=medico_last_first_name(last_medico) if last_medico else None,
                 fecha_ultima_cita=last_cita.fecha_cita if last_cita else None,
                 hora_ultima_cita=last_cita.hora_cita if last_cita else None,
-                se_presento=latest_lobby_checkin(db, last_cita.id) is not None if last_cita else None,
+                se_presento=(
+                    last_cita.fecha_hora_checkin is not None or latest_lobby_checkin(db, last_cita.id) is not None
+                    if last_cita
+                    else None
+                ),
             )
         )
     return result
@@ -2687,25 +2761,49 @@ def mobile_validar_qr(
 
 
 @citas_router.post("/{cita_id}/checkin-lobby", response_model=CheckinResponse)
-def checkin_lobby_cita(cita_id: UUID, payload: CheckinRequest, request: Request, db: Session = Depends(get_db)):
+def checkin_lobby_cita(
+    cita_id: UUID,
+    payload: CheckinRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Usuario | None = Depends(get_optional_current_user),
+):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
     if cita.estado in {"CANCELADA", "EXPIRADA", "NO_LLEGO"}:
         return CheckinResponse(resultado="ROJO", mensaje=f"La cita está en estado {cita.estado}.", cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
     resultado, mensaje = checkin_window_status(cita, zona_horaria=cita_zona_horaria(db, cita))
     if resultado != "ROJO":
-        event = create_arrival_event(db, cita, "CHECKIN_LOBBY", payload.canal, request, payload.sala_id, dispositivo_id=payload.dispositivo_id)
+        event = create_arrival_event(
+            db,
+            cita,
+            "CHECKIN_LOBBY",
+            payload.canal,
+            request,
+            payload.sala_id,
+            current_user.id if current_user else None,
+            payload.dispositivo_id,
+            checkin_type_for(payload.canal, payload.dispositivo_id),
+        )
         record_audit_event(
             db,
             evento="CHECKIN_LOBBY",
             entidad="eventos_llegada",
             entidad_id=event.id,
+            usuario_id=current_user.id if current_user else None,
             canal=payload.canal,
             ip_origen=client_ip(request),
             valor_despues={"cita_id": str(cita.id), "resultado": resultado},
         )
         db.commit()
         db.refresh(cita)
-    return CheckinResponse(resultado=resultado, mensaje=mensaje, cita_id=cita.id, folio_turno=cita.folio_turno, estado_cita=cita.estado)
+    return CheckinResponse(
+        resultado=resultado,
+        mensaje=mensaje,
+        cita_id=cita.id,
+        folio_turno=cita.folio_turno,
+        estado_cita=cita.estado,
+        checkin_at=cita.fecha_hora_checkin,
+    )
 
 
 @citas_router.post("/{cita_id}/checkin-sala", response_model=CheckinResponse)

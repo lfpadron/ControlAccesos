@@ -374,6 +374,36 @@ function formatDateTime(cita: ReceptionCita) {
   return `${cita.fecha_cita} ${cita.hora_cita.slice(0, 5)}`;
 }
 
+function shortDateTime(value?: string | null) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.replace('T', ' ').slice(0, 16);
+  return new Intl.DateTimeFormat('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
+function checkinTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    LECTOR_QR_APP: 'Lector QR app',
+    KIOSKO: 'Kiosko',
+    RECEPCION_MANUAL: 'Recepción manual',
+    RECEPCION_QR: 'Recepción QR',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
+function cancelTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    MANUAL: 'Manual',
+    SISTEMA: 'Sistema',
+  };
+  return value ? labels[value] ?? value : '-';
+}
+
 function checkinLabel(cita: ReceptionCita) {
   return cita.estado === 'LLEGO_LOBBY' ? 'Registrado' : 'Checkin';
 }
@@ -491,12 +521,16 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>Checkin</th>
+              <th>Registro</th>
               <th><button class="table-sort-button" type="button" @click="setSort('paciente')">Paciente{{ sortIndicator('paciente') }}</button></th>
               <th><button class="table-sort-button" type="button" @click="setSort('fecha_hora')">Fecha y hora{{ sortIndicator('fecha_hora') }}</button></th>
               <th>Consultorio</th>
               <th>Torre</th>
               <th>Piso</th>
               <th><button class="table-sort-button" type="button" @click="setSort('medico')">Médico{{ sortIndicator('medico') }}</button></th>
+              <th>Autorización</th>
+              <th>Llamado</th>
+              <th>Cancelación</th>
             </tr>
           </thead>
           <tbody>
@@ -511,12 +545,24 @@ onMounted(async () => {
                   </button>
                 </div>
               </td>
+              <td>
+                {{ shortDateTime(cita.checkin_at) }}
+                <br v-if="cita.tipo_checkin" />
+                <small v-if="cita.tipo_checkin">{{ checkinTypeLabel(cita.tipo_checkin) }}</small>
+              </td>
               <td>{{ cita.paciente }}</td>
               <td>{{ formatDateTime(cita) }}</td>
               <td>{{ cita.consultorio }}</td>
               <td>{{ cita.torre }}</td>
               <td>{{ cita.piso }}</td>
               <td>{{ cita.medico }}</td>
+              <td>{{ shortDateTime(cita.fecha_hora_autorizar) }}</td>
+              <td>{{ shortDateTime(cita.fecha_hora_llamar) }}</td>
+              <td>
+                {{ shortDateTime(cita.fecha_hora_cancelar) }}
+                <br v-if="cita.tipo_cancelacion" />
+                <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
+              </td>
             </tr>
           </tbody>
         </table>
