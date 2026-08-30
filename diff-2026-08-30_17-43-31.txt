@@ -1,0 +1,553 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 30b100a..923c7ed 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -57,7 +57,7 @@ TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamad
+ CALL_INTERVAL = timedelta(minutes=5)
+ MAX_CALLS_PER_CITA = 3
+ TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
+-DISPLAY_APPOINTMENT_STATES = {"AGENDADA", "QR_GENERADO", "LLEGO_LOBBY", "AUTORIZADO_PASAR", "EN_CONSULTA"}
++NEXT_APPOINTMENT_READY_STATES = {"LLEGO_LOBBY", "AUTORIZADO_PASAR"}
+ 
+ 
+ def client_ip(request: Request) -> str | None:
+@@ -332,6 +332,7 @@ def display_config(
+     screen: PantallaTurnos | None,
+     mostrar_turnos: bool = True,
+     mostrar_proxima_cita: bool = False,
++    max_citas_proximas: int = 10,
+ ) -> PantallaTurnosPublicConfig:
+     return PantallaTurnosPublicConfig(
+         polling_interval_seconds=screen.polling_interval_seconds if screen else 5,
+@@ -346,6 +347,7 @@ def display_config(
+         max_turnos_visibles=screen.max_turnos_visibles if screen else 10,
+         mostrar_turnos=mostrar_turnos,
+         mostrar_proxima_cita=mostrar_proxima_cita,
++        max_citas_proximas=max_citas_proximas,
+     )
+ 
+ 
+@@ -369,6 +371,10 @@ def display_flags_for_clusters(clusters: list[ClusterTurnos]) -> tuple[bool, boo
+     )
+ 
+ 
++def max_next_appointments_for_clusters(clusters: list[ClusterTurnos]) -> int:
++    return max((cluster.max_citas_proximas for cluster in clusters if cluster.muestra_proxima_cita), default=10)
++
++
+ def appointment_window_condition(start_at: datetime, end_at: datetime):
+     start_date = start_at.date()
+     end_date = end_at.date()
+@@ -422,6 +428,49 @@ def estimated_appointment_time(value: datetime | None, timezone: ZoneInfo) -> tu
+     return estimated, estimated.astimezone(timezone).strftime("%H:%M")
+ 
+ 
++def datetime_utc(value: datetime) -> datetime:
++    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
++
++
++def cita_scheduled_at_utc(cita: Cita, timezone: ZoneInfo) -> datetime:
++    return datetime.combine(cita.fecha_cita, cita.hora_cita, tzinfo=timezone).astimezone(UTC)
++
++
++def appointment_duration_minutes(cita: Cita, medico: Medico) -> int:
++    return int(cita.duracion_estimada or medico.duracion_cita_minutos or 60)
++
++
++def latest_called_finish_by_medico(
++    db: Session,
++    medico_ids: set[UUID],
++    complejo_id: UUID,
++    consultorio_ids: list[UUID],
++    timestamp: datetime,
++) -> dict[UUID, datetime]:
++    if not medico_ids:
++        return {}
++    rows = db.execute(
++        select(Cita, Medico, TurnoDisplay)
++        .join(Medico, Medico.id == Cita.medico_id)
++        .join(TurnoDisplay, TurnoDisplay.cita_id == Cita.id)
++        .where(
++            Cita.medico_id.in_(medico_ids),
++            Cita.complejo_id == complejo_id,
++            Cita.consultorio_id.in_(consultorio_ids),
++            TurnoDisplay.llamado_en <= timestamp,
++        )
++        .order_by(Cita.medico_id, TurnoDisplay.llamado_en.desc())
++    ).all()
++    latest_by_medico: dict[UUID, datetime] = {}
++    for cita, medico, turno in rows:
++        if cita.medico_id in latest_by_medico:
++            continue
++        latest_by_medico[cita.medico_id] = datetime_utc(turno.llamado_en) + timedelta(
++            minutes=appointment_duration_minutes(cita, medico)
++        )
++    return latest_by_medico
++
++
+ def public_next_appointments(
+     db: Session,
+     screen: PantallaTurnos,
+@@ -437,8 +486,9 @@ def public_next_appointments(
+     campus = db.get(Complejo, screen.complejo_id)
+     timezone = safe_zone_info(campus.zona_horaria if campus else None)
+     local_now = timestamp.astimezone(timezone)
+-    start_at = local_now - timedelta(hours=1)
+-    end_at = local_now + timedelta(hours=2)
++    start_at = local_now - timedelta(hours=3)
++    end_at = local_now + timedelta(hours=3)
++    called_appointment_exists = select(TurnoDisplay.id).where(TurnoDisplay.cita_id == Cita.id).exists()
+ 
+     rows = db.execute(
+         select(Cita, Medico, Consultorio)
+@@ -447,36 +497,59 @@ def public_next_appointments(
+         .where(
+             Cita.complejo_id == screen.complejo_id,
+             Cita.consultorio_id.in_(consultorio_ids),
+-            Cita.estado.in_(DISPLAY_APPOINTMENT_STATES),
++            Cita.estado.notin_(TERMINAL_CALL_STATES),
++            Cita.estado != "CANCELADA",
++            Cita.fecha_hora_llamar.is_(None),
++            ~called_appointment_exists,
++            or_(
++                Cita.fecha_hora_checkin.is_not(None),
++                Cita.fecha_hora_autorizar.is_not(None),
++                Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
++            ),
+             Medico.activo.is_(True),
+             Consultorio.activo.is_(True),
+             appointment_window_condition(start_at, end_at),
+             appointment_medico_assignment_condition(),
+         )
+         .order_by(
+-            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
+-            Cita.fecha_cita,
+-            Cita.hora_cita,
++            func.lower(func.coalesce(Medico.nombre_visible, Medico.apellidos, "")),
+             func.lower(func.coalesce(Medico.apellidos, "")),
+             func.lower(func.coalesce(Medico.nombre, "")),
++            Cita.fecha_cita,
++            Cita.hora_cita,
+         )
+     ).all()
+ 
+-    response: list[PublicProximaCitaDisplay] = []
++    next_start_by_medico = latest_called_finish_by_medico(
++        db,
++        {cita.medico_id for cita, _medico, _consultorio in rows},
++        screen.complejo_id,
++        consultorio_ids,
++        timestamp,
++    )
++    response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
+     for cita, medico, consultorio in rows:
+-        estimated_at, estimated_time = estimated_appointment_time(medico.proxima_cita_estimada_at, timezone)
++        medico_name = medico_label(medico)
++        scheduled_at = cita_scheduled_at_utc(cita, timezone)
++        estimated_at = max(next_start_by_medico.get(cita.medico_id, scheduled_at), scheduled_at, timestamp)
++        next_start_by_medico[cita.medico_id] = estimated_at + timedelta(minutes=appointment_duration_minutes(cita, medico))
++        _estimated_at, estimated_time = estimated_appointment_time(estimated_at, timezone)
+         response.append(
+-            PublicProximaCitaDisplay(
++            (
++                medico_name.lower(),
++                estimated_at,
++                PublicProximaCitaDisplay(
+                 folio_turno=cita.folio_turno,
+                 medico_id=medico.id,
+-                medico=medico_label(medico),
++                medico=medico_name,
+                 consultorio=consultorio.nombre_visible or consultorio.codigo,
+                 estado_atencion=medico.estado_atencion,
+                 proxima_cita_estimada=estimated_at,
+                 hora_estimada_proxima_cita=estimated_time,
++                ),
+             )
+         )
+-    return response
++    return [item for _medico_name, _estimated_at, item in sorted(response, key=lambda row: (row[0], row[1], row[2].consultorio, row[2].folio_turno))]
+ 
+ 
+ def sync_turno_states(db: Session, timestamp: datetime) -> None:
+@@ -772,7 +845,12 @@ def public_display_turnos(
+         TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
+     )
+ 
+-    config = display_config(screen, mostrar_turnos=mostrar_turnos, mostrar_proxima_cita=mostrar_proxima_cita)
++    config = display_config(
++        screen,
++        mostrar_turnos=mostrar_turnos,
++        mostrar_proxima_cita=mostrar_proxima_cita,
++        max_citas_proximas=max_next_appointments_for_clusters(screen_clusters),
++    )
+     turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).scalars())
+     proximas_citas = public_next_appointments(db, screen, proxima_cita_cluster_ids, timestamp) if mostrar_proxima_cita else []
+     db.commit()
+diff --git a/access-manager/backend/app/models/operational.py b/access-manager/backend/app/models/operational.py
+index 070e0ea..40f6fe1 100644
+--- a/access-manager/backend/app/models/operational.py
++++ b/access-manager/backend/app/models/operational.py
+@@ -108,6 +108,7 @@ class ClusterTurnos(TimestampMixin, Base):
+     __table_args__ = (
+         UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),
+         CheckConstraint("muestra_turnos OR muestra_proxima_cita", name="ck_clusters_turnos_modo_display"),
++        CheckConstraint("max_citas_proximas BETWEEN 5 AND 50", name="ck_clusters_turnos_max_citas_proximas_range"),
+     )
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+@@ -117,6 +118,7 @@ class ClusterTurnos(TimestampMixin, Base):
+     descripcion: Mapped[str | None] = mapped_column(Text)
+     muestra_turnos: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+     muestra_proxima_cita: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
++    max_citas_proximas: Mapped[int] = mapped_column(Integer, default=10, server_default="10", nullable=False)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+ 
+ 
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index c98d1df..e474ef4 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -100,6 +100,7 @@ class PantallaClusterConsultaRead(BaseModel):
+ class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
+     mostrar_turnos: bool = True
+     mostrar_proxima_cita: bool = False
++    max_citas_proximas: int = Field(default=10, ge=5, le=50)
+ 
+ 
+ class PublicTurnoDisplay(BaseModel):
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 57a7c8e..3638348 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -193,6 +193,7 @@ class ClusterTurnosCreate(BaseModel):
+     nombre: str = Field(min_length=1, max_length=180)
+     muestra_turnos: bool = True
+     muestra_proxima_cita: bool = False
++    max_citas_proximas: int = Field(default=10, ge=5, le=50)
+     descripcion: str | None = None
+     activo: bool = True
+ 
+@@ -209,6 +210,7 @@ class ClusterTurnosUpdate(BaseModel):
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+     muestra_turnos: bool | None = None
+     muestra_proxima_cita: bool | None = None
++    max_citas_proximas: int | None = Field(default=None, ge=5, le=50)
+     descripcion: str | None = None
+     activo: bool | None = None
+ 
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index d18e3d5..e2967f4 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -239,6 +239,7 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
+                 "nombre": f"Cluster Proximas {suffix}",
+                 "muestra_turnos": False,
+                 "muestra_proxima_cita": True,
++                "max_citas_proximas": 5,
+             },
+         )
+     )
+@@ -364,16 +365,28 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
+             },
+         )
+     )
++    checkin_b_response = client.post(
++        f"/api/citas/{cita_b['id']}/checkin-lobby",
++        headers=auth_headers,
++        json={"canal": "RECEPCION"},
++    )
++    assert checkin_b_response.status_code == 200, checkin_b_response.text
++    assert checkin_b_response.json()["estado_cita"] == "LLEGO_LOBBY"
++    authorize_a_response = client.patch(f"/api/citas/{cita_a['id']}/autorizar-pasar", headers=auth_headers)
++    assert authorize_a_response.status_code == 200, authorize_a_response.text
++    assert authorize_a_response.json()["estado"] == "AUTORIZADO_PASAR"
+ 
+     public_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
+     assert public_response.status_code == 200, public_response.text
+     payload = public_response.json()
+     assert payload["config"]["mostrar_proxima_cita"] is True
++    assert payload["config"]["max_citas_proximas"] == 5
+     proximas = payload["proximas_citas"]
+     assert [item["consultorio"] for item in proximas[:2]] == [consultorio_a["nombre_visible"], consultorio_b["nombre_visible"]]
+     assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
+     assert proximas[0]["medico"] == medico_a["nombre_visible"]
+     assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
++    assert all(item["hora_estimada_proxima_cita"] for item in proximas[:2])
+ 
+ 
+ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index ee4d280..5823ecc 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -189,6 +189,7 @@ export type ClusterTurnos = {
+   nombre: string;
+   muestra_turnos: boolean;
+   muestra_proxima_cita: boolean;
++  max_citas_proximas: number;
+   descripcion?: string | null;
+   activo: boolean;
+   created_at: string;
+@@ -325,6 +326,7 @@ export type PublicDisplayConfig = {
+   max_turnos_visibles: number;
+   mostrar_turnos: boolean;
+   mostrar_proxima_cita: boolean;
++  max_citas_proximas: number;
+ };
+ 
+ export type PublicDisplayTurno = {
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index 402b08a..e5a04d0 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -19,6 +19,8 @@ export type CatalogField = {
+   required?: boolean;
+   minLength?: number;
+   maxLength?: number;
++  min?: number;
++  max?: number;
+   pattern?: string;
+   title?: string;
+   lookup?: LookupKey;
+@@ -225,6 +227,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
+       { name: 'muestra_turnos', label: 'Turnos', type: 'checkbox', defaultValue: true },
+       { name: 'muestra_proxima_cita', label: 'Próxima cita', type: 'checkbox', defaultValue: false },
++      { name: 'max_citas_proximas', label: 'Máximo de citas', type: 'number', required: true, defaultValue: 10, min: 5, max: 50 },
+       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
+       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
+     ],
+@@ -234,6 +237,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
+       { name: 'muestra_turnos', label: 'Turno', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
+       { name: 'muestra_proxima_cita', label: 'Próxima cita', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
++      { name: 'max_citas_proximas', label: 'Máximo de citas' },
+       { name: 'activo', label: 'Estado', boolean: true },
+     ],
+   },
+@@ -331,7 +335,6 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'polling_interval_seconds', label: 'Polling (segundos)', type: 'number', defaultValue: 5 },
+       { name: 'segundos_resaltado', label: 'Segundos resaltado', type: 'number', defaultValue: 25 },
+       { name: 'segundos_visible', label: 'Segundos visible', type: 'number', defaultValue: 300 },
+-      { name: 'max_turnos_visibles', label: 'Máximo de turnos visibles', type: 'number', defaultValue: 10 },
+       { name: 'color_fondo', label: 'Color de fondo' },
+       { name: 'color_texto', label: 'Color de texto' },
+       { name: 'color_turno_nuevo', label: 'Color de turno nuevo' },
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 839f336..84c8a94 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -719,6 +719,21 @@ function validatePayload(payload: Record<string, unknown>) {
+     return 'Seleccione Turnos, Próxima cita o ambos.';
+   }
+   for (const field of config.value.fields) {
++    if (field.type === 'number' && field.name in payload) {
++      const value = payload[field.name];
++      if (field.required && (value === null || value === undefined || value === '')) {
++        return `${field.label} es obligatorio.`;
++      }
++      const numericValue = typeof value === 'number' ? value : Number(value);
++      if (value !== null && value !== undefined && value !== '' && Number.isFinite(numericValue)) {
++        if (field.min !== undefined && numericValue < field.min) {
++          return `${field.label} debe ser mayor o igual a ${field.min}.`;
++        }
++        if (field.max !== undefined && numericValue > field.max) {
++          return `${field.label} debe ser menor o igual a ${field.max}.`;
++        }
++      }
++    }
+     if (!field.pattern || !(field.name in payload)) {
+       continue;
+     }
+@@ -1015,6 +1030,8 @@ onMounted(loadData);
+             :value="fieldValue(field.name)"
+             :minlength="field.minLength"
+             :maxlength="field.maxLength"
++            :min="field.type === 'number' ? field.min : undefined"
++            :max="field.type === 'number' ? field.max : undefined"
+             :pattern="field.pattern"
+             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
+             :title="field.title"
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index d96bc69..4d394c2 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -11,7 +11,8 @@ const route = useRoute();
+ const codigoDispositivo = computed(() => String(route.params.codigo_dispositivo ?? ''));
+ const token = computed(() => (typeof route.query.token === 'string' ? route.query.token : undefined));
+ const turnos = ref<PublicDisplayTurno[]>([]);
+-const proximasCitas = ref<PublicDisplayProximaCita[]>([]);
++const allProximasCitas = ref<PublicDisplayProximaCita[]>([]);
++const proximaCitaPage = ref(0);
+ const displayMode = ref<DisplayMode>('turnos');
+ const config = ref<PublicDisplayConfig>({
+   polling_interval_seconds: 5,
+@@ -20,6 +21,7 @@ const config = ref<PublicDisplayConfig>({
+   max_turnos_visibles: 10,
+   mostrar_turnos: true,
+   mostrar_proxima_cita: false,
++  max_citas_proximas: 10,
+ });
+ const connected = ref(false);
+ const lastUpdate = ref('');
+@@ -45,6 +47,12 @@ const screenStyle = computed(() => ({
+   '--display-normal-size': `${config.value.font_size_turno_normal || 64}px`,
+ }));
+ const hasHighlightedTurnos = computed(() => turnos.value.some((item) => item.resaltado));
++const maxProximasRows = computed(() => Math.min(50, Math.max(5, config.value.max_citas_proximas || 10)));
++const proximaCitaPageCount = computed(() => Math.max(1, Math.ceil(allProximasCitas.value.length / maxProximasRows.value)));
++const proximasCitas = computed(() => {
++  const start = proximaCitaPage.value * maxProximasRows.value;
++  return allProximasCitas.value.slice(start, start + maxProximasRows.value);
++});
+ const effectiveDisplayMode = computed<DisplayMode>(() => {
+   if (hasHighlightedTurnos.value) return 'turnos';
+   if (config.value.mostrar_proxima_cita && !config.value.mostrar_turnos) return 'proxima_cita';
+@@ -105,7 +113,7 @@ function refreshTurnoTimings() {
+     !nextTurnos.some((item) => item.resaltado) &&
+     (wasForcingTurnos || (isRotatingDisplay && previousTurnoCount > 0 && nextTurnos.length === 0))
+   ) {
+-    syncDisplayMode(nextTurnos);
++    syncDisplayMode(nextTurnos, false);
+   }
+   scheduleTurnoTimingRefresh();
+ }
+@@ -228,13 +236,42 @@ function availabilityLabel(status: string) {
+   return doctorStatusLabel(status);
+ }
+ 
+-function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
++function clampProximaCitaPage() {
++  proximaCitaPage.value = Math.min(proximaCitaPage.value, proximaCitaPageCount.value - 1);
++}
++
++function syncDisplayMode(responseTurnos: PublicDisplayTurno[], advanceProximaPage = true) {
+   if (responseTurnos.some((item) => item.resaltado)) {
+     displayMode.value = 'turnos';
+     return;
+   }
++  clampProximaCitaPage();
+   if (config.value.mostrar_turnos && config.value.mostrar_proxima_cita) {
+-    displayMode.value = displayMode.value === 'turnos' ? 'proxima_cita' : 'turnos';
++    if (!advanceProximaPage) {
++      if (displayMode.value === 'turnos') {
++        displayMode.value = 'proxima_cita';
++      }
++      return;
++    }
++    if (displayMode.value === 'proxima_cita') {
++      if (proximaCitaPage.value < proximaCitaPageCount.value - 1) {
++        proximaCitaPage.value += 1;
++        displayMode.value = 'proxima_cita';
++      } else {
++        proximaCitaPage.value = 0;
++        displayMode.value = 'turnos';
++      }
++    } else {
++      displayMode.value = 'proxima_cita';
++    }
++    return;
++  }
++  if (config.value.mostrar_proxima_cita) {
++    if (advanceProximaPage) {
++      proximaCitaPage.value =
++        proximaCitaPage.value < proximaCitaPageCount.value - 1 ? proximaCitaPage.value + 1 : 0;
++    }
++    displayMode.value = 'proxima_cita';
+     return;
+   }
+   displayMode.value = config.value.mostrar_proxima_cita ? 'proxima_cita' : 'turnos';
+@@ -264,8 +301,9 @@ async function loadData() {
+       (item) => item.resaltado && !knownTurnoKeys.has(turnoKey(item)),
+     );
+     turnos.value = responseTurnos;
+-    proximasCitas.value = response.proximas_citas ?? [];
+-    syncDisplayMode(responseTurnos);
++    allProximasCitas.value = response.proximas_citas ?? [];
++    clampProximaCitaPage();
++    syncDisplayMode(responseTurnos, hasLoadedTurnos && !responseTurnos.some((item) => item.resaltado));
+     displayName.value = response.nombre || response.codigo_dispositivo;
+     if (hasLoadedTurnos) {
+       announceTurnos(newHighlightedTurnos);
+@@ -351,7 +389,7 @@ onUnmounted(() => {
+           <span>{{ item.consultorio }}</span>
+         </template>
+       </article>
+-      <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
++      <p v-if="turnos.length === 0" class="display-empty">Sin citas llamadas</p>
+     </section>
+     <section v-else class="next-appointments-stage" aria-live="polite">
+       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
+@@ -366,7 +404,7 @@ onUnmounted(() => {
+             </tr>
+           </thead>
+           <tbody>
+-            <tr v-for="item in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}`">
++            <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
+               <td>{{ item.consultorio }}</td>
+               <td>{{ item.medico }}</td>
+               <td>
+@@ -383,7 +421,7 @@ onUnmounted(() => {
+           </tbody>
+         </table>
+       </div>
+-      <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
++      <p v-if="proximasCitas.length === 0" class="display-empty">Sin citas próximas estimadas</p>
+     </section>
+ 
+     <footer v-if="error" class="display-error">{{ error }}</footer>
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index dcdbd9f..0921f40 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -47,7 +47,6 @@ type PantallaForm = {
+   font_size_turno_normal: NumericInput;
+   segundos_resaltado: number;
+   segundos_visible: number;
+-  max_turnos_visibles: number;
+ };
+ 
+ const pantallas = ref<PantallaTurnos[]>([]);
+@@ -99,7 +98,6 @@ const form = reactive<PantallaForm>({
+   font_size_turno_normal: 64,
+   segundos_resaltado: 25,
+   segundos_visible: 300,
+-  max_turnos_visibles: 10,
+ });
+ 
+ const colorFamilies = computed(() => {
+@@ -393,7 +391,6 @@ function resetForm() {
+   form.font_size_turno_normal = 64;
+   form.segundos_resaltado = 25;
+   form.segundos_visible = 300;
+-  form.max_turnos_visibles = 10;
+ }
+ 
+ function setForm(item: PantallaTurnos) {
+@@ -422,7 +419,6 @@ function setForm(item: PantallaTurnos) {
+   form.font_size_turno_normal = item.font_size_turno_normal ?? '';
+   form.segundos_resaltado = item.segundos_resaltado;
+   form.segundos_visible = item.segundos_visible;
+-  form.max_turnos_visibles = item.max_turnos_visibles;
+   void loadTurnos();
+ }
+ 
+@@ -454,7 +450,6 @@ function payload() {
+     font_size_turno_normal: nullableNumber(form.font_size_turno_normal),
+     segundos_resaltado: Number(form.segundos_resaltado),
+     segundos_visible: Number(form.segundos_visible),
+-    max_turnos_visibles: Number(form.max_turnos_visibles),
+     ...(form.token.trim() ? { token: form.token.trim() } : {}),
+   };
+ }
+@@ -776,10 +771,6 @@ onMounted(loadData);
+             <label for="segundos-visible">Segundos visible</label>
+             <input id="segundos-visible" v-model.number="form.segundos_visible" type="number" min="30" max="3600" required />
+           </div>
+-          <div class="form-row">
+-            <label for="max-turnos">Máximo de turnos</label>
+-            <input id="max-turnos" v-model.number="form.max_turnos_visibles" type="number" min="1" max="50" required />
+-          </div>
+         </div>
+ 
+         <p v-if="message" class="message">{{ message }}</p>

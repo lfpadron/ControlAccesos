@@ -719,6 +719,21 @@ function validatePayload(payload: Record<string, unknown>) {
     return 'Seleccione Turnos, Próxima cita o ambos.';
   }
   for (const field of config.value.fields) {
+    if (field.type === 'number' && field.name in payload) {
+      const value = payload[field.name];
+      if (field.required && (value === null || value === undefined || value === '')) {
+        return `${field.label} es obligatorio.`;
+      }
+      const numericValue = typeof value === 'number' ? value : Number(value);
+      if (value !== null && value !== undefined && value !== '' && Number.isFinite(numericValue)) {
+        if (field.min !== undefined && numericValue < field.min) {
+          return `${field.label} debe ser mayor o igual a ${field.min}.`;
+        }
+        if (field.max !== undefined && numericValue > field.max) {
+          return `${field.label} debe ser menor o igual a ${field.max}.`;
+        }
+      }
+    }
     if (!field.pattern || !(field.name in payload)) {
       continue;
     }
@@ -1015,6 +1030,8 @@ onMounted(loadData);
             :value="fieldValue(field.name)"
             :minlength="field.minLength"
             :maxlength="field.maxLength"
+            :min="field.type === 'number' ? field.min : undefined"
+            :max="field.type === 'number' ? field.max : undefined"
             :pattern="field.pattern"
             :required="field.required && !((field.createOnly || field.editOptional) && editingId)"
             :title="field.title"

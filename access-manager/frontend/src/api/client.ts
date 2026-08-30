@@ -189,6 +189,7 @@ export type ClusterTurnos = {
   nombre: string;
   muestra_turnos: boolean;
   muestra_proxima_cita: boolean;
+  max_citas_proximas: number;
   descripcion?: string | null;
   activo: boolean;
   created_at: string;
@@ -325,6 +326,7 @@ export type PublicDisplayConfig = {
   max_turnos_visibles: number;
   mostrar_turnos: boolean;
   mostrar_proxima_cita: boolean;
+  max_citas_proximas: number;
 };
 
 export type PublicDisplayTurno = {

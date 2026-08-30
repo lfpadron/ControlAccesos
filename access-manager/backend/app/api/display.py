@@ -57,7 +57,7 @@ TurnosLlamadosWriteUser = Depends(require_permission("citas-hoy", "turnos-llamad
 CALL_INTERVAL = timedelta(minutes=5)
 MAX_CALLS_PER_CITA = 3
 TERMINAL_CALL_STATES = {"CANCELADA", "EXPIRADA", "FINALIZADA", "NO_LLEGO"}
-DISPLAY_APPOINTMENT_STATES = {"AGENDADA", "QR_GENERADO", "LLEGO_LOBBY", "AUTORIZADO_PASAR", "EN_CONSULTA"}
+NEXT_APPOINTMENT_READY_STATES = {"LLEGO_LOBBY", "AUTORIZADO_PASAR"}
 
 
 def client_ip(request: Request) -> str | None:
@@ -332,6 +332,7 @@ def display_config(
     screen: PantallaTurnos | None,
     mostrar_turnos: bool = True,
     mostrar_proxima_cita: bool = False,
+    max_citas_proximas: int = 10,
 ) -> PantallaTurnosPublicConfig:
     return PantallaTurnosPublicConfig(
         polling_interval_seconds=screen.polling_interval_seconds if screen else 5,
@@ -346,6 +347,7 @@ def display_config(
         max_turnos_visibles=screen.max_turnos_visibles if screen else 10,
         mostrar_turnos=mostrar_turnos,
         mostrar_proxima_cita=mostrar_proxima_cita,
+        max_citas_proximas=max_citas_proximas,
     )
 
 
@@ -367,6 +369,10 @@ def display_flags_for_clusters(clusters: list[ClusterTurnos]) -> tuple[bool, boo
         any(cluster.muestra_turnos for cluster in clusters),
         any(cluster.muestra_proxima_cita for cluster in clusters),
     )
+
+
+def max_next_appointments_for_clusters(clusters: list[ClusterTurnos]) -> int:
+    return max((cluster.max_citas_proximas for cluster in clusters if cluster.muestra_proxima_cita), default=10)
 
 
 def appointment_window_condition(start_at: datetime, end_at: datetime):
@@ -422,6 +428,49 @@ def estimated_appointment_time(value: datetime | None, timezone: ZoneInfo) -> tu
     return estimated, estimated.astimezone(timezone).strftime("%H:%M")
 
 
+def datetime_utc(value: datetime) -> datetime:
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def cita_scheduled_at_utc(cita: Cita, timezone: ZoneInfo) -> datetime:
+    return datetime.combine(cita.fecha_cita, cita.hora_cita, tzinfo=timezone).astimezone(UTC)
+
+
+def appointment_duration_minutes(cita: Cita, medico: Medico) -> int:
+    return int(cita.duracion_estimada or medico.duracion_cita_minutos or 60)
+
+
+def latest_called_finish_by_medico(
+    db: Session,
+    medico_ids: set[UUID],
+    complejo_id: UUID,
+    consultorio_ids: list[UUID],
+    timestamp: datetime,
+) -> dict[UUID, datetime]:
+    if not medico_ids:
+        return {}
+    rows = db.execute(
+        select(Cita, Medico, TurnoDisplay)
+        .join(Medico, Medico.id == Cita.medico_id)
+        .join(TurnoDisplay, TurnoDisplay.cita_id == Cita.id)
+        .where(
+            Cita.medico_id.in_(medico_ids),
+            Cita.complejo_id == complejo_id,
+            Cita.consultorio_id.in_(consultorio_ids),
+            TurnoDisplay.llamado_en <= timestamp,
+        )
+        .order_by(Cita.medico_id, TurnoDisplay.llamado_en.desc())
+    ).all()
+    latest_by_medico: dict[UUID, datetime] = {}
+    for cita, medico, turno in rows:
+        if cita.medico_id in latest_by_medico:
+            continue
+        latest_by_medico[cita.medico_id] = datetime_utc(turno.llamado_en) + timedelta(
+            minutes=appointment_duration_minutes(cita, medico)
+        )
+    return latest_by_medico
+
+
 def public_next_appointments(
     db: Session,
     screen: PantallaTurnos,
@@ -437,8 +486,9 @@ def public_next_appointments(
     campus = db.get(Complejo, screen.complejo_id)
     timezone = safe_zone_info(campus.zona_horaria if campus else None)
     local_now = timestamp.astimezone(timezone)
-    start_at = local_now - timedelta(hours=1)
-    end_at = local_now + timedelta(hours=2)
+    start_at = local_now - timedelta(hours=3)
+    end_at = local_now + timedelta(hours=3)
+    called_appointment_exists = select(TurnoDisplay.id).where(TurnoDisplay.cita_id == Cita.id).exists()
 
     rows = db.execute(
         select(Cita, Medico, Consultorio)
@@ -447,36 +497,59 @@ def public_next_appointments(
         .where(
             Cita.complejo_id == screen.complejo_id,
             Cita.consultorio_id.in_(consultorio_ids),
-            Cita.estado.in_(DISPLAY_APPOINTMENT_STATES),
+            Cita.estado.notin_(TERMINAL_CALL_STATES),
+            Cita.estado != "CANCELADA",
+            Cita.fecha_hora_llamar.is_(None),
+            ~called_appointment_exists,
+            or_(
+                Cita.fecha_hora_checkin.is_not(None),
+                Cita.fecha_hora_autorizar.is_not(None),
+                Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
+            ),
             Medico.activo.is_(True),
             Consultorio.activo.is_(True),
             appointment_window_condition(start_at, end_at),
             appointment_medico_assignment_condition(),
         )
         .order_by(
-            func.lower(func.coalesce(Consultorio.nombre_visible, Consultorio.codigo)),
-            Cita.fecha_cita,
-            Cita.hora_cita,
+            func.lower(func.coalesce(Medico.nombre_visible, Medico.apellidos, "")),
             func.lower(func.coalesce(Medico.apellidos, "")),
             func.lower(func.coalesce(Medico.nombre, "")),
+            Cita.fecha_cita,
+            Cita.hora_cita,
         )
     ).all()
 
-    response: list[PublicProximaCitaDisplay] = []
+    next_start_by_medico = latest_called_finish_by_medico(
+        db,
+        {cita.medico_id for cita, _medico, _consultorio in rows},
+        screen.complejo_id,
+        consultorio_ids,
+        timestamp,
+    )
+    response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
     for cita, medico, consultorio in rows:
-        estimated_at, estimated_time = estimated_appointment_time(medico.proxima_cita_estimada_at, timezone)
+        medico_name = medico_label(medico)
+        scheduled_at = cita_scheduled_at_utc(cita, timezone)
+        estimated_at = max(next_start_by_medico.get(cita.medico_id, scheduled_at), scheduled_at, timestamp)
+        next_start_by_medico[cita.medico_id] = estimated_at + timedelta(minutes=appointment_duration_minutes(cita, medico))
+        _estimated_at, estimated_time = estimated_appointment_time(estimated_at, timezone)
         response.append(
-            PublicProximaCitaDisplay(
+            (
+                medico_name.lower(),
+                estimated_at,
+                PublicProximaCitaDisplay(
                 folio_turno=cita.folio_turno,
                 medico_id=medico.id,
-                medico=medico_label(medico),
+                medico=medico_name,
                 consultorio=consultorio.nombre_visible or consultorio.codigo,
                 estado_atencion=medico.estado_atencion,
                 proxima_cita_estimada=estimated_at,
                 hora_estimada_proxima_cita=estimated_time,
+                ),
             )
         )
-    return response
+    return [item for _medico_name, _estimated_at, item in sorted(response, key=lambda row: (row[0], row[1], row[2].consultorio, row[2].folio_turno))]
 
 
 def sync_turno_states(db: Session, timestamp: datetime) -> None:
@@ -772,7 +845,12 @@ def public_display_turnos(
         TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
     )
 
-    config = display_config(screen, mostrar_turnos=mostrar_turnos, mostrar_proxima_cita=mostrar_proxima_cita)
+    config = display_config(
+        screen,
+        mostrar_turnos=mostrar_turnos,
+        mostrar_proxima_cita=mostrar_proxima_cita,
+        max_citas_proximas=max_next_appointments_for_clusters(screen_clusters),
+    )
     turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).scalars())
     proximas_citas = public_next_appointments(db, screen, proxima_cita_cluster_ids, timestamp) if mostrar_proxima_cita else []
     db.commit()

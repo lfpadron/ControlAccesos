@@ -47,7 +47,6 @@ type PantallaForm = {
   font_size_turno_normal: NumericInput;
   segundos_resaltado: number;
   segundos_visible: number;
-  max_turnos_visibles: number;
 };
 
 const pantallas = ref<PantallaTurnos[]>([]);
@@ -99,7 +98,6 @@ const form = reactive<PantallaForm>({
   font_size_turno_normal: 64,
   segundos_resaltado: 25,
   segundos_visible: 300,
-  max_turnos_visibles: 10,
 });
 
 const colorFamilies = computed(() => {
@@ -393,7 +391,6 @@ function resetForm() {
   form.font_size_turno_normal = 64;
   form.segundos_resaltado = 25;
   form.segundos_visible = 300;
-  form.max_turnos_visibles = 10;
 }
 
 function setForm(item: PantallaTurnos) {
@@ -422,7 +419,6 @@ function setForm(item: PantallaTurnos) {
   form.font_size_turno_normal = item.font_size_turno_normal ?? '';
   form.segundos_resaltado = item.segundos_resaltado;
   form.segundos_visible = item.segundos_visible;
-  form.max_turnos_visibles = item.max_turnos_visibles;
   void loadTurnos();
 }
 
@@ -454,7 +450,6 @@ function payload() {
     font_size_turno_normal: nullableNumber(form.font_size_turno_normal),
     segundos_resaltado: Number(form.segundos_resaltado),
     segundos_visible: Number(form.segundos_visible),
-    max_turnos_visibles: Number(form.max_turnos_visibles),
     ...(form.token.trim() ? { token: form.token.trim() } : {}),
   };
 }
@@ -775,10 +770,6 @@ onMounted(loadData);
           <div class="form-row">
             <label for="segundos-visible">Segundos visible</label>
             <input id="segundos-visible" v-model.number="form.segundos_visible" type="number" min="30" max="3600" required />
-          </div>
-          <div class="form-row">
-            <label for="max-turnos">Máximo de turnos</label>
-            <input id="max-turnos" v-model.number="form.max_turnos_visibles" type="number" min="1" max="50" required />
           </div>
         </div>
 

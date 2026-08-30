@@ -11,7 +11,8 @@ const route = useRoute();
 const codigoDispositivo = computed(() => String(route.params.codigo_dispositivo ?? ''));
 const token = computed(() => (typeof route.query.token === 'string' ? route.query.token : undefined));
 const turnos = ref<PublicDisplayTurno[]>([]);
-const proximasCitas = ref<PublicDisplayProximaCita[]>([]);
+const allProximasCitas = ref<PublicDisplayProximaCita[]>([]);
+const proximaCitaPage = ref(0);
 const displayMode = ref<DisplayMode>('turnos');
 const config = ref<PublicDisplayConfig>({
   polling_interval_seconds: 5,
@@ -20,6 +21,7 @@ const config = ref<PublicDisplayConfig>({
   max_turnos_visibles: 10,
   mostrar_turnos: true,
   mostrar_proxima_cita: false,
+  max_citas_proximas: 10,
 });
 const connected = ref(false);
 const lastUpdate = ref('');
@@ -45,6 +47,12 @@ const screenStyle = computed(() => ({
   '--display-normal-size': `${config.value.font_size_turno_normal || 64}px`,
 }));
 const hasHighlightedTurnos = computed(() => turnos.value.some((item) => item.resaltado));
+const maxProximasRows = computed(() => Math.min(50, Math.max(5, config.value.max_citas_proximas || 10)));
+const proximaCitaPageCount = computed(() => Math.max(1, Math.ceil(allProximasCitas.value.length / maxProximasRows.value)));
+const proximasCitas = computed(() => {
+  const start = proximaCitaPage.value * maxProximasRows.value;
+  return allProximasCitas.value.slice(start, start + maxProximasRows.value);
+});
 const effectiveDisplayMode = computed<DisplayMode>(() => {
   if (hasHighlightedTurnos.value) return 'turnos';
   if (config.value.mostrar_proxima_cita && !config.value.mostrar_turnos) return 'proxima_cita';
@@ -105,7 +113,7 @@ function refreshTurnoTimings() {
     !nextTurnos.some((item) => item.resaltado) &&
     (wasForcingTurnos || (isRotatingDisplay && previousTurnoCount > 0 && nextTurnos.length === 0))
   ) {
-    syncDisplayMode(nextTurnos);
+    syncDisplayMode(nextTurnos, false);
   }
   scheduleTurnoTimingRefresh();
 }
@@ -228,13 +236,42 @@ function availabilityLabel(status: string) {
   return doctorStatusLabel(status);
 }
 
-function syncDisplayMode(responseTurnos: PublicDisplayTurno[]) {
+function clampProximaCitaPage() {
+  proximaCitaPage.value = Math.min(proximaCitaPage.value, proximaCitaPageCount.value - 1);
+}
+
+function syncDisplayMode(responseTurnos: PublicDisplayTurno[], advanceProximaPage = true) {
   if (responseTurnos.some((item) => item.resaltado)) {
     displayMode.value = 'turnos';
     return;
   }
+  clampProximaCitaPage();
   if (config.value.mostrar_turnos && config.value.mostrar_proxima_cita) {
-    displayMode.value = displayMode.value === 'turnos' ? 'proxima_cita' : 'turnos';
+    if (!advanceProximaPage) {
+      if (displayMode.value === 'turnos') {
+        displayMode.value = 'proxima_cita';
+      }
+      return;
+    }
+    if (displayMode.value === 'proxima_cita') {
+      if (proximaCitaPage.value < proximaCitaPageCount.value - 1) {
+        proximaCitaPage.value += 1;
+        displayMode.value = 'proxima_cita';
+      } else {
+        proximaCitaPage.value = 0;
+        displayMode.value = 'turnos';
+      }
+    } else {
+      displayMode.value = 'proxima_cita';
+    }
+    return;
+  }
+  if (config.value.mostrar_proxima_cita) {
+    if (advanceProximaPage) {
+      proximaCitaPage.value =
+        proximaCitaPage.value < proximaCitaPageCount.value - 1 ? proximaCitaPage.value + 1 : 0;
+    }
+    displayMode.value = 'proxima_cita';
     return;
   }
   displayMode.value = config.value.mostrar_proxima_cita ? 'proxima_cita' : 'turnos';
@@ -264,8 +301,9 @@ async function loadData() {
       (item) => item.resaltado && !knownTurnoKeys.has(turnoKey(item)),
     );
     turnos.value = responseTurnos;
-    proximasCitas.value = response.proximas_citas ?? [];
-    syncDisplayMode(responseTurnos);
+    allProximasCitas.value = response.proximas_citas ?? [];
+    clampProximaCitaPage();
+    syncDisplayMode(responseTurnos, hasLoadedTurnos && !responseTurnos.some((item) => item.resaltado));
     displayName.value = response.nombre || response.codigo_dispositivo;
     if (hasLoadedTurnos) {
       announceTurnos(newHighlightedTurnos);
@@ -351,7 +389,7 @@ onUnmounted(() => {
           <span>{{ item.consultorio }}</span>
         </template>
       </article>
-      <p v-if="turnos.length === 0" class="display-empty">Sin turnos llamados</p>
+      <p v-if="turnos.length === 0" class="display-empty">Sin citas llamadas</p>
     </section>
     <section v-else class="next-appointments-stage" aria-live="polite">
       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
@@ -366,7 +404,7 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}`">
+            <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
               <td>{{ item.consultorio }}</td>
               <td>{{ item.medico }}</td>
               <td>
@@ -383,7 +421,7 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
-      <p v-if="proximasCitas.length === 0" class="display-empty">Sin próximas citas estimadas</p>
+      <p v-if="proximasCitas.length === 0" class="display-empty">Sin citas próximas estimadas</p>
     </section>
 
     <footer v-if="error" class="display-error">{{ error }}</footer>

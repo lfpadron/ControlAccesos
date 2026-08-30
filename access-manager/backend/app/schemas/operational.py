@@ -193,6 +193,7 @@ class ClusterTurnosCreate(BaseModel):
     nombre: str = Field(min_length=1, max_length=180)
     muestra_turnos: bool = True
     muestra_proxima_cita: bool = False
+    max_citas_proximas: int = Field(default=10, ge=5, le=50)
     descripcion: str | None = None
     activo: bool = True
 
@@ -209,6 +210,7 @@ class ClusterTurnosUpdate(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     muestra_turnos: bool | None = None
     muestra_proxima_cita: bool | None = None
+    max_citas_proximas: int | None = Field(default=None, ge=5, le=50)
     descripcion: str | None = None
     activo: bool | None = None
 

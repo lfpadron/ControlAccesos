@@ -100,6 +100,7 @@ class PantallaClusterConsultaRead(BaseModel):
 class PantallaTurnosPublicConfig(PantallaTurnosConfigMixin):
     mostrar_turnos: bool = True
     mostrar_proxima_cita: bool = False
+    max_citas_proximas: int = Field(default=10, ge=5, le=50)
 
 
 class PublicTurnoDisplay(BaseModel):

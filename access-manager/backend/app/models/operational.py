@@ -108,6 +108,7 @@ class ClusterTurnos(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("piso_id", "nombre", name="uq_clusters_turnos_piso_nombre"),
         CheckConstraint("muestra_turnos OR muestra_proxima_cita", name="ck_clusters_turnos_modo_display"),
+        CheckConstraint("max_citas_proximas BETWEEN 5 AND 50", name="ck_clusters_turnos_max_citas_proximas_range"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -117,6 +118,7 @@ class ClusterTurnos(TimestampMixin, Base):
     descripcion: Mapped[str | None] = mapped_column(Text)
     muestra_turnos: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     muestra_proxima_cita: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    max_citas_proximas: Mapped[int] = mapped_column(Integer, default=10, server_default="10", nullable=False)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 

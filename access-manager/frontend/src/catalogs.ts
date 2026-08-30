@@ -19,6 +19,8 @@ export type CatalogField = {
   required?: boolean;
   minLength?: number;
   maxLength?: number;
+  min?: number;
+  max?: number;
   pattern?: string;
   title?: string;
   lookup?: LookupKey;
@@ -225,6 +227,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'nombre', label: 'Nombre', required: true, maxLength: 180 },
       { name: 'muestra_turnos', label: 'Turnos', type: 'checkbox', defaultValue: true },
       { name: 'muestra_proxima_cita', label: 'Próxima cita', type: 'checkbox', defaultValue: false },
+      { name: 'max_citas_proximas', label: 'Máximo de citas', type: 'number', required: true, defaultValue: 10, min: 5, max: 50 },
       { name: 'descripcion', label: 'Descripción', type: 'textarea' },
       { name: 'activo', label: 'Activo', type: 'checkbox', defaultValue: true },
     ],
@@ -234,6 +237,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'piso_id', label: 'Piso', lookup: 'pisos' },
       { name: 'muestra_turnos', label: 'Turno', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
       { name: 'muestra_proxima_cita', label: 'Próxima cita', boolean: true, trueLabel: 'Sí', falseLabel: 'No' },
+      { name: 'max_citas_proximas', label: 'Máximo de citas' },
       { name: 'activo', label: 'Estado', boolean: true },
     ],
   },
@@ -331,7 +335,6 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'polling_interval_seconds', label: 'Polling (segundos)', type: 'number', defaultValue: 5 },
       { name: 'segundos_resaltado', label: 'Segundos resaltado', type: 'number', defaultValue: 25 },
       { name: 'segundos_visible', label: 'Segundos visible', type: 'number', defaultValue: 300 },
-      { name: 'max_turnos_visibles', label: 'Máximo de turnos visibles', type: 'number', defaultValue: 10 },
       { name: 'color_fondo', label: 'Color de fondo' },
       { name: 'color_texto', label: 'Color de texto' },
       { name: 'color_turno_nuevo', label: 'Color de turno nuevo' },

@@ -239,6 +239,7 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
                 "nombre": f"Cluster Proximas {suffix}",
                 "muestra_turnos": False,
                 "muestra_proxima_cita": True,
+                "max_citas_proximas": 5,
             },
         )
     )
@@ -364,16 +365,28 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
             },
         )
     )
+    checkin_b_response = client.post(
+        f"/api/citas/{cita_b['id']}/checkin-lobby",
+        headers=auth_headers,
+        json={"canal": "RECEPCION"},
+    )
+    assert checkin_b_response.status_code == 200, checkin_b_response.text
+    assert checkin_b_response.json()["estado_cita"] == "LLEGO_LOBBY"
+    authorize_a_response = client.patch(f"/api/citas/{cita_a['id']}/autorizar-pasar", headers=auth_headers)
+    assert authorize_a_response.status_code == 200, authorize_a_response.text
+    assert authorize_a_response.json()["estado"] == "AUTORIZADO_PASAR"
 
     public_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
     assert public_response.status_code == 200, public_response.text
     payload = public_response.json()
     assert payload["config"]["mostrar_proxima_cita"] is True
+    assert payload["config"]["max_citas_proximas"] == 5
     proximas = payload["proximas_citas"]
     assert [item["consultorio"] for item in proximas[:2]] == [consultorio_a["nombre_visible"], consultorio_b["nombre_visible"]]
     assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
     assert proximas[0]["medico"] == medico_a["nombre_visible"]
     assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
+    assert all(item["hora_estimada_proxima_cita"] for item in proximas[:2])
 
 
 def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
