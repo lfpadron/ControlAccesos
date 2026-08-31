@@ -1,0 +1,105 @@
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 6093cf5..54766f8 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -969,10 +969,10 @@ pre {
+ 
+ .display-logo img {
+   display: block;
+-  height: clamp(72px, 6.2vw, 118px);
++  height: clamp(54px, 4.65vw, 88.5px);
+   object-fit: cover;
+   object-position: center;
+-  width: clamp(260px, 22vw, 420px);
++  width: clamp(195px, 16.5vw, 315px);
+ }
+ 
+ .display-identity {
+diff --git a/access-manager/kiosk/src/styles.css b/access-manager/kiosk/src/styles.css
+index 303d0a0..e0c5351 100644
+--- a/access-manager/kiosk/src/styles.css
++++ b/access-manager/kiosk/src/styles.css
+@@ -32,7 +32,7 @@ button {
+   align-items: center;
+   display: grid;
+   min-height: 100vh;
+-  padding: 3rem;
++  padding: 3rem 3rem 6.5rem;
+ }
+ 
+ .kiosk-clock {
+@@ -48,19 +48,34 @@ button {
+   z-index: 2;
+ }
+ 
++.kiosk-logo {
++  left: 1.25rem;
++  position: fixed;
++  top: 1.25rem;
++  z-index: 2;
++}
++
++.kiosk-logo img {
++  display: block;
++  height: clamp(54px, 4.65vw, 88.5px);
++  object-fit: cover;
++  object-position: center;
++  width: clamp(195px, 16.5vw, 315px);
++}
++
+ .kiosk-name {
+   background: #ffffff;
+   border: 1px solid #d6e0e8;
+   border-radius: 999px;
++  bottom: 1.25rem;
+   color: #16212c;
+   font-weight: 850;
+-  left: 1.25rem;
+   max-width: min(44vw, 520px);
+   overflow: hidden;
+   padding: 0.55rem 0.9rem;
+   position: fixed;
++  right: 1.25rem;
+   text-overflow: ellipsis;
+-  top: 1.25rem;
+   white-space: nowrap;
+   z-index: 2;
+ }
+@@ -254,7 +269,7 @@ button {
+ 
+ @media (max-width: 640px) {
+   .kiosk-shell {
+-    padding: 7.5rem 1rem 1rem;
++    padding: 7.5rem 1rem 5rem;
+   }
+ 
+   .actions,
+@@ -270,6 +285,7 @@ button {
+   }
+ 
+   .kiosk-name {
++    bottom: 1rem;
+     left: 1rem;
+     max-width: none;
+     right: 1rem;
+diff --git a/access-manager/kiosk/src/views/KioskHomeView.vue b/access-manager/kiosk/src/views/KioskHomeView.vue
+index a506a95..79bfc56 100644
+--- a/access-manager/kiosk/src/views/KioskHomeView.vue
++++ b/access-manager/kiosk/src/views/KioskHomeView.vue
+@@ -1,5 +1,6 @@
+ <script setup lang="ts">
+ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
++import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
+ 
+ type Mode = 'home' | 'search' | 'scan' | 'result';
+ 
+@@ -290,6 +291,9 @@ onBeforeUnmount(() => {
+ 
+ <template>
+   <main class="kiosk-shell">
++    <div class="kiosk-logo">
++      <img :src="capitalMedicalCenterLogo" alt="Capital Medical Center" />
++    </div>
+     <div class="kiosk-name">{{ kioskoNombre }}</div>
+     <div class="kiosk-clock">{{ currentDateTime }}</div>
+     <section class="kiosk-stage">

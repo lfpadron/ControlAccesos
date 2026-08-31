@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
 
 type Mode = 'home' | 'search' | 'scan' | 'result';
 
@@ -290,6 +291,9 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="kiosk-shell">
+    <div class="kiosk-logo">
+      <img :src="capitalMedicalCenterLogo" alt="Capital Medical Center" />
+    </div>
     <div class="kiosk-name">{{ kioskoNombre }}</div>
     <div class="kiosk-clock">{{ currentDateTime }}</div>
     <section class="kiosk-stage">

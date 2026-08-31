@@ -969,10 +969,10 @@ pre {
 
 .display-logo img {
   display: block;
-  height: clamp(72px, 6.2vw, 118px);
+  height: clamp(54px, 4.65vw, 88.5px);
   object-fit: cover;
   object-position: center;
-  width: clamp(260px, 22vw, 420px);
+  width: clamp(195px, 16.5vw, 315px);
 }
 
 .display-identity {
