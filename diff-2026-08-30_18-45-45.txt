@@ -1,0 +1,97 @@
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 8484090..d68a6f2 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1052,7 +1052,7 @@ pre {
+   align-content: center;
+   display: grid;
+   margin: 0 auto;
+-  max-width: 1400px;
++  max-width: 1520px;
+   width: 100%;
+ }
+ 
+@@ -1065,10 +1065,28 @@ pre {
+   color: var(--display-text);
+   font-size: 1.7rem;
+   margin: 0;
++  min-width: 1180px;
+   table-layout: fixed;
+   width: 100%;
+ }
+ 
++.next-appointments-consultorio,
++.next-appointments-medico {
++  width: 32%;
++}
++
++.next-appointments-disponibilidad {
++  width: 16%;
++}
++
++.next-appointments-cita {
++  width: 8%;
++}
++
++.next-appointments-hora {
++  width: 12%;
++}
++
+ .next-appointments-table th,
+ .next-appointments-table td {
+   border: 0;
+@@ -1092,11 +1110,36 @@ pre {
+   overflow-wrap: anywhere;
+ }
+ 
++.next-appointments-table th:first-child,
++.next-appointments-table td:first-child {
++  padding-left: 0;
++}
++
++.next-appointments-table th:nth-child(1),
++.next-appointments-table td:nth-child(1),
++.next-appointments-table th:nth-child(2),
++.next-appointments-table td:nth-child(2) {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
+ .next-appointments-table td:nth-child(4),
+ .next-appointments-table td:nth-child(5) {
+   white-space: nowrap;
+ }
+ 
++.next-appointments-table th:nth-child(4),
++.next-appointments-table td:nth-child(4) {
++  text-align: center;
++}
++
++.next-appointments-table th:nth-child(5),
++.next-appointments-table td:nth-child(5) {
++  padding-right: 0;
++  text-align: right;
++}
++
+ .next-appointments-table td:nth-child(4) strong,
+ .next-appointments-table time {
+   font-size: 2.65rem;
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 4d394c2..4a7c7b9 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -394,6 +394,13 @@ onUnmounted(() => {
+     <section v-else class="next-appointments-stage" aria-live="polite">
+       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
+         <table class="next-appointments-table">
++          <colgroup>
++            <col class="next-appointments-consultorio" />
++            <col class="next-appointments-medico" />
++            <col class="next-appointments-disponibilidad" />
++            <col class="next-appointments-cita" />
++            <col class="next-appointments-hora" />
++          </colgroup>
+           <thead>
+             <tr>
+               <th>Consultorio</th>

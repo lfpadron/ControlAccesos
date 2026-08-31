@@ -394,6 +394,13 @@ onUnmounted(() => {
     <section v-else class="next-appointments-stage" aria-live="polite">
       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
         <table class="next-appointments-table">
+          <colgroup>
+            <col class="next-appointments-consultorio" />
+            <col class="next-appointments-medico" />
+            <col class="next-appointments-disponibilidad" />
+            <col class="next-appointments-cita" />
+            <col class="next-appointments-hora" />
+          </colgroup>
           <thead>
             <tr>
               <th>Consultorio</th>
