@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import QRCode from 'qrcode';
 import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
+import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
 
 const VOICE_SETTING_KEY = 'access_manager_display_voice_enabled';
 type DisplayMode = 'turnos' | 'proxima_cita';
@@ -346,6 +347,9 @@ onUnmounted(() => {
 
 <template>
   <main class="display-shell" :style="screenStyle">
+    <aside class="display-logo">
+      <img :src="capitalMedicalCenterLogo" alt="Capital Medical Center" />
+    </aside>
     <aside class="display-identity">
       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
       <span>{{ displayName || codigoDispositivo }}</span>

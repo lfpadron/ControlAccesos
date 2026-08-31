@@ -876,7 +876,7 @@ pre {
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 100vh;
-  padding: 1.5rem;
+  padding: 1.5rem 1.5rem 7rem;
 }
 
 .display-topbar {
@@ -959,27 +959,46 @@ pre {
   color: #a7f3d0;
 }
 
-.display-identity {
-  align-items: center;
-  display: flex;
-  gap: 0.65rem;
+.display-logo {
   left: 1.5rem;
+  opacity: 0.94;
+  position: fixed;
+  top: 1.5rem;
+  z-index: 2;
+}
+
+.display-logo img {
+  display: block;
+  height: clamp(72px, 6.2vw, 118px);
+  object-fit: cover;
+  object-position: center;
+  width: clamp(260px, 22vw, 420px);
+}
+
+.display-identity {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
   max-width: min(440px, calc(100vw - 3rem));
   opacity: 0.78;
   position: fixed;
-  top: 1.5rem;
+  right: 1.5rem;
+  bottom: 1.5rem;
   z-index: 2;
 }
 
 .display-identity img {
   background: #ffffff;
   border-radius: 6px;
-  height: 48px;
+  height: 64px;
+  order: 2;
   padding: 0.25rem;
-  width: 48px;
+  width: 64px;
 }
 
 .display-identity span {
+  order: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
