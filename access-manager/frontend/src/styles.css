@@ -1072,15 +1072,15 @@ pre {
 
 .next-appointments-consultorio,
 .next-appointments-medico {
-  width: 32%;
+  width: 27%;
 }
 
 .next-appointments-disponibilidad {
-  width: 16%;
+  width: 24%;
 }
 
 .next-appointments-cita {
-  width: 8%;
+  width: 10%;
 }
 
 .next-appointments-hora {
@@ -1137,7 +1137,7 @@ pre {
 .next-appointments-table th:nth-child(5),
 .next-appointments-table td:nth-child(5) {
   padding-right: 0;
-  text-align: right;
+  text-align: center;
 }
 
 .next-appointments-table td:nth-child(4) strong,

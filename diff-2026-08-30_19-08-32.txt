@@ -1,0 +1,45 @@
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index d68a6f2..97fe480 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1072,15 +1072,15 @@ pre {
+ 
+ .next-appointments-consultorio,
+ .next-appointments-medico {
+-  width: 32%;
++  width: 27%;
+ }
+ 
+ .next-appointments-disponibilidad {
+-  width: 16%;
++  width: 24%;
+ }
+ 
+ .next-appointments-cita {
+-  width: 8%;
++  width: 10%;
+ }
+ 
+ .next-appointments-hora {
+@@ -1137,7 +1137,7 @@ pre {
+ .next-appointments-table th:nth-child(5),
+ .next-appointments-table td:nth-child(5) {
+   padding-right: 0;
+-  text-align: right;
++  text-align: center;
+ }
+ 
+ .next-appointments-table td:nth-child(4) strong,
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 4a7c7b9..bee9b23 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -407,7 +407,7 @@ onUnmounted(() => {
+               <th>Médico</th>
+               <th>Disponibilidad</th>
+               <th>Cita</th>
+-              <th>Hora aproximada</th>
++              <th>Hora aprox.</th>
+             </tr>
+           </thead>
+           <tbody>

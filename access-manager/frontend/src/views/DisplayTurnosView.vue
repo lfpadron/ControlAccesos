@@ -407,7 +407,7 @@ onUnmounted(() => {
               <th>Médico</th>
               <th>Disponibilidad</th>
               <th>Cita</th>
-              <th>Hora aproximada</th>
+              <th>Hora aprox.</th>
             </tr>
           </thead>
           <tbody>
