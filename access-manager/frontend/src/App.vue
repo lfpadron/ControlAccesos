@@ -96,15 +96,6 @@ watch(
 <template>
   <div v-if="fullscreen" class="fullscreen-frame">
     <RouterView v-if="fullscreen" />
-    <footer class="app-footer">
-      <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
-      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
-        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
-      </a>
-      <span class="app-footer-clock">
-        Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
-      </span>
-    </footer>
   </div>
   <div v-else class="app-shell">
     <aside class="sidebar">

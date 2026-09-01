@@ -1,0 +1,102 @@
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 38e4c87..799eb70 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -96,15 +96,6 @@ watch(
+ <template>
+   <div v-if="fullscreen" class="fullscreen-frame">
+     <RouterView v-if="fullscreen" />
+-    <footer class="app-footer">
+-      <span class="app-footer-mission">UNA MISIÓN EN PROGRESO DE:</span>
+-      <a class="app-footer-link" href="https://astrogatolabs.com.mx/" target="_blank" rel="noopener noreferrer">
+-        <img class="app-footer-logo" :src="astrogatoLogo" alt="Astrogato Labs" />
+-      </a>
+-      <span class="app-footer-clock">
+-        Zona horaria: {{ footerTimeZone }} · <time :datetime="footerDatetime">{{ footerClock }}</time>
+-      </span>
+-    </footer>
+   </div>
+   <div v-else class="app-shell">
+     <aside class="sidebar">
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 54766f8..57f699c 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -16,6 +16,10 @@ body {
+   padding-bottom: var(--app-footer-height);
+ }
+ 
++body:has(.fullscreen-frame) {
++  padding-bottom: 0;
++}
++
+ button,
+ input,
+ select,
+@@ -59,12 +63,12 @@ button:disabled {
+ 
+ .fullscreen-frame {
+   display: grid;
+-  grid-template-rows: minmax(0, 1fr) auto;
++  grid-template-rows: minmax(0, 1fr);
+   min-height: 100vh;
+ }
+ 
+ .fullscreen-frame .display-shell {
+-  min-height: 0;
++  min-height: 100vh;
+ }
+ 
+ .app-shell {
+@@ -975,6 +979,21 @@ pre {
+   width: clamp(195px, 16.5vw, 315px);
+ }
+ 
++.display-labs-logo {
++  bottom: 1.5rem;
++  left: 1.5rem;
++  opacity: 0.94;
++  position: fixed;
++  z-index: 2;
++}
++
++.display-labs-logo img {
++  display: block;
++  height: clamp(38px, 4vw, 74px);
++  object-fit: contain;
++  width: auto;
++}
++
+ .display-identity {
+   align-items: flex-end;
+   display: flex;
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index f28db74..e456d50 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
+ import { useRoute } from 'vue-router';
+ import QRCode from 'qrcode';
+ import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
++import astrogatoLogo from '../astrogato-logo-v02.png';
+ import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
+ 
+ const VOICE_SETTING_KEY = 'access_manager_display_voice_enabled';
+@@ -350,6 +351,9 @@ onUnmounted(() => {
+     <aside class="display-logo">
+       <img :src="capitalMedicalCenterLogo" alt="Capital Medical Center" />
+     </aside>
++    <aside class="display-labs-logo">
++      <img :src="astrogatoLogo" alt="Astrogato Labs" />
++    </aside>
+     <aside class="display-identity">
+       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
+       <span>{{ displayName || codigoDispositivo }}</span>
+@@ -435,6 +439,6 @@ onUnmounted(() => {
+       <p v-if="proximasCitas.length === 0" class="display-empty">Sin citas próximas estimadas</p>
+     </section>
+ 
+-    <footer v-if="error" class="display-error">{{ error }}</footer>
++    <p v-if="error" class="display-error">{{ error }}</p>
+   </main>
+ </template>

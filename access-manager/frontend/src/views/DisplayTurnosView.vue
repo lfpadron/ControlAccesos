@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import QRCode from 'qrcode';
 import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
+import astrogatoLogo from '../astrogato-logo-v02.png';
 import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
 
 const VOICE_SETTING_KEY = 'access_manager_display_voice_enabled';
@@ -350,6 +351,9 @@ onUnmounted(() => {
     <aside class="display-logo">
       <img :src="capitalMedicalCenterLogo" alt="Capital Medical Center" />
     </aside>
+    <aside class="display-labs-logo">
+      <img :src="astrogatoLogo" alt="Astrogato Labs" />
+    </aside>
     <aside class="display-identity">
       <img v-if="displayQr" :src="displayQr" alt="QR del display" />
       <span>{{ displayName || codigoDispositivo }}</span>
@@ -435,6 +439,6 @@ onUnmounted(() => {
       <p v-if="proximasCitas.length === 0" class="display-empty">Sin citas próximas estimadas</p>
     </section>
 
-    <footer v-if="error" class="display-error">{{ error }}</footer>
+    <p v-if="error" class="display-error">{{ error }}</p>
   </main>
 </template>

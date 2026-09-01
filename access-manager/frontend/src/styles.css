@@ -16,6 +16,10 @@ body {
   padding-bottom: var(--app-footer-height);
 }
 
+body:has(.fullscreen-frame) {
+  padding-bottom: 0;
+}
+
 button,
 input,
 select,
@@ -59,12 +63,12 @@ button:disabled {
 
 .fullscreen-frame {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 100vh;
 }
 
 .fullscreen-frame .display-shell {
-  min-height: 0;
+  min-height: 100vh;
 }
 
 .app-shell {
@@ -973,6 +977,21 @@ pre {
   object-fit: cover;
   object-position: center;
   width: clamp(195px, 16.5vw, 315px);
+}
+
+.display-labs-logo {
+  bottom: 1.5rem;
+  left: 1.5rem;
+  opacity: 0.94;
+  position: fixed;
+  z-index: 2;
+}
+
+.display-labs-logo img {
+  display: block;
+  height: clamp(38px, 4vw, 74px);
+  object-fit: contain;
+  width: auto;
 }
 
 .display-identity {
