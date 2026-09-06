@@ -69,14 +69,20 @@ export const screenByKey = new Map(screens.map((screen) => [screen.key, screen])
 export const DEFAULT_INITIAL_SCREEN = 'perfil';
 
 export function initialPathForUser(user: Usuario | null) {
-  const screen = screenByKey.get(user?.pantalla_inicial || DEFAULT_INITIAL_SCREEN);
-  return screen?.path ?? '/perfil';
+  if (!user) return '/perfil';
+  const preferredScreen = screenByKey.get(user.pantalla_inicial || DEFAULT_INITIAL_SCREEN);
+  if (preferredScreen && canAccessPath(user, preferredScreen.path)) {
+    return preferredScreen.path;
+  }
+  const firstAllowedScreen = screens.find((screen) => canAccessPath(user, screen.path));
+  return firstAllowedScreen?.path ?? '/perfil';
 }
 
 export function accessForPath(user: Usuario | null, path: string): AccessLevel {
-  if (!user?.permisos) return 'editar';
+  if (!user) return 'sin';
   const screen = screenByPath.get(path);
   if (!screen) return 'editar';
+  if (!user.permisos) return 'sin';
   return user.permisos[screen.key] ?? 'sin';
 }
 

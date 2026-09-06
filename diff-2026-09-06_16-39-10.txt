@@ -1,0 +1,217 @@
+diff --git a/access-manager/frontend/src/App.vue b/access-manager/frontend/src/App.vue
+index 799eb70..38c38b6 100644
+--- a/access-manager/frontend/src/App.vue
++++ b/access-manager/frontend/src/App.vue
+@@ -32,6 +32,86 @@ const footerDatetime = computed(() => footerDate.value.toISOString());
+ 
+ let footerClockTimer: number | undefined;
+ 
++type NavItem = {
++  label: string;
++  path: string;
++  reset?: () => void;
++};
++
++type NavGroup = {
++  label: string;
++  items: NavItem[];
++};
++
++const navGroups: NavGroup[] = [
++  {
++    label: 'General',
++    items: [
++      { label: 'Dashboard', path: '/dashboard' },
++      { label: 'Perfil', path: '/perfil' },
++    ],
++  },
++  {
++    label: 'Instituciones',
++    items: [
++      { label: 'Instituciones', path: '/instituciones', reset: clearLocation },
++      { label: 'Campus', path: '/complejos', reset: clearCampus },
++      { label: 'Torres', path: '/torres', reset: clearTower },
++      { label: 'Pisos', path: '/pisos', reset: clearFloor },
++      { label: 'Salas de espera', path: '/salas-espera' },
++      { label: 'Consultorios', path: '/consultorios' },
++    ],
++  },
++  {
++    label: 'Personas y roles',
++    items: [
++      { label: 'Usuarios', path: '/usuarios' },
++      { label: 'Búsqueda de usuarios', path: '/busqueda-usuarios' },
++      { label: 'Roles', path: '/roles' },
++      { label: 'Asignación de usuarios', path: '/usuario-roles' },
++      { label: 'Preferencias del médico', path: '/plantilla-turnos' },
++    ],
++  },
++  {
++    label: 'Operación',
++    items: [
++      { label: 'Estado del médico', path: '/estado-medico' },
++      { label: 'Pacientes', path: '/pacientes' },
++      { label: 'Citas', path: '/citas' },
++      { label: 'Citas de hoy', path: '/citas/hoy' },
++      { label: 'Recepción', path: '/recepcion' },
++      { label: 'Checkin QR', path: '/checkin-qr' },
++      { label: 'Contactos institucionales', path: '/contactos-institucionales' },
++      { label: 'Clústers', path: '/clusters-turnos' },
++      { label: 'Consulta de clústers', path: '/consulta-clusters-consultorios' },
++      { label: 'Pantallas de turnos', path: '/pantallas-turnos' },
++      { label: 'Consulta de clúster y pantallas', path: '/consulta-clusters-pantallas' },
++      { label: 'Kioskos', path: '/kioskos' },
++      { label: 'Turnos llamados', path: '/turnos-llamados' },
++    ],
++  },
++  {
++    label: 'Reportes',
++    items: [
++      { label: 'Reportes', path: '/reportes' },
++      { label: 'Reportes médicos', path: '/reportes/medicos' },
++      { label: 'Reportes recepción', path: '/reportes/recepcion' },
++      { label: 'Auditoría', path: '/auditoria' },
++    ],
++  },
++];
++
++const visibleNavGroups = computed(() => {
++  const user = currentUser.value;
++  if (!user) return [];
++  return navGroups
++    .map((group) => ({
++      ...group,
++      items: group.items.filter((item) => canAccessPath(user, item.path)),
++    }))
++    .filter((group) => group.items.length > 0);
++});
++
+ async function refreshCurrentUser() {
+   if (!isAuthenticated.value) {
+     setCurrentSessionUser(null);
+@@ -73,15 +153,15 @@ function logout() {
+ }
+ 
+ function canUse(path: string) {
+-  return canAccessPath(currentUser.value, path);
++  return Boolean(currentUser.value && canAccessPath(currentUser.value, path));
+ }
+ 
+-function handleNav(event: MouseEvent, path: string, reset?: () => void) {
+-  if (!canUse(path)) {
++function handleNav(event: MouseEvent, item: NavItem) {
++  if (!canUse(item.path)) {
+     event.preventDefault();
+     return;
+   }
+-  reset?.();
++  item.reset?.();
+ }
+ 
+ watch(
+@@ -106,43 +186,16 @@ watch(
+           <small>Capital Medical Center</small>
+         </div>
+       </div>
+-      <nav>
+-        <span class="nav-section">General</span>
+-        <RouterLink to="/dashboard" :class="{ disabled: !canUse('/dashboard') }" :aria-disabled="!canUse('/dashboard')" @click="handleNav($event, '/dashboard')">Dashboard</RouterLink>
+-        <RouterLink to="/perfil" :class="{ disabled: !canUse('/perfil') }" :aria-disabled="!canUse('/perfil')" @click="handleNav($event, '/perfil')">Perfil</RouterLink>
+-        <span class="nav-section">Instituciones</span>
+-        <RouterLink to="/instituciones" :class="{ disabled: !canUse('/instituciones') }" :aria-disabled="!canUse('/instituciones')" @click="handleNav($event, '/instituciones', clearLocation)">Instituciones</RouterLink>
+-        <RouterLink to="/complejos" :class="{ disabled: !canUse('/complejos') }" :aria-disabled="!canUse('/complejos')" @click="handleNav($event, '/complejos', clearCampus)">Campus</RouterLink>
+-        <RouterLink to="/torres" :class="{ disabled: !canUse('/torres') }" :aria-disabled="!canUse('/torres')" @click="handleNav($event, '/torres', clearTower)">Torres</RouterLink>
+-        <RouterLink to="/pisos" :class="{ disabled: !canUse('/pisos') }" :aria-disabled="!canUse('/pisos')" @click="handleNav($event, '/pisos', clearFloor)">Pisos</RouterLink>
+-        <RouterLink to="/salas-espera" :class="{ disabled: !canUse('/salas-espera') }" :aria-disabled="!canUse('/salas-espera')" @click="handleNav($event, '/salas-espera')">Salas de espera</RouterLink>
+-        <RouterLink to="/consultorios" :class="{ disabled: !canUse('/consultorios') }" :aria-disabled="!canUse('/consultorios')" @click="handleNav($event, '/consultorios')">Consultorios</RouterLink>
+-        <span class="nav-section">Personas y roles</span>
+-        <RouterLink to="/usuarios" :class="{ disabled: !canUse('/usuarios') }" :aria-disabled="!canUse('/usuarios')" @click="handleNav($event, '/usuarios')">Usuarios</RouterLink>
+-        <RouterLink to="/busqueda-usuarios" :class="{ disabled: !canUse('/busqueda-usuarios') }" :aria-disabled="!canUse('/busqueda-usuarios')" @click="handleNav($event, '/busqueda-usuarios')">Búsqueda de usuarios</RouterLink>
+-        <RouterLink to="/roles" :class="{ disabled: !canUse('/roles') }" :aria-disabled="!canUse('/roles')" @click="handleNav($event, '/roles')">Roles</RouterLink>
+-        <RouterLink to="/usuario-roles" :class="{ disabled: !canUse('/usuario-roles') }" :aria-disabled="!canUse('/usuario-roles')" @click="handleNav($event, '/usuario-roles')">Asignación de usuarios</RouterLink>
+-        <RouterLink to="/plantilla-turnos" :class="{ disabled: !canUse('/plantilla-turnos') }" :aria-disabled="!canUse('/plantilla-turnos')" @click="handleNav($event, '/plantilla-turnos')">Preferencias del médico</RouterLink>
+-        <span class="nav-section">Operación</span>
+-        <RouterLink to="/estado-medico" :class="{ disabled: !canUse('/estado-medico') }" :aria-disabled="!canUse('/estado-medico')" @click="handleNav($event, '/estado-medico')">Estado del médico</RouterLink>
+-        <RouterLink to="/pacientes" :class="{ disabled: !canUse('/pacientes') }" :aria-disabled="!canUse('/pacientes')" @click="handleNav($event, '/pacientes')">Pacientes</RouterLink>
+-        <RouterLink to="/citas" :class="{ disabled: !canUse('/citas') }" :aria-disabled="!canUse('/citas')" @click="handleNav($event, '/citas')">Citas</RouterLink>
+-        <RouterLink to="/citas/hoy" :class="{ disabled: !canUse('/citas/hoy') }" :aria-disabled="!canUse('/citas/hoy')" @click="handleNav($event, '/citas/hoy')">Citas de hoy</RouterLink>
+-        <RouterLink to="/recepcion" :class="{ disabled: !canUse('/recepcion') }" :aria-disabled="!canUse('/recepcion')" @click="handleNav($event, '/recepcion')">Recepción</RouterLink>
+-        <RouterLink to="/checkin-qr" :class="{ disabled: !canUse('/checkin-qr') }" :aria-disabled="!canUse('/checkin-qr')" @click="handleNav($event, '/checkin-qr')">Checkin QR</RouterLink>
+-        <RouterLink to="/contactos-institucionales" :class="{ disabled: !canUse('/contactos-institucionales') }" :aria-disabled="!canUse('/contactos-institucionales')" @click="handleNav($event, '/contactos-institucionales')">Contactos institucionales</RouterLink>
+-        <RouterLink to="/clusters-turnos" :class="{ disabled: !canUse('/clusters-turnos') }" :aria-disabled="!canUse('/clusters-turnos')" @click="handleNav($event, '/clusters-turnos')">Clústers</RouterLink>
+-        <RouterLink to="/consulta-clusters-consultorios" :class="{ disabled: !canUse('/consulta-clusters-consultorios') }" :aria-disabled="!canUse('/consulta-clusters-consultorios')" @click="handleNav($event, '/consulta-clusters-consultorios')">Consulta de clústers</RouterLink>
+-        <RouterLink to="/pantallas-turnos" :class="{ disabled: !canUse('/pantallas-turnos') }" :aria-disabled="!canUse('/pantallas-turnos')" @click="handleNav($event, '/pantallas-turnos')">Pantallas de turnos</RouterLink>
+-        <RouterLink to="/consulta-clusters-pantallas" :class="{ disabled: !canUse('/consulta-clusters-pantallas') }" :aria-disabled="!canUse('/consulta-clusters-pantallas')" @click="handleNav($event, '/consulta-clusters-pantallas')">Consulta de clúster y pantallas</RouterLink>
+-        <RouterLink to="/kioskos" :class="{ disabled: !canUse('/kioskos') }" :aria-disabled="!canUse('/kioskos')" @click="handleNav($event, '/kioskos')">Kioskos</RouterLink>
+-        <RouterLink to="/turnos-llamados" :class="{ disabled: !canUse('/turnos-llamados') }" :aria-disabled="!canUse('/turnos-llamados')" @click="handleNav($event, '/turnos-llamados')">Turnos llamados</RouterLink>
+-        <span class="nav-section">Reportes</span>
+-        <RouterLink to="/reportes" :class="{ disabled: !canUse('/reportes') }" :aria-disabled="!canUse('/reportes')" @click="handleNav($event, '/reportes')">Reportes</RouterLink>
+-        <RouterLink to="/reportes/medicos" :class="{ disabled: !canUse('/reportes/medicos') }" :aria-disabled="!canUse('/reportes/medicos')" @click="handleNav($event, '/reportes/medicos')">Reportes médicos</RouterLink>
+-        <RouterLink to="/reportes/recepcion" :class="{ disabled: !canUse('/reportes/recepcion') }" :aria-disabled="!canUse('/reportes/recepcion')" @click="handleNav($event, '/reportes/recepcion')">Reportes recepción</RouterLink>
+-        <RouterLink to="/auditoria" :class="{ disabled: !canUse('/auditoria') }" :aria-disabled="!canUse('/auditoria')" @click="handleNav($event, '/auditoria')">Auditoría</RouterLink>
++      <p v-if="!currentUser" class="sidebar-welcome">Bienvenido</p>
++      <nav v-else-if="visibleNavGroups.length">
++        <template v-for="group in visibleNavGroups" :key="group.label">
++          <span class="nav-section">{{ group.label }}</span>
++          <RouterLink v-for="item in group.items" :key="item.path" :to="item.path" @click="handleNav($event, item)">
++            {{ item.label }}
++          </RouterLink>
++        </template>
+       </nav>
++      <p v-else class="sidebar-welcome sidebar-welcome-muted">Sin accesos disponibles</p>
+       <button v-if="isAuthenticated" class="secondary" type="button" @click="logout">Cerrar sesión</button>
+     </aside>
+     <main class="content">
+diff --git a/access-manager/frontend/src/accessControl.ts b/access-manager/frontend/src/accessControl.ts
+index 954eaee..e71ebe8 100644
+--- a/access-manager/frontend/src/accessControl.ts
++++ b/access-manager/frontend/src/accessControl.ts
+@@ -69,14 +69,20 @@ export const screenByKey = new Map(screens.map((screen) => [screen.key, screen])
+ export const DEFAULT_INITIAL_SCREEN = 'perfil';
+ 
+ export function initialPathForUser(user: Usuario | null) {
+-  const screen = screenByKey.get(user?.pantalla_inicial || DEFAULT_INITIAL_SCREEN);
+-  return screen?.path ?? '/perfil';
++  if (!user) return '/perfil';
++  const preferredScreen = screenByKey.get(user.pantalla_inicial || DEFAULT_INITIAL_SCREEN);
++  if (preferredScreen && canAccessPath(user, preferredScreen.path)) {
++    return preferredScreen.path;
++  }
++  const firstAllowedScreen = screens.find((screen) => canAccessPath(user, screen.path));
++  return firstAllowedScreen?.path ?? '/perfil';
+ }
+ 
+ export function accessForPath(user: Usuario | null, path: string): AccessLevel {
+-  if (!user?.permisos) return 'editar';
++  if (!user) return 'sin';
+   const screen = screenByPath.get(path);
+   if (!screen) return 'editar';
++  if (!user.permisos) return 'sin';
+   return user.permisos[screen.key] ?? 'sin';
+ }
+ 
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 57f699c..18293f8 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -151,6 +151,20 @@ nav a.disabled:hover {
+   opacity: 0.55;
+ }
+ 
++.sidebar-welcome {
++  color: #d8e2f0;
++  font-size: 1.15rem;
++  font-weight: 750;
++  margin: 0;
++  padding: 0.7rem 0.75rem;
++}
++
++.sidebar-welcome-muted {
++  color: #a8b8cc;
++  font-size: 0.95rem;
++  font-weight: 650;
++}
++
+ .nav-section {
+   color: #7f94ad;
+   font-size: 0.72rem;

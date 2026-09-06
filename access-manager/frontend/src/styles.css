@@ -151,6 +151,20 @@ nav a.disabled:hover {
   opacity: 0.55;
 }
 
+.sidebar-welcome {
+  color: #d8e2f0;
+  font-size: 1.15rem;
+  font-weight: 750;
+  margin: 0;
+  padding: 0.7rem 0.75rem;
+}
+
+.sidebar-welcome-muted {
+  color: #a8b8cc;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
 .nav-section {
   color: #7f94ad;
   font-size: 0.72rem;
