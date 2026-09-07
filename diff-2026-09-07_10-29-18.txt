@@ -1,0 +1,177 @@
+diff --git a/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml b/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
+index b1929b0..12b7369 100644
+--- a/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
++++ b/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
+@@ -2,7 +2,7 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+ 
+     <application
+-        android:label="App de Médicos"
++        android:label="CMC Médico"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
+         <activity
+diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+index db77bb4..fd3c79f 100644
+Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+index 17987b7..bc066b5 100644
+Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+index 09d4391..6d5c9c8 100644
+Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+index d5f1c8d..21f8b81 100644
+Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+index 4d6372e..d349dc0 100644
+Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile-pwa/index.html b/access-manager/mobile-pwa/index.html
+index 4013eaf..083b81e 100644
+--- a/access-manager/mobile-pwa/index.html
++++ b/access-manager/mobile-pwa/index.html
+@@ -5,6 +5,8 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <meta name="theme-color" content="#145c8f" />
+     <link rel="manifest" href="/mobile/manifest.webmanifest" />
++    <link rel="icon" type="image/png" href="/mobile/icon-512.png" />
++    <link rel="apple-touch-icon" href="/mobile/icon-512.png" />
+     <title>Access Manager Mobile</title>
+   </head>
+   <body>
+diff --git a/access-manager/mobile-pwa/public/manifest.webmanifest b/access-manager/mobile-pwa/public/manifest.webmanifest
+index a37d7e2..cb268b6 100644
+--- a/access-manager/mobile-pwa/public/manifest.webmanifest
++++ b/access-manager/mobile-pwa/public/manifest.webmanifest
+@@ -7,9 +7,9 @@
+   "theme_color": "#145c8f",
+   "icons": [
+     {
+-      "src": "/mobile/icon.svg",
+-      "sizes": "any",
+-      "type": "image/svg+xml"
++      "src": "/mobile/icon-512.png",
++      "sizes": "512x512",
++      "type": "image/png"
+     }
+   ]
+ }
+diff --git a/access-manager/mobile-pwa/src/App.vue b/access-manager/mobile-pwa/src/App.vue
+index 2a38268..bd033ef 100644
+--- a/access-manager/mobile-pwa/src/App.vue
++++ b/access-manager/mobile-pwa/src/App.vue
+@@ -10,6 +10,7 @@ type Screen = 'home' | 'scan' | 'search' | 'create';
+ const screen = ref<Screen>('home');
+ const apiStatus = ref('Verificando API...');
+ const version = import.meta.env.VITE_APP_VERSION ?? 'v0.2.0';
++const appIconUrl = `${import.meta.env.BASE_URL}capital-medical-center-qr-logo.png`;
+ 
+ const title = computed(() => {
+   if (screen.value === 'scan') return 'Escanear QR';
+@@ -32,7 +33,10 @@ onMounted(async () => {
+ <template>
+   <main class="mobile-shell">
+     <header>
+-      <strong>Access Manager</strong>
++      <div class="header-brand">
++        <img class="header-icon" :src="appIconUrl" alt="Capital Medical Center QR" />
++        <strong>Access Manager</strong>
++      </div>
+       <div class="header-meta">
+         <span>{{ title }}</span>
+         <small>{{ apiStatus }} - {{ version }}</small>
+diff --git a/access-manager/mobile-pwa/src/styles.css b/access-manager/mobile-pwa/src/styles.css
+index 03c4447..5304095 100644
+--- a/access-manager/mobile-pwa/src/styles.css
++++ b/access-manager/mobile-pwa/src/styles.css
+@@ -44,6 +44,21 @@ header {
+   min-height: 48px;
+ }
+ 
++.header-brand {
++  align-items: center;
++  display: flex;
++  gap: 0.7rem;
++  min-width: 0;
++}
++
++.header-icon {
++  border-radius: 8px;
++  display: block;
++  height: 44px;
++  object-fit: cover;
++  width: 44px;
++}
++
+ header span {
+   color: #5b6d7d;
+   font-size: 0.9rem;
+diff --git a/access-manager/mobile/README.md b/access-manager/mobile/README.md
+index d919165..8d37944 100644
+--- a/access-manager/mobile/README.md
++++ b/access-manager/mobile/README.md
+@@ -11,7 +11,7 @@ App Flutter Android para registrar llegada de pacientes desde un celular, sin in
+ - Validación y check-in siempre contra el servidor.
+ - Ticket PDF mediante impresora virtual.
+ - Log local SQLite sin datos personales del paciente: token QR, folio de cita, fecha/hora y login de recepción.
+-- Icono y pantalla de acceso con imagen de Clínicas Alfa.
++- Icono y pantalla de acceso con imagen de Capital Medical Center para lectura QR.
+ 
+ ## Servidor real
+ 
+diff --git a/access-manager/mobile/android/app/src/main/AndroidManifest.xml b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+index 32ad469..0df9e5d 100644
+--- a/access-manager/mobile/android/app/src/main/AndroidManifest.xml
++++ b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+@@ -3,7 +3,7 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+ 
+     <application
+-        android:label="Capital Medical Center"
++        android:label="CMC Acceso QR"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
+         <activity
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+index 1b7cc49..137ebe8 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+index 5f5c843..2c79aef 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+index f512f2d..638c1cb 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+index 0d65038..838d2c0 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+index 31a6468..2d25d19 100644
+Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+index aef1bb6..b7ff915 100644
+--- a/access-manager/mobile/lib/main.dart
++++ b/access-manager/mobile/lib/main.dart
+@@ -241,8 +241,9 @@ class _LoginScreenState extends State<LoginScreen> {
+                 ClipRRect(
+                   borderRadius: BorderRadius.circular(8),
+                   child: Image.asset(
+-                    'assets/capital-logo-menu.png',
+-                    height: 92,
++                    'assets/capital-medical-center-qr-logo.png',
++                    height: 128,
++                    width: 128,
+                     fit: BoxFit.cover,
+                   ),
+                 ),
+diff --git a/access-manager/mobile/pubspec.yaml b/access-manager/mobile/pubspec.yaml
+index 8fa5077..227ecd6 100644
+--- a/access-manager/mobile/pubspec.yaml
++++ b/access-manager/mobile/pubspec.yaml
+@@ -66,6 +66,7 @@ flutter:
+ 
+   assets:
+     - assets/capital-logo-menu.png
++    - assets/capital-medical-center-qr-logo.png
+ 
+   # To add assets to your application, add an assets section, like this:
+   # assets:

@@ -11,7 +11,7 @@ App Flutter Android para registrar llegada de pacientes desde un celular, sin in
 - Validación y check-in siempre contra el servidor.
 - Ticket PDF mediante impresora virtual.
 - Log local SQLite sin datos personales del paciente: token QR, folio de cita, fecha/hora y login de recepción.
-- Icono y pantalla de acceso con imagen de Clínicas Alfa.
+- Icono y pantalla de acceso con imagen de Capital Medical Center para lectura QR.
 
 ## Servidor real
 

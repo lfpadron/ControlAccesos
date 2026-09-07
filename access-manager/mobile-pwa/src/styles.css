@@ -44,6 +44,21 @@ header {
   min-height: 48px;
 }
 
+.header-brand {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.header-icon {
+  border-radius: 8px;
+  display: block;
+  height: 44px;
+  object-fit: cover;
+  width: 44px;
+}
+
 header span {
   color: #5b6d7d;
   font-size: 0.9rem;

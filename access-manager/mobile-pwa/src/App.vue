@@ -10,6 +10,7 @@ type Screen = 'home' | 'scan' | 'search' | 'create';
 const screen = ref<Screen>('home');
 const apiStatus = ref('Verificando API...');
 const version = import.meta.env.VITE_APP_VERSION ?? 'v0.2.0';
+const appIconUrl = `${import.meta.env.BASE_URL}capital-medical-center-qr-logo.png`;
 
 const title = computed(() => {
   if (screen.value === 'scan') return 'Escanear QR';
@@ -32,7 +33,10 @@ onMounted(async () => {
 <template>
   <main class="mobile-shell">
     <header>
-      <strong>Access Manager</strong>
+      <div class="header-brand">
+        <img class="header-icon" :src="appIconUrl" alt="Capital Medical Center QR" />
+        <strong>Access Manager</strong>
+      </div>
       <div class="header-meta">
         <span>{{ title }}</span>
         <small>{{ apiStatus }} - {{ version }}</small>
