@@ -420,7 +420,13 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
-              <td>{{ item.consultorio }}</td>
+              <td>
+                <div class="next-appointment-consultorio-detail">
+                  <span class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
+                  <small v-if="item.ubicacion_consultorio">{{ item.ubicacion_consultorio }}</small>
+                  <small v-if="item.codigo_consultorio">{{ item.codigo_consultorio }}</small>
+                </div>
+              </td>
               <td>{{ item.medico }}</td>
               <td>
                 <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">

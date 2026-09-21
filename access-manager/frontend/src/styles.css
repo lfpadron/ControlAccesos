@@ -1167,13 +1167,30 @@ pre {
   padding-left: 0;
 }
 
-.next-appointments-table th:nth-child(1),
-.next-appointments-table td:nth-child(1),
 .next-appointments-table th:nth-child(2),
 .next-appointments-table td:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.next-appointment-consultorio-detail {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.next-appointment-consultorio-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next-appointment-consultorio-detail small {
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.2;
+  opacity: 0.75;
 }
 
 .next-appointments-table td:nth-child(4),
@@ -1219,9 +1236,9 @@ pre {
   background: #ffffff;
   border: 1px solid #d9e1ea;
   border-radius: 8px;
-  height: 240px;
-  padding: 0.6rem;
-  width: 240px;
+  height: auto;
+  max-width: 420px;
+  width: 100%;
 }
 
 .qr-reader-panel {

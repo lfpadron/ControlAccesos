@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.models.flow import Cita, Paciente
 
-FOLIO_TURNO_ALPHABET = "ACDEFGHJKMNPQRTWXY234679"
+FOLIO_TURNO_LETTERS = "ACDEFGHJKMNPQRTWXY"
+FOLIO_TURNO_DIGITS = "234679"
+FOLIO_TURNO_ALPHABET = FOLIO_TURNO_LETTERS + FOLIO_TURNO_DIGITS
 AMBIGUOUS_CHARS = set("IOBV108Ñ")
 
 
@@ -28,7 +30,9 @@ def generate_patient_folio(db: Session) -> str:
 
 def generate_turn_folio(db: Session, complejo_id: UUID, fecha_cita: date) -> str:
     for _ in range(60):
-        folio = random_code(4)
+        folio = "".join(secrets.choice(FOLIO_TURNO_LETTERS) for _ in range(2)) + "".join(
+            secrets.choice(FOLIO_TURNO_DIGITS) for _ in range(2)
+        )
         exists = db.execute(
             select(Cita.id).where(
                 Cita.complejo_id == complejo_id,
@@ -42,4 +46,8 @@ def generate_turn_folio(db: Session, complejo_id: UUID, fecha_cita: date) -> str
 
 
 def is_valid_turn_folio(folio: str) -> bool:
-    return len(folio) == 4 and all(char in FOLIO_TURNO_ALPHABET and char not in AMBIGUOUS_CHARS for char in folio)
+    return (
+        len(folio) == 4
+        and all(char in FOLIO_TURNO_LETTERS and char not in AMBIGUOUS_CHARS for char in folio[:2])
+        and all(char in FOLIO_TURNO_DIGITS and char not in AMBIGUOUS_CHARS for char in folio[2:])
+    )

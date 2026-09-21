@@ -1,0 +1,814 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 923c7ed..14257d6 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -162,7 +162,7 @@ def screen_audit(db: Session, screen: PantallaTurnos) -> dict:
+     return {**audit_safe_dict(screen), "cluster_ids": [str(cluster_id) for cluster_id in cluster_ids_for_screen(db, screen.id)]}
+ 
+ 
+-def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_id: UUID | None, piso_id: UUID | None) -> None:
++def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_id: UUID | None, _piso_id: UUID | None) -> None:
+     if not cluster_ids:
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
+     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
+@@ -173,8 +173,6 @@ def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_
+     for cluster in clusters:
+         if complejo_id is not None and cluster.complejo_id != complejo_id:
+             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al campus indicado.")
+-        if piso_id is not None and cluster.piso_id != piso_id:
+-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al piso indicado.")
+ 
+ 
+ def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
+@@ -436,6 +434,32 @@ def cita_scheduled_at_utc(cita: Cita, timezone: ZoneInfo) -> datetime:
+     return datetime.combine(cita.fecha_cita, cita.hora_cita, tzinfo=timezone).astimezone(UTC)
+ 
+ 
++def prefixed_location(prefix: str, value: str) -> str:
++    text = value.strip()
++    if text.lower().startswith(prefix.lower()):
++        return text
++    return f"{prefix} {text}"
++
++
++def next_appointment_consultorio_details(
++    db: Session,
++    screen: PantallaTurnos,
++    consultorio: Consultorio,
++) -> tuple[str | None, str | None]:
++    screen_piso = db.get(Piso, screen.piso_id) if screen.piso_id is not None else None
++    consultorio_piso = db.get(Piso, consultorio.piso_id)
++    location: str | None = None
++    if consultorio_piso is not None:
++        if screen_piso is None or consultorio_piso.torre_id != screen_piso.torre_id:
++            torre = db.get(Torre, consultorio_piso.torre_id)
++            if torre is not None:
++                location = prefixed_location("Torre", torre.nombre)
++        elif consultorio_piso.id != screen_piso.id:
++            location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
++    code = consultorio.codigo if (consultorio.nombre_visible or "").strip() else None
++    return location, code
++
++
+ def appointment_duration_minutes(cita: Cita, medico: Medico) -> int:
+     return int(cita.duracion_estimada or medico.duracion_cita_minutos or 60)
+ 
+@@ -457,6 +481,7 @@ def latest_called_finish_by_medico(
+             Cita.medico_id.in_(medico_ids),
+             Cita.complejo_id == complejo_id,
+             Cita.consultorio_id.in_(consultorio_ids),
++            Cita.estado != "CANCELADA",
+             TurnoDisplay.llamado_en <= timestamp,
+         )
+         .order_by(Cita.medico_id, TurnoDisplay.llamado_en.desc())
+@@ -497,15 +522,9 @@ def public_next_appointments(
+         .where(
+             Cita.complejo_id == screen.complejo_id,
+             Cita.consultorio_id.in_(consultorio_ids),
+-            Cita.estado.notin_(TERMINAL_CALL_STATES),
+-            Cita.estado != "CANCELADA",
++            Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
+             Cita.fecha_hora_llamar.is_(None),
+             ~called_appointment_exists,
+-            or_(
+-                Cita.fecha_hora_checkin.is_not(None),
+-                Cita.fecha_hora_autorizar.is_not(None),
+-                Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
+-            ),
+             Medico.activo.is_(True),
+             Consultorio.activo.is_(True),
+             appointment_window_condition(start_at, end_at),
+@@ -530,6 +549,8 @@ def public_next_appointments(
+     response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
+     for cita, medico, consultorio in rows:
+         medico_name = medico_label(medico)
++        consultorio_name = (consultorio.nombre_visible or "").strip() or consultorio.codigo
++        consultorio_location, consultorio_code = next_appointment_consultorio_details(db, screen, consultorio)
+         scheduled_at = cita_scheduled_at_utc(cita, timezone)
+         estimated_at = max(next_start_by_medico.get(cita.medico_id, scheduled_at), scheduled_at, timestamp)
+         next_start_by_medico[cita.medico_id] = estimated_at + timedelta(minutes=appointment_duration_minutes(cita, medico))
+@@ -539,17 +560,25 @@ def public_next_appointments(
+                 medico_name.lower(),
+                 estimated_at,
+                 PublicProximaCitaDisplay(
+-                folio_turno=cita.folio_turno,
+-                medico_id=medico.id,
+-                medico=medico_name,
+-                consultorio=consultorio.nombre_visible or consultorio.codigo,
+-                estado_atencion=medico.estado_atencion,
+-                proxima_cita_estimada=estimated_at,
+-                hora_estimada_proxima_cita=estimated_time,
++                    folio_turno=cita.folio_turno,
++                    medico_id=medico.id,
++                    medico=medico_name,
++                    consultorio=consultorio_name,
++                    ubicacion_consultorio=consultorio_location,
++                    codigo_consultorio=consultorio_code,
++                    estado_atencion=medico.estado_atencion,
++                    proxima_cita_estimada=estimated_at,
++                    hora_estimada_proxima_cita=estimated_time,
+                 ),
+             )
+         )
+-    return [item for _medico_name, _estimated_at, item in sorted(response, key=lambda row: (row[0], row[1], row[2].consultorio, row[2].folio_turno))]
++    return [
++        item
++        for _medico_name, _estimated_at, item in sorted(
++            response,
++            key=lambda row: (row[2].consultorio.lower(), row[1], row[0], row[2].folio_turno),
++        )
++    ]
+ 
+ 
+ def sync_turno_states(db: Session, timestamp: datetime) -> None:
+@@ -569,9 +598,16 @@ def sync_turno_states(db: Session, timestamp: datetime) -> None:
+         db.flush()
+ 
+ 
++def called_consultorio_label(consultorio: Consultorio) -> str:
++    visible_name = (consultorio.nombre_visible or "").strip()
++    if visible_name:
++        return f"{visible_name} - {consultorio.codigo}"
++    return consultorio.codigo
++
++
+ def consultorio_label(db: Session, consultorio_id: UUID) -> str:
+     consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
+-    return consultorio.nombre_visible or consultorio.codigo
++    return called_consultorio_label(consultorio)
+ 
+ 
+ def consultorio_destination_text(label: str) -> str:
+@@ -837,12 +873,18 @@ def public_display_turnos(
+     mostrar_turnos, mostrar_proxima_cita = display_flags_for_clusters(screen_clusters)
+     proxima_cita_cluster_ids = [cluster.id for cluster in screen_clusters if cluster.muestra_proxima_cita]
+ 
+-    query = select(TurnoDisplay).where(
+-        TurnoDisplay.complejo_id == screen.complejo_id,
+-        TurnoDisplay.estado.notin_(("OCULTO", "CANCELADO")),
+-        TurnoDisplay.visible_hasta > timestamp,
+-        TurnoDisplay.ocultado_en.is_(None),
+-        TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
++    query = (
++        select(TurnoDisplay, Cita, Consultorio)
++        .outerjoin(Cita, Cita.id == TurnoDisplay.cita_id)
++        .outerjoin(Consultorio, Consultorio.id == TurnoDisplay.consultorio_id)
++        .where(
++            TurnoDisplay.complejo_id == screen.complejo_id,
++            TurnoDisplay.estado.notin_(("OCULTO", "CANCELADO")),
++            TurnoDisplay.visible_hasta > timestamp,
++            TurnoDisplay.ocultado_en.is_(None),
++            TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
++            or_(TurnoDisplay.cita_id.is_(None), Cita.estado != "CANCELADA"),
++        )
+     )
+ 
+     config = display_config(
+@@ -851,7 +893,7 @@ def public_display_turnos(
+         mostrar_proxima_cita=mostrar_proxima_cita,
+         max_citas_proximas=max_next_appointments_for_clusters(screen_clusters),
+     )
+-    turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).scalars())
++    turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).all())
+     proximas_citas = public_next_appointments(db, screen, proxima_cita_cluster_ids, timestamp) if mostrar_proxima_cita else []
+     db.commit()
+     return PublicDisplayResponse(
+@@ -862,13 +904,17 @@ def public_display_turnos(
+         turnos=[
+             PublicTurnoDisplay(
+                 turno=item.turno,
+-                consultorio=item.consultorio,
+-                texto=item.texto_visible,
++                consultorio=called_consultorio_label(consultorio) if consultorio is not None else item.consultorio,
++                texto=(
++                    render_turno_text(db, cita, called_consultorio_label(consultorio))
++                    if cita is not None and consultorio is not None
++                    else item.texto_visible
++                ),
+                 estado=item.estado,
+                 llamado_en=item.llamado_en,
+                 resaltado=item.resaltado_hasta > timestamp and item.estado == "NUEVO",
+             )
+-            for item in turnos
++            for item, cita, consultorio in turnos
+         ],
+         proximas_citas=proximas_citas,
+     )
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index d629baf..84ad467 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -2188,6 +2188,8 @@ def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(ge
+ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
+     ensure_cita_access(db, current_user, cita.id, business_today())
++    if cita.estado == "CANCELADA":
++        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se puede generar un QR para una cita cancelada.")
+     qr_token, token = generate_qr(db, cita)
+     record_audit_event(
+         db,
+diff --git a/access-manager/backend/app/schemas/display.py b/access-manager/backend/app/schemas/display.py
+index e474ef4..1fe01cf 100644
+--- a/access-manager/backend/app/schemas/display.py
++++ b/access-manager/backend/app/schemas/display.py
+@@ -117,6 +117,8 @@ class PublicProximaCitaDisplay(BaseModel):
+     medico_id: UUID
+     medico: str
+     consultorio: str
++    ubicacion_consultorio: str | None = None
++    codigo_consultorio: str | None = None
+     estado_atencion: str
+     proxima_cita_estimada: datetime | None = None
+     hora_estimada_proxima_cita: str | None = None
+diff --git a/access-manager/backend/app/services/folio_service.py b/access-manager/backend/app/services/folio_service.py
+index b782390..942f2ba 100644
+--- a/access-manager/backend/app/services/folio_service.py
++++ b/access-manager/backend/app/services/folio_service.py
+@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
+ 
+ from app.models.flow import Cita, Paciente
+ 
+-FOLIO_TURNO_ALPHABET = "ACDEFGHJKMNPQRTWXY234679"
++FOLIO_TURNO_LETTERS = "ACDEFGHJKMNPQRTWXY"
++FOLIO_TURNO_DIGITS = "234679"
++FOLIO_TURNO_ALPHABET = FOLIO_TURNO_LETTERS + FOLIO_TURNO_DIGITS
+ AMBIGUOUS_CHARS = set("IOBV108Ñ")
+ 
+ 
+@@ -28,7 +30,9 @@ def generate_patient_folio(db: Session) -> str:
+ 
+ def generate_turn_folio(db: Session, complejo_id: UUID, fecha_cita: date) -> str:
+     for _ in range(60):
+-        folio = random_code(4)
++        folio = "".join(secrets.choice(FOLIO_TURNO_LETTERS) for _ in range(2)) + "".join(
++            secrets.choice(FOLIO_TURNO_DIGITS) for _ in range(2)
++        )
+         exists = db.execute(
+             select(Cita.id).where(
+                 Cita.complejo_id == complejo_id,
+@@ -42,4 +46,8 @@ def generate_turn_folio(db: Session, complejo_id: UUID, fecha_cita: date) -> str
+ 
+ 
+ def is_valid_turn_folio(folio: str) -> bool:
+-    return len(folio) == 4 and all(char in FOLIO_TURNO_ALPHABET and char not in AMBIGUOUS_CHARS for char in folio)
++    return (
++        len(folio) == 4
++        and all(char in FOLIO_TURNO_LETTERS and char not in AMBIGUOUS_CHARS for char in folio[:2])
++        and all(char in FOLIO_TURNO_DIGITS and char not in AMBIGUOUS_CHARS for char in folio[2:])
++    )
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index e2967f4..c427249 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -13,7 +13,12 @@ from app.main import app
+ from app.models.display import PantallaTurnos, PantallaTurnosCluster
+ from app.models.operational import UsuarioRol
+ from app.services.seed_admins import main as seed_admins
+-from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
++from app.services.folio_service import (
++    FOLIO_TURNO_ALPHABET,
++    FOLIO_TURNO_DIGITS,
++    FOLIO_TURNO_LETTERS,
++    is_valid_turn_folio,
++)
+ 
+ 
+ @pytest.fixture(scope="session", autouse=True)
+@@ -365,6 +370,10 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
+             },
+         )
+     )
++    unready_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
++    assert unready_response.status_code == 200, unready_response.text
++    assert unready_response.json()["proximas_citas"] == []
++
+     checkin_b_response = client.post(
+         f"/api/citas/{cita_b['id']}/checkin-lobby",
+         headers=auth_headers,
+@@ -386,8 +395,16 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
+     assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
+     assert proximas[0]["medico"] == medico_a["nombre_visible"]
+     assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
++    assert proximas[0]["ubicacion_consultorio"] is None
++    assert proximas[0]["codigo_consultorio"] == consultorio_a["codigo"]
+     assert all(item["hora_estimada_proxima_cita"] for item in proximas[:2])
+ 
++    cancel_a_response = client.patch(f"/api/citas/{cita_a['id']}/cancelar", headers=auth_headers)
++    assert cancel_a_response.status_code == 200, cancel_a_response.text
++    after_cancel_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
++    assert after_cancel_response.status_code == 200, after_cancel_response.text
++    assert [item["folio_turno"] for item in after_cancel_response.json()["proximas_citas"]] == [cita_b["folio_turno"]]
++
+ 
+ def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
+     suffix = uuid4().hex[:8]
+@@ -1242,8 +1259,9 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+ 
+     llamado = assert_created(client.post(f"/api/citas/{cita_id}/llamar", headers=auth_headers))
+     assert len(llamado["turno"]) == 4
+-    assert llamado["consultorio"] == consultorio["nombre_visible"]
+-    assert llamado["texto"] == f"Paciente Paciente T* a consultorio Test {suffix}"
++    expected_called_consultorio = f"{consultorio['nombre_visible']} - {consultorio['codigo']}"
++    assert llamado["consultorio"] == expected_called_consultorio
++    assert llamado["texto"] == f"Paciente Paciente T* a consultorio Test {suffix} - {consultorio['codigo']}"
+     assert llamado["llamado_numero"] == 1
+     assert llamado["estado_cita"] == "AGENDADA"
+ 
+@@ -1268,6 +1286,12 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     assert reciente["estado_cita"] == "AGENDADA"
+     assert set(reciente.keys()) == {"cita_id", "turno", "consultorio", "texto", "llamado_en", "estado", "estado_cita", "llamado_numero"}
+ 
++    cancel_response = client.patch(f"/api/citas/{cita_id}/cancelar", headers=auth_headers)
++    assert cancel_response.status_code == 200, cancel_response.text
++    after_cancel_display = client.get(f"/api/public-display/display-{suffix}/turnos")
++    assert after_cancel_display.status_code == 200, after_cancel_display.text
++    assert all(item["turno"] != llamado["turno"] for item in after_cancel_display.json()["turnos"])
++
+     audit_response = client.get("/api/auditoria", headers=auth_headers)
+     assert audit_response.status_code == 200, audit_response.text
+     events = {item["evento"] for item in audit_response.json()}
+@@ -1381,7 +1405,7 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
+         )
+     )
+     llamado = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
+-    assert llamado["consultorio"] == consultorio["nombre_visible"]
++    assert llamado["consultorio"] == f"{consultorio['nombre_visible']} - {consultorio['codigo']}"
+ 
+     public_response = client.get(f"/api/public-display/display-legacy-{suffix}/turnos")
+     assert public_response.status_code == 200, public_response.text
+@@ -1640,6 +1664,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     cita = assert_created(client.post("/api/citas", headers=auth_headers, json=payload))
+     assert is_valid_turn_folio(cita["folio_turno"])
+     assert all(char in FOLIO_TURNO_ALPHABET for char in cita["folio_turno"])
++    assert all(char in FOLIO_TURNO_LETTERS for char in cita["folio_turno"][:2])
++    assert all(char in FOLIO_TURNO_DIGITS for char in cita["folio_turno"][2:])
+ 
+     kiosk_search_response = client.get(
+         "/api/citas/buscar",
+@@ -1665,6 +1691,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     espontanea_payload = {**payload, "tipo": "ESPONTANEA", "hora_cita": (appointment_at + timedelta(minutes=30)).time().replace(second=0, microsecond=0).isoformat(timespec="minutes")}
+     espontanea = assert_created(client.post("/api/citas?confirmar_duplicado=true", headers=auth_headers, json=espontanea_payload))
+     assert espontanea["tipo"] == "ESPONTANEA"
++    assert espontanea["folio_turno"] != cita["folio_turno"]
+ 
+     qr_response = assert_created(client.post(f"/api/citas/{cita['id']}/qr", headers=auth_headers))
+     token = qr_response["qr_payload"]
+@@ -1775,6 +1802,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+     cancel_response = client.patch(f"/api/citas/{cita['id']}/cancelar", headers=auth_headers)
+     assert cancel_response.status_code == 200, cancel_response.text
+     assert cancel_response.json()["estado"] == "CANCELADA"
++    cancelled_qr_response = client.post(f"/api/citas/{cita['id']}/qr", headers=auth_headers)
++    assert cancelled_qr_response.status_code == 409, cancelled_qr_response.text
+ 
+     cita_operativa_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
+     assert cita_operativa_response.status_code == 200, cita_operativa_response.text
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 5823ecc..12fead4 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -343,6 +343,8 @@ export type PublicDisplayProximaCita = {
+   medico_id: string;
+   medico: string;
+   consultorio: string;
++  ubicacion_consultorio?: string | null;
++  codigo_consultorio?: string | null;
+   estado_atencion: string;
+   proxima_cita_estimada?: string | null;
+   hora_estimada_proxima_cita?: string | null;
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 18293f8..71efd3f 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1167,8 +1167,6 @@ pre {
+   padding-left: 0;
+ }
+ 
+-.next-appointments-table th:nth-child(1),
+-.next-appointments-table td:nth-child(1),
+ .next-appointments-table th:nth-child(2),
+ .next-appointments-table td:nth-child(2) {
+   overflow: hidden;
+@@ -1176,6 +1174,25 @@ pre {
+   white-space: nowrap;
+ }
+ 
++.next-appointment-consultorio-detail {
++  display: grid;
++  gap: 0.18rem;
++  min-width: 0;
++}
++
++.next-appointment-consultorio-name {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.next-appointment-consultorio-detail small {
++  font-size: 0.95rem;
++  font-weight: 650;
++  line-height: 1.2;
++  opacity: 0.75;
++}
++
+ .next-appointments-table td:nth-child(4),
+ .next-appointments-table td:nth-child(5) {
+   white-space: nowrap;
+@@ -1219,9 +1236,9 @@ pre {
+   background: #ffffff;
+   border: 1px solid #d9e1ea;
+   border-radius: 8px;
+-  height: 240px;
+-  padding: 0.6rem;
+-  width: 240px;
++  height: auto;
++  max-width: 420px;
++  width: 100%;
+ }
+ 
+ .qr-reader-panel {
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index acb818c..d1ae222 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -301,6 +301,76 @@ function fileNameFor(cita: Cita | null) {
+   return `${cita.folio_turno}_${cita.fecha_cita}_${hora}.png`;
+ }
+ 
++function prefixedLocation(prefix: string, value: string) {
++  const text = value.trim();
++  return text.toLocaleLowerCase('es-MX').startsWith(prefix.toLocaleLowerCase('es-MX')) ? text : `${prefix} ${text}`;
++}
++
++function appointmentDateTimeLabel(cita: Cita) {
++  const [year, month, day] = cita.fecha_cita.split('-');
++  return `${day}/${month}/${year} ${cita.hora_cita.slice(0, 5)} hrs`;
++}
++
++function qrLocationLines(cita: Cita) {
++  const consultorio = consultorios.value.find((item) => item.id === cita.consultorio_id);
++  const piso = pisos.value.find((item) => item.id === cita.piso_id);
++  const torre = piso ? torres.value.find((item) => item.id === piso.torre_id) : undefined;
++  const lines: string[] = [];
++  if (torre) lines.push(prefixedLocation('Torre', torre.nombre));
++  if (piso) lines.push(prefixedLocation('Piso', piso.nombre_visible || String(piso.numero)));
++  if (consultorio) {
++    const visibleName = consultorio.nombre_visible?.trim();
++    lines.push(visibleName ? `${visibleName} - ${consultorio.codigo}` : consultorio.codigo);
++  } else if (cita.consultorio) {
++    lines.push(cita.consultorio);
++  }
++  return lines;
++}
++
++function loadQrImage(source: string) {
++  return new Promise<HTMLImageElement>((resolve, reject) => {
++    const image = new Image();
++    image.onload = () => resolve(image);
++    image.onerror = () => reject(new Error('No fue posible preparar la imagen del QR.'));
++    image.src = source;
++  });
++}
++
++function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
++  const words = text.split(/\s+/).filter(Boolean);
++  const lines: string[] = [];
++  let current = '';
++  for (const word of words) {
++    if (context.measureText(word).width > maxWidth) {
++      if (current) {
++        lines.push(current);
++        current = '';
++      }
++      let chunk = '';
++      for (const character of word) {
++        const candidateChunk = chunk + character;
++        if (chunk && context.measureText(candidateChunk).width > maxWidth) {
++          lines.push(chunk);
++          chunk = character;
++        } else {
++          chunk = candidateChunk;
++        }
++      }
++      current = chunk;
++      continue;
++    }
++    const candidate = current ? `${current} ${word}` : word;
++    if (current && context.measureText(candidate).width > maxWidth) {
++      lines.push(current);
++      current = word;
++    } else {
++      current = candidate;
++    }
++  }
++  if (current) lines.push(current);
++  return lines;
++}
++
+ function downloadQr() {
+   if (!qrDataUrl.value) return;
+   const link = document.createElement('a');
+@@ -309,18 +379,52 @@ function downloadQr() {
+   link.click();
+ }
+ 
+-async function renderQr(payload: string) {
+-  qrDataUrl.value = await QRCode.toDataURL(payload, { margin: 2, width: 240 });
++async function renderQr(payload: string, cita: Cita) {
++  const qrSize = 480;
++  const canvasWidth = 640;
++  const horizontalPadding = 40;
++  const qrSource = await QRCode.toDataURL(payload, { margin: 2, width: qrSize });
++  const qrImage = await loadQrImage(qrSource);
++  const measurementCanvas = document.createElement('canvas');
++  const measurementContext = measurementCanvas.getContext('2d');
++  if (!measurementContext) throw new Error('No fue posible preparar la imagen del QR.');
++  measurementContext.font = '600 24px Arial, sans-serif';
++  const detailLines = qrLocationLines(cita).flatMap((line) =>
++    wrapCanvasText(measurementContext, line, canvasWidth - horizontalPadding * 2),
++  );
++  const lineHeight = 34;
++  const qrTop = 76;
++  const detailsTop = qrTop + qrSize + 36;
++  const canvas = document.createElement('canvas');
++  canvas.width = canvasWidth;
++  canvas.height = detailsTop + detailLines.length * lineHeight + 34;
++  const context = canvas.getContext('2d');
++  if (!context) throw new Error('No fue posible preparar la imagen del QR.');
++
++  context.fillStyle = '#ffffff';
++  context.fillRect(0, 0, canvas.width, canvas.height);
++  context.fillStyle = '#111827';
++  context.textAlign = 'center';
++  context.textBaseline = 'middle';
++  context.font = '700 28px Arial, sans-serif';
++  context.fillText(appointmentDateTimeLabel(cita), canvas.width / 2, 38);
++  context.drawImage(qrImage, (canvas.width - qrSize) / 2, qrTop, qrSize, qrSize);
++  context.font = '600 24px Arial, sans-serif';
++  detailLines.forEach((line, index) => {
++    context.fillText(line, canvas.width / 2, detailsTop + index * lineHeight);
++  });
++  qrDataUrl.value = canvas.toDataURL('image/png');
+ }
+ 
+ async function showQr(cita: Cita) {
++  if (cita.estado === 'CANCELADA') return;
+   error.value = '';
+   message.value = '';
+   try {
+     const qr = await generarQr(cita.id);
+     qrPayload.value = qr.qr_payload;
+     selectedCita.value = cita;
+-    await renderQr(qr.qr_payload);
++    await renderQr(qr.qr_payload, cita);
+     ticket.value = null;
+     message.value = 'QR generado.';
+     await load();
+@@ -336,7 +440,7 @@ async function showTicket(cita: Cita) {
+     ticket.value = await getTicket(cita.id);
+     selectedCita.value = cita;
+     qrPayload.value = '';
+-    await renderQr(ticket.value.qr_payload);
++    await renderQr(ticket.value.qr_payload, cita);
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible generar el ticket.';
+   }
+@@ -557,7 +661,7 @@ onMounted(async () => {
+               </td>
+               <td>
+                 <div class="inline-actions">
+-                  <button class="small" type="button" @click="showQr(cita)">QR</button>
++                  <button class="small" type="button" :disabled="cita.estado === 'CANCELADA' || loading" @click="showQr(cita)">QR</button>
+                   <button class="small secondary" type="button" @click="showTicket(cita)">Ticket</button>
+                   <button class="small secondary" type="button" @click="run(() => checkinLobby(cita.id), 'Check-in registrado.')">Check-in</button>
+                   <button class="small secondary" type="button" @click="run(() => autorizarPasar(cita.id), 'Acceso autorizado.')">Autorizar</button>
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index e456d50..ebc8ee9 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -420,7 +420,13 @@ onUnmounted(() => {
+           </thead>
+           <tbody>
+             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
+-              <td>{{ item.consultorio }}</td>
++              <td>
++                <div class="next-appointment-consultorio-detail">
++                  <span class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
++                  <small v-if="item.ubicacion_consultorio">{{ item.ubicacion_consultorio }}</small>
++                  <small v-if="item.codigo_consultorio">{{ item.codigo_consultorio }}</small>
++                </div>
++              </td>
+               <td>{{ item.medico }}</td>
+               <td>
+                 <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">
+diff --git a/access-manager/frontend/src/views/PantallasTurnosView.vue b/access-manager/frontend/src/views/PantallasTurnosView.vue
+index 0921f40..f89c7d3 100644
+--- a/access-manager/frontend/src/views/PantallasTurnosView.vue
++++ b/access-manager/frontend/src/views/PantallasTurnosView.vue
+@@ -129,12 +129,8 @@ const filteredPisos = computed(() => {
+ });
+ 
+ const filteredClusters = computed(() => {
+-  if (!form.complejo_id || !form.piso_id) return [];
+-  return clusters.value.filter((item) => {
+-    if (item.complejo_id !== form.complejo_id) return false;
+-    if (item.piso_id !== form.piso_id) return false;
+-    return true;
+-  });
++  if (!form.complejo_id) return [];
++  return clusters.value.filter((item) => item.complejo_id === form.complejo_id);
+ });
+ 
+ const selectedClusters = computed(() => clusters.value.filter((item) => form.cluster_ids.includes(item.id)));
+@@ -173,7 +169,8 @@ function pisoLabel(item: Piso) {
+ }
+ 
+ function clusterLabel(item: ClusterTurnos) {
+-  return item.nombre;
++  const piso = pisos.value.find((candidate) => candidate.id === item.piso_id);
++  return piso ? `${item.nombre} - ${pisoLabel(piso)}` : item.nombre;
+ }
+ 
+ function selectedInstitution() {
+diff --git a/diff-2026-09-07_10-29-18.txt b/diff-2026-09-07_10-29-18.txt
+index 7008ad3..e69de29 100644
+--- a/diff-2026-09-07_10-29-18.txt
++++ b/diff-2026-09-07_10-29-18.txt
+@@ -1,177 +0,0 @@
+-diff --git a/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml b/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
+-index b1929b0..12b7369 100644
+---- a/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
+-+++ b/access-manager/app_medicos/android/app/src/main/AndroidManifest.xml
+-@@ -2,7 +2,7 @@
+-     <uses-permission android:name="android.permission.INTERNET" />
+- 
+-     <application
+--        android:label="App de Médicos"
+-+        android:label="CMC Médico"
+-         android:name="${applicationName}"
+-         android:icon="@mipmap/ic_launcher">
+-         <activity
+-diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+-index db77bb4..fd3c79f 100644
+-Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+-diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+-index 17987b7..bc066b5 100644
+-Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+-diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+-index 09d4391..6d5c9c8 100644
+-Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+-diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+-index d5f1c8d..21f8b81 100644
+-Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+-diff --git a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+-index 4d6372e..d349dc0 100644
+-Binary files a/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/app_medicos/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile-pwa/index.html b/access-manager/mobile-pwa/index.html
+-index 4013eaf..083b81e 100644
+---- a/access-manager/mobile-pwa/index.html
+-+++ b/access-manager/mobile-pwa/index.html
+-@@ -5,6 +5,8 @@
+-     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-     <meta name="theme-color" content="#145c8f" />
+-     <link rel="manifest" href="/mobile/manifest.webmanifest" />
+-+    <link rel="icon" type="image/png" href="/mobile/icon-512.png" />
+-+    <link rel="apple-touch-icon" href="/mobile/icon-512.png" />
+-     <title>Access Manager Mobile</title>
+-   </head>
+-   <body>
+-diff --git a/access-manager/mobile-pwa/public/manifest.webmanifest b/access-manager/mobile-pwa/public/manifest.webmanifest
+-index a37d7e2..cb268b6 100644
+---- a/access-manager/mobile-pwa/public/manifest.webmanifest
+-+++ b/access-manager/mobile-pwa/public/manifest.webmanifest
+-@@ -7,9 +7,9 @@
+-   "theme_color": "#145c8f",
+-   "icons": [
+-     {
+--      "src": "/mobile/icon.svg",
+--      "sizes": "any",
+--      "type": "image/svg+xml"
+-+      "src": "/mobile/icon-512.png",
+-+      "sizes": "512x512",
+-+      "type": "image/png"
+-     }
+-   ]
+- }
+-diff --git a/access-manager/mobile-pwa/src/App.vue b/access-manager/mobile-pwa/src/App.vue
+-index 2a38268..bd033ef 100644
+---- a/access-manager/mobile-pwa/src/App.vue
+-+++ b/access-manager/mobile-pwa/src/App.vue
+-@@ -10,6 +10,7 @@ type Screen = 'home' | 'scan' | 'search' | 'create';
+- const screen = ref<Screen>('home');
+- const apiStatus = ref('Verificando API...');
+- const version = import.meta.env.VITE_APP_VERSION ?? 'v0.2.0';
+-+const appIconUrl = `${import.meta.env.BASE_URL}capital-medical-center-qr-logo.png`;
+- 
+- const title = computed(() => {
+-   if (screen.value === 'scan') return 'Escanear QR';
+-@@ -32,7 +33,10 @@ onMounted(async () => {
+- <template>
+-   <main class="mobile-shell">
+-     <header>
+--      <strong>Access Manager</strong>
+-+      <div class="header-brand">
+-+        <img class="header-icon" :src="appIconUrl" alt="Capital Medical Center QR" />
+-+        <strong>Access Manager</strong>
+-+      </div>
+-       <div class="header-meta">
+-         <span>{{ title }}</span>
+-         <small>{{ apiStatus }} - {{ version }}</small>
+-diff --git a/access-manager/mobile-pwa/src/styles.css b/access-manager/mobile-pwa/src/styles.css
+-index 03c4447..5304095 100644
+---- a/access-manager/mobile-pwa/src/styles.css
+-+++ b/access-manager/mobile-pwa/src/styles.css
+-@@ -44,6 +44,21 @@ header {
+-   min-height: 48px;
+- }
+- 
+-+.header-brand {
+-+  align-items: center;
+-+  display: flex;
+-+  gap: 0.7rem;
+-+  min-width: 0;
+-+}
+-+
+-+.header-icon {
+-+  border-radius: 8px;
+-+  display: block;
+-+  height: 44px;
+-+  object-fit: cover;
+-+  width: 44px;
+-+}
+-+
+- header span {
+-   color: #5b6d7d;
+-   font-size: 0.9rem;
+-diff --git a/access-manager/mobile/README.md b/access-manager/mobile/README.md
+-index d919165..8d37944 100644
+---- a/access-manager/mobile/README.md
+-+++ b/access-manager/mobile/README.md
+-@@ -11,7 +11,7 @@ App Flutter Android para registrar llegada de pacientes desde un celular, sin in
+- - Validación y check-in siempre contra el servidor.
+- - Ticket PDF mediante impresora virtual.
+- - Log local SQLite sin datos personales del paciente: token QR, folio de cita, fecha/hora y login de recepción.
+--- Icono y pantalla de acceso con imagen de Clínicas Alfa.
+-+- Icono y pantalla de acceso con imagen de Capital Medical Center para lectura QR.
+- 
+- ## Servidor real
+- 
+-diff --git a/access-manager/mobile/android/app/src/main/AndroidManifest.xml b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+-index 32ad469..0df9e5d 100644
+---- a/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+-+++ b/access-manager/mobile/android/app/src/main/AndroidManifest.xml
+-@@ -3,7 +3,7 @@
+-     <uses-permission android:name="android.permission.INTERNET" />
+- 
+-     <application
+--        android:label="Capital Medical Center"
+-+        android:label="CMC Acceso QR"
+-         android:name="${applicationName}"
+-         android:icon="@mipmap/ic_launcher">
+-         <activity
+-diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+-index 1b7cc49..137ebe8 100644
+-Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+-index 5f5c843..2c79aef 100644
+-Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+-index f512f2d..638c1cb 100644
+-Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+-index 0d65038..838d2c0 100644
+-Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+-index 31a6468..2d25d19 100644
+-Binary files a/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png and b/access-manager/mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png differ
+-diff --git a/access-manager/mobile/lib/main.dart b/access-manager/mobile/lib/main.dart
+-index aef1bb6..b7ff915 100644
+---- a/access-manager/mobile/lib/main.dart
+-+++ b/access-manager/mobile/lib/main.dart
+-@@ -241,8 +241,9 @@ class _LoginScreenState extends State<LoginScreen> {
+-                 ClipRRect(
+-                   borderRadius: BorderRadius.circular(8),
+-                   child: Image.asset(
+--                    'assets/capital-logo-menu.png',
+--                    height: 92,
+-+                    'assets/capital-medical-center-qr-logo.png',
+-+                    height: 128,
+-+                    width: 128,
+-                     fit: BoxFit.cover,
+-                   ),
+-                 ),
+-diff --git a/access-manager/mobile/pubspec.yaml b/access-manager/mobile/pubspec.yaml
+-index 8fa5077..227ecd6 100644
+---- a/access-manager/mobile/pubspec.yaml
+-+++ b/access-manager/mobile/pubspec.yaml
+-@@ -66,6 +66,7 @@ flutter:
+- 
+-   assets:
+-     - assets/capital-logo-menu.png
+-+    - assets/capital-medical-center-qr-logo.png
+- 
+-   # To add assets to your application, add an assets section, like this:
+-   # assets:

@@ -129,12 +129,8 @@ const filteredPisos = computed(() => {
 });
 
 const filteredClusters = computed(() => {
-  if (!form.complejo_id || !form.piso_id) return [];
-  return clusters.value.filter((item) => {
-    if (item.complejo_id !== form.complejo_id) return false;
-    if (item.piso_id !== form.piso_id) return false;
-    return true;
-  });
+  if (!form.complejo_id) return [];
+  return clusters.value.filter((item) => item.complejo_id === form.complejo_id);
 });
 
 const selectedClusters = computed(() => clusters.value.filter((item) => form.cluster_ids.includes(item.id)));
@@ -173,7 +169,8 @@ function pisoLabel(item: Piso) {
 }
 
 function clusterLabel(item: ClusterTurnos) {
-  return item.nombre;
+  const piso = pisos.value.find((candidate) => candidate.id === item.piso_id);
+  return piso ? `${item.nombre} - ${pisoLabel(piso)}` : item.nombre;
 }
 
 function selectedInstitution() {

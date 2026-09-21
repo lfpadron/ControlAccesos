@@ -301,6 +301,76 @@ function fileNameFor(cita: Cita | null) {
   return `${cita.folio_turno}_${cita.fecha_cita}_${hora}.png`;
 }
 
+function prefixedLocation(prefix: string, value: string) {
+  const text = value.trim();
+  return text.toLocaleLowerCase('es-MX').startsWith(prefix.toLocaleLowerCase('es-MX')) ? text : `${prefix} ${text}`;
+}
+
+function appointmentDateTimeLabel(cita: Cita) {
+  const [year, month, day] = cita.fecha_cita.split('-');
+  return `${day}/${month}/${year} ${cita.hora_cita.slice(0, 5)} hrs`;
+}
+
+function qrLocationLines(cita: Cita) {
+  const consultorio = consultorios.value.find((item) => item.id === cita.consultorio_id);
+  const piso = pisos.value.find((item) => item.id === cita.piso_id);
+  const torre = piso ? torres.value.find((item) => item.id === piso.torre_id) : undefined;
+  const lines: string[] = [];
+  if (torre) lines.push(prefixedLocation('Torre', torre.nombre));
+  if (piso) lines.push(prefixedLocation('Piso', piso.nombre_visible || String(piso.numero)));
+  if (consultorio) {
+    const visibleName = consultorio.nombre_visible?.trim();
+    lines.push(visibleName ? `${visibleName} - ${consultorio.codigo}` : consultorio.codigo);
+  } else if (cita.consultorio) {
+    lines.push(cita.consultorio);
+  }
+  return lines;
+}
+
+function loadQrImage(source: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('No fue posible preparar la imagen del QR.'));
+    image.src = source;
+  });
+}
+
+function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    if (context.measureText(word).width > maxWidth) {
+      if (current) {
+        lines.push(current);
+        current = '';
+      }
+      let chunk = '';
+      for (const character of word) {
+        const candidateChunk = chunk + character;
+        if (chunk && context.measureText(candidateChunk).width > maxWidth) {
+          lines.push(chunk);
+          chunk = character;
+        } else {
+          chunk = candidateChunk;
+        }
+      }
+      current = chunk;
+      continue;
+    }
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && context.measureText(candidate).width > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function downloadQr() {
   if (!qrDataUrl.value) return;
   const link = document.createElement('a');
@@ -309,18 +379,52 @@ function downloadQr() {
   link.click();
 }
 
-async function renderQr(payload: string) {
-  qrDataUrl.value = await QRCode.toDataURL(payload, { margin: 2, width: 240 });
+async function renderQr(payload: string, cita: Cita) {
+  const qrSize = 480;
+  const canvasWidth = 640;
+  const horizontalPadding = 40;
+  const qrSource = await QRCode.toDataURL(payload, { margin: 2, width: qrSize });
+  const qrImage = await loadQrImage(qrSource);
+  const measurementCanvas = document.createElement('canvas');
+  const measurementContext = measurementCanvas.getContext('2d');
+  if (!measurementContext) throw new Error('No fue posible preparar la imagen del QR.');
+  measurementContext.font = '600 24px Arial, sans-serif';
+  const detailLines = qrLocationLines(cita).flatMap((line) =>
+    wrapCanvasText(measurementContext, line, canvasWidth - horizontalPadding * 2),
+  );
+  const lineHeight = 34;
+  const qrTop = 76;
+  const detailsTop = qrTop + qrSize + 36;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = detailsTop + detailLines.length * lineHeight + 34;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('No fue posible preparar la imagen del QR.');
+
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#111827';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = '700 28px Arial, sans-serif';
+  context.fillText(appointmentDateTimeLabel(cita), canvas.width / 2, 38);
+  context.drawImage(qrImage, (canvas.width - qrSize) / 2, qrTop, qrSize, qrSize);
+  context.font = '600 24px Arial, sans-serif';
+  detailLines.forEach((line, index) => {
+    context.fillText(line, canvas.width / 2, detailsTop + index * lineHeight);
+  });
+  qrDataUrl.value = canvas.toDataURL('image/png');
 }
 
 async function showQr(cita: Cita) {
+  if (cita.estado === 'CANCELADA') return;
   error.value = '';
   message.value = '';
   try {
     const qr = await generarQr(cita.id);
     qrPayload.value = qr.qr_payload;
     selectedCita.value = cita;
-    await renderQr(qr.qr_payload);
+    await renderQr(qr.qr_payload, cita);
     ticket.value = null;
     message.value = 'QR generado.';
     await load();
@@ -336,7 +440,7 @@ async function showTicket(cita: Cita) {
     ticket.value = await getTicket(cita.id);
     selectedCita.value = cita;
     qrPayload.value = '';
-    await renderQr(ticket.value.qr_payload);
+    await renderQr(ticket.value.qr_payload, cita);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible generar el ticket.';
   }
@@ -557,7 +661,7 @@ onMounted(async () => {
               </td>
               <td>
                 <div class="inline-actions">
-                  <button class="small" type="button" @click="showQr(cita)">QR</button>
+                  <button class="small" type="button" :disabled="cita.estado === 'CANCELADA' || loading" @click="showQr(cita)">QR</button>
                   <button class="small secondary" type="button" @click="showTicket(cita)">Ticket</button>
                   <button class="small secondary" type="button" @click="run(() => checkinLobby(cita.id), 'Check-in registrado.')">Check-in</button>
                   <button class="small secondary" type="button" @click="run(() => autorizarPasar(cita.id), 'Acceso autorizado.')">Autorizar</button>

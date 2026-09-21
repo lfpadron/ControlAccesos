@@ -343,6 +343,8 @@ export type PublicDisplayProximaCita = {
   medico_id: string;
   medico: string;
   consultorio: string;
+  ubicacion_consultorio?: string | null;
+  codigo_consultorio?: string | null;
   estado_atencion: string;
   proxima_cita_estimada?: string | null;
   hora_estimada_proxima_cita?: string | null;

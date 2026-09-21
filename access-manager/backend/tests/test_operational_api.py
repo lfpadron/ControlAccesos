@@ -13,7 +13,12 @@ from app.main import app
 from app.models.display import PantallaTurnos, PantallaTurnosCluster
 from app.models.operational import UsuarioRol
 from app.services.seed_admins import main as seed_admins
-from app.services.folio_service import FOLIO_TURNO_ALPHABET, is_valid_turn_folio
+from app.services.folio_service import (
+    FOLIO_TURNO_ALPHABET,
+    FOLIO_TURNO_DIGITS,
+    FOLIO_TURNO_LETTERS,
+    is_valid_turn_folio,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -365,6 +370,10 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
             },
         )
     )
+    unready_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
+    assert unready_response.status_code == 200, unready_response.text
+    assert unready_response.json()["proximas_citas"] == []
+
     checkin_b_response = client.post(
         f"/api/citas/{cita_b['id']}/checkin-lobby",
         headers=auth_headers,
@@ -386,7 +395,15 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
     assert [item["folio_turno"] for item in proximas[:2]] == [cita_a["folio_turno"], cita_b["folio_turno"]]
     assert proximas[0]["medico"] == medico_a["nombre_visible"]
     assert proximas[0]["estado_atencion"] == "NO_MOSTRAR"
+    assert proximas[0]["ubicacion_consultorio"] is None
+    assert proximas[0]["codigo_consultorio"] == consultorio_a["codigo"]
     assert all(item["hora_estimada_proxima_cita"] for item in proximas[:2])
+
+    cancel_a_response = client.patch(f"/api/citas/{cita_a['id']}/cancelar", headers=auth_headers)
+    assert cancel_a_response.status_code == 200, cancel_a_response.text
+    after_cancel_response = client.get(f"/api/public-display/{pantalla['codigo_dispositivo']}/turnos")
+    assert after_cancel_response.status_code == 200, after_cancel_response.text
+    assert [item["folio_turno"] for item in after_cancel_response.json()["proximas_citas"]] == [cita_b["folio_turno"]]
 
 
 def test_forced_password_change_flow(client: TestClient, auth_headers: dict[str, str]) -> None:
@@ -1242,8 +1259,9 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
 
     llamado = assert_created(client.post(f"/api/citas/{cita_id}/llamar", headers=auth_headers))
     assert len(llamado["turno"]) == 4
-    assert llamado["consultorio"] == consultorio["nombre_visible"]
-    assert llamado["texto"] == f"Paciente Paciente T* a consultorio Test {suffix}"
+    expected_called_consultorio = f"{consultorio['nombre_visible']} - {consultorio['codigo']}"
+    assert llamado["consultorio"] == expected_called_consultorio
+    assert llamado["texto"] == f"Paciente Paciente T* a consultorio Test {suffix} - {consultorio['codigo']}"
     assert llamado["llamado_numero"] == 1
     assert llamado["estado_cita"] == "AGENDADA"
 
@@ -1267,6 +1285,12 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     assert reciente["llamado_numero"] == 1
     assert reciente["estado_cita"] == "AGENDADA"
     assert set(reciente.keys()) == {"cita_id", "turno", "consultorio", "texto", "llamado_en", "estado", "estado_cita", "llamado_numero"}
+
+    cancel_response = client.patch(f"/api/citas/{cita_id}/cancelar", headers=auth_headers)
+    assert cancel_response.status_code == 200, cancel_response.text
+    after_cancel_display = client.get(f"/api/public-display/display-{suffix}/turnos")
+    assert after_cancel_display.status_code == 200, after_cancel_display.text
+    assert all(item["turno"] != llamado["turno"] for item in after_cancel_display.json()["turnos"])
 
     audit_response = client.get("/api/auditoria", headers=auth_headers)
     assert audit_response.status_code == 200, audit_response.text
@@ -1381,7 +1405,7 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
         )
     )
     llamado = assert_created(client.post(f"/api/citas/{cita['id']}/llamar", headers=auth_headers))
-    assert llamado["consultorio"] == consultorio["nombre_visible"]
+    assert llamado["consultorio"] == f"{consultorio['nombre_visible']} - {consultorio['codigo']}"
 
     public_response = client.get(f"/api/public-display/display-legacy-{suffix}/turnos")
     assert public_response.status_code == 200, public_response.text
@@ -1640,6 +1664,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     cita = assert_created(client.post("/api/citas", headers=auth_headers, json=payload))
     assert is_valid_turn_folio(cita["folio_turno"])
     assert all(char in FOLIO_TURNO_ALPHABET for char in cita["folio_turno"])
+    assert all(char in FOLIO_TURNO_LETTERS for char in cita["folio_turno"][:2])
+    assert all(char in FOLIO_TURNO_DIGITS for char in cita["folio_turno"][2:])
 
     kiosk_search_response = client.get(
         "/api/citas/buscar",
@@ -1665,6 +1691,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     espontanea_payload = {**payload, "tipo": "ESPONTANEA", "hora_cita": (appointment_at + timedelta(minutes=30)).time().replace(second=0, microsecond=0).isoformat(timespec="minutes")}
     espontanea = assert_created(client.post("/api/citas?confirmar_duplicado=true", headers=auth_headers, json=espontanea_payload))
     assert espontanea["tipo"] == "ESPONTANEA"
+    assert espontanea["folio_turno"] != cita["folio_turno"]
 
     qr_response = assert_created(client.post(f"/api/citas/{cita['id']}/qr", headers=auth_headers))
     token = qr_response["qr_payload"]
@@ -1775,6 +1802,8 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
     cancel_response = client.patch(f"/api/citas/{cita['id']}/cancelar", headers=auth_headers)
     assert cancel_response.status_code == 200, cancel_response.text
     assert cancel_response.json()["estado"] == "CANCELADA"
+    cancelled_qr_response = client.post(f"/api/citas/{cita['id']}/qr", headers=auth_headers)
+    assert cancelled_qr_response.status_code == 409, cancelled_qr_response.text
 
     cita_operativa_response = client.get(f"/api/citas/{cita['id']}", headers=auth_headers)
     assert cita_operativa_response.status_code == 200, cita_operativa_response.text

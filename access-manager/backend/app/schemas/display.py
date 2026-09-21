@@ -117,6 +117,8 @@ class PublicProximaCitaDisplay(BaseModel):
     medico_id: UUID
     medico: str
     consultorio: str
+    ubicacion_consultorio: str | None = None
+    codigo_consultorio: str | None = None
     estado_atencion: str
     proxima_cita_estimada: datetime | None = None
     hora_estimada_proxima_cita: str | None = None

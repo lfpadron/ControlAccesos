@@ -162,7 +162,7 @@ def screen_audit(db: Session, screen: PantallaTurnos) -> dict:
     return {**audit_safe_dict(screen), "cluster_ids": [str(cluster_id) for cluster_id in cluster_ids_for_screen(db, screen.id)]}
 
 
-def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_id: UUID | None, piso_id: UUID | None) -> None:
+def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_id: UUID | None, _piso_id: UUID | None) -> None:
     if not cluster_ids:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debe asignar al menos un clúster.")
     clusters = list(db.execute(select(ClusterTurnos).where(ClusterTurnos.id.in_(cluster_ids))).scalars())
@@ -173,8 +173,6 @@ def validate_clusters_for_screen(db: Session, cluster_ids: list[UUID], complejo_
     for cluster in clusters:
         if complejo_id is not None and cluster.complejo_id != complejo_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al campus indicado.")
-        if piso_id is not None and cluster.piso_id != piso_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El clúster no pertenece al piso indicado.")
 
 
 def cluster_ids_for_consultorio(db: Session, consultorio_id: UUID) -> list[UUID]:
@@ -436,6 +434,32 @@ def cita_scheduled_at_utc(cita: Cita, timezone: ZoneInfo) -> datetime:
     return datetime.combine(cita.fecha_cita, cita.hora_cita, tzinfo=timezone).astimezone(UTC)
 
 
+def prefixed_location(prefix: str, value: str) -> str:
+    text = value.strip()
+    if text.lower().startswith(prefix.lower()):
+        return text
+    return f"{prefix} {text}"
+
+
+def next_appointment_consultorio_details(
+    db: Session,
+    screen: PantallaTurnos,
+    consultorio: Consultorio,
+) -> tuple[str | None, str | None]:
+    screen_piso = db.get(Piso, screen.piso_id) if screen.piso_id is not None else None
+    consultorio_piso = db.get(Piso, consultorio.piso_id)
+    location: str | None = None
+    if consultorio_piso is not None:
+        if screen_piso is None or consultorio_piso.torre_id != screen_piso.torre_id:
+            torre = db.get(Torre, consultorio_piso.torre_id)
+            if torre is not None:
+                location = prefixed_location("Torre", torre.nombre)
+        elif consultorio_piso.id != screen_piso.id:
+            location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
+    code = consultorio.codigo if (consultorio.nombre_visible or "").strip() else None
+    return location, code
+
+
 def appointment_duration_minutes(cita: Cita, medico: Medico) -> int:
     return int(cita.duracion_estimada or medico.duracion_cita_minutos or 60)
 
@@ -457,6 +481,7 @@ def latest_called_finish_by_medico(
             Cita.medico_id.in_(medico_ids),
             Cita.complejo_id == complejo_id,
             Cita.consultorio_id.in_(consultorio_ids),
+            Cita.estado != "CANCELADA",
             TurnoDisplay.llamado_en <= timestamp,
         )
         .order_by(Cita.medico_id, TurnoDisplay.llamado_en.desc())
@@ -497,15 +522,9 @@ def public_next_appointments(
         .where(
             Cita.complejo_id == screen.complejo_id,
             Cita.consultorio_id.in_(consultorio_ids),
-            Cita.estado.notin_(TERMINAL_CALL_STATES),
-            Cita.estado != "CANCELADA",
+            Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
             Cita.fecha_hora_llamar.is_(None),
             ~called_appointment_exists,
-            or_(
-                Cita.fecha_hora_checkin.is_not(None),
-                Cita.fecha_hora_autorizar.is_not(None),
-                Cita.estado.in_(NEXT_APPOINTMENT_READY_STATES),
-            ),
             Medico.activo.is_(True),
             Consultorio.activo.is_(True),
             appointment_window_condition(start_at, end_at),
@@ -530,6 +549,8 @@ def public_next_appointments(
     response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
     for cita, medico, consultorio in rows:
         medico_name = medico_label(medico)
+        consultorio_name = (consultorio.nombre_visible or "").strip() or consultorio.codigo
+        consultorio_location, consultorio_code = next_appointment_consultorio_details(db, screen, consultorio)
         scheduled_at = cita_scheduled_at_utc(cita, timezone)
         estimated_at = max(next_start_by_medico.get(cita.medico_id, scheduled_at), scheduled_at, timestamp)
         next_start_by_medico[cita.medico_id] = estimated_at + timedelta(minutes=appointment_duration_minutes(cita, medico))
@@ -539,17 +560,25 @@ def public_next_appointments(
                 medico_name.lower(),
                 estimated_at,
                 PublicProximaCitaDisplay(
-                folio_turno=cita.folio_turno,
-                medico_id=medico.id,
-                medico=medico_name,
-                consultorio=consultorio.nombre_visible or consultorio.codigo,
-                estado_atencion=medico.estado_atencion,
-                proxima_cita_estimada=estimated_at,
-                hora_estimada_proxima_cita=estimated_time,
+                    folio_turno=cita.folio_turno,
+                    medico_id=medico.id,
+                    medico=medico_name,
+                    consultorio=consultorio_name,
+                    ubicacion_consultorio=consultorio_location,
+                    codigo_consultorio=consultorio_code,
+                    estado_atencion=medico.estado_atencion,
+                    proxima_cita_estimada=estimated_at,
+                    hora_estimada_proxima_cita=estimated_time,
                 ),
             )
         )
-    return [item for _medico_name, _estimated_at, item in sorted(response, key=lambda row: (row[0], row[1], row[2].consultorio, row[2].folio_turno))]
+    return [
+        item
+        for _medico_name, _estimated_at, item in sorted(
+            response,
+            key=lambda row: (row[2].consultorio.lower(), row[1], row[0], row[2].folio_turno),
+        )
+    ]
 
 
 def sync_turno_states(db: Session, timestamp: datetime) -> None:
@@ -569,9 +598,16 @@ def sync_turno_states(db: Session, timestamp: datetime) -> None:
         db.flush()
 
 
+def called_consultorio_label(consultorio: Consultorio) -> str:
+    visible_name = (consultorio.nombre_visible or "").strip()
+    if visible_name:
+        return f"{visible_name} - {consultorio.codigo}"
+    return consultorio.codigo
+
+
 def consultorio_label(db: Session, consultorio_id: UUID) -> str:
     consultorio = exists_or_404(db, Consultorio, consultorio_id, "Consultorio")
-    return consultorio.nombre_visible or consultorio.codigo
+    return called_consultorio_label(consultorio)
 
 
 def consultorio_destination_text(label: str) -> str:
@@ -837,12 +873,18 @@ def public_display_turnos(
     mostrar_turnos, mostrar_proxima_cita = display_flags_for_clusters(screen_clusters)
     proxima_cita_cluster_ids = [cluster.id for cluster in screen_clusters if cluster.muestra_proxima_cita]
 
-    query = select(TurnoDisplay).where(
-        TurnoDisplay.complejo_id == screen.complejo_id,
-        TurnoDisplay.estado.notin_(("OCULTO", "CANCELADO")),
-        TurnoDisplay.visible_hasta > timestamp,
-        TurnoDisplay.ocultado_en.is_(None),
-        TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
+    query = (
+        select(TurnoDisplay, Cita, Consultorio)
+        .outerjoin(Cita, Cita.id == TurnoDisplay.cita_id)
+        .outerjoin(Consultorio, Consultorio.id == TurnoDisplay.consultorio_id)
+        .where(
+            TurnoDisplay.complejo_id == screen.complejo_id,
+            TurnoDisplay.estado.notin_(("OCULTO", "CANCELADO")),
+            TurnoDisplay.visible_hasta > timestamp,
+            TurnoDisplay.ocultado_en.is_(None),
+            TurnoDisplay.cluster_espera_id.in_(screen_cluster_ids),
+            or_(TurnoDisplay.cita_id.is_(None), Cita.estado != "CANCELADA"),
+        )
     )
 
     config = display_config(
@@ -851,7 +893,7 @@ def public_display_turnos(
         mostrar_proxima_cita=mostrar_proxima_cita,
         max_citas_proximas=max_next_appointments_for_clusters(screen_clusters),
     )
-    turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).scalars())
+    turnos = list(db.execute(query.order_by(TurnoDisplay.llamado_en.desc()).limit(config.max_turnos_visibles)).all())
     proximas_citas = public_next_appointments(db, screen, proxima_cita_cluster_ids, timestamp) if mostrar_proxima_cita else []
     db.commit()
     return PublicDisplayResponse(
@@ -862,13 +904,17 @@ def public_display_turnos(
         turnos=[
             PublicTurnoDisplay(
                 turno=item.turno,
-                consultorio=item.consultorio,
-                texto=item.texto_visible,
+                consultorio=called_consultorio_label(consultorio) if consultorio is not None else item.consultorio,
+                texto=(
+                    render_turno_text(db, cita, called_consultorio_label(consultorio))
+                    if cita is not None and consultorio is not None
+                    else item.texto_visible
+                ),
                 estado=item.estado,
                 llamado_en=item.llamado_en,
                 resaltado=item.resaltado_hasta > timestamp and item.estado == "NUEVO",
             )
-            for item in turnos
+            for item, cita, consultorio in turnos
         ],
         proximas_citas=proximas_citas,
     )

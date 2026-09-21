@@ -2188,6 +2188,8 @@ def finalizar_consulta(cita_id: UUID, request: Request, db: Session = Depends(ge
 def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalWriteUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
     ensure_cita_access(db, current_user, cita.id, business_today())
+    if cita.estado == "CANCELADA":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se puede generar un QR para una cita cancelada.")
     qr_token, token = generate_qr(db, cita)
     record_audit_event(
         db,
