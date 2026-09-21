@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
@@ -331,13 +331,6 @@ def post_save_torre(db: Session, item: object) -> None:
         sync_torre_pisos(db, item)
 
 
-def post_save_piso(db: Session, item: object) -> None:
-    if not isinstance(item, Piso) or item.cuenta_con_pantallas:
-        return
-    consultorios_piso = select(Consultorio.id).where(Consultorio.piso_id == item.id)
-    db.execute(delete(ConsultorioCluster).where(ConsultorioCluster.consultorio_id.in_(consultorios_piso)))
-
-
 def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
     if data.get("complejo_id") is not None:
         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
@@ -471,7 +464,7 @@ def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) -> 
     )
 
 
-def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
+def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID) -> None:
     cluster_ids = unique_uuid_list(cluster_ids)
     if not cluster_ids:
         raise HTTPException(
@@ -483,11 +476,18 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
     if missing:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Clústers no encontrados: {', '.join(missing)}")
+    consultorio_campus = exists_or_404(db, Complejo, complejo_id, "Campus")
     for cluster in clusters:
-        if cluster.complejo_id != complejo_id or cluster.piso_id != piso_id:
+        cluster_campus = exists_or_404(db, Complejo, cluster.complejo_id, "Campus del clúster")
+        if cluster_campus.institucion_id != consultorio_campus.institucion_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
+                detail="Los clústers y el consultorio deben pertenecer a la misma institución.",
+            )
+        if cluster.complejo_id != complejo_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Los clústers y el consultorio deben pertenecer al mismo campus.",
             )
     if not active_display_exists_for_clusters(db, cluster_ids):
         raise HTTPException(
@@ -557,13 +557,10 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None 
     cluster_ids = data.get("cluster_ids")
     if codigo is None or complejo_id is None:
         return
-    if piso_id is not None and not piso_requires_display_clusters(db, piso_id):
-        data["cluster_ids"] = []
-        cluster_ids = []
     if cluster_ids is None and item is not None:
         cluster_ids = cluster_ids_for_consultorio(db, item.id)
-    if piso_id is not None and piso_requires_display_clusters(db, piso_id):
-        validate_clusters_for_scope(db, cluster_ids or [], complejo_id, piso_id)
+    if cluster_ids or (piso_id is not None and piso_requires_display_clusters(db, piso_id)):
+        validate_clusters_for_scope(db, cluster_ids or [], complejo_id)
     query = select(Consultorio).where(Consultorio.complejo_id == complejo_id, Consultorio.codigo == codigo)
     if item is not None:
         query = query.where(Consultorio.id != item.id)
@@ -914,7 +911,6 @@ pisos_router = create_crud_router(
         "PISO_EDITADO",
         "codigo",
         validator=validate_piso,
-        post_save=post_save_piso,
     )
 )
 clusters_turnos_router = create_crud_router(

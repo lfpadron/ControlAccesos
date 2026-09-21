@@ -1,0 +1,345 @@
+diff --git a/access-manager/backend/app/api/operational.py b/access-manager/backend/app/api/operational.py
+index f860830..b808a4d 100644
+--- a/access-manager/backend/app/api/operational.py
++++ b/access-manager/backend/app/api/operational.py
+@@ -9,7 +9,7 @@ from uuid import UUID
+ 
+ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+ from pydantic import BaseModel, ValidationError
+-from sqlalchemy import delete, func, or_, select
++from sqlalchemy import func, or_, select
+ from sqlalchemy.orm import Session
+ 
+ from app.constants import DEFAULT_INITIAL_SCREEN, MENU_SCREEN_KEYS
+@@ -331,13 +331,6 @@ def post_save_torre(db: Session, item: object) -> None:
+         sync_torre_pisos(db, item)
+ 
+ 
+-def post_save_piso(db: Session, item: object) -> None:
+-    if not isinstance(item, Piso) or item.cuenta_con_pantallas:
+-        return
+-    consultorios_piso = select(Consultorio.id).where(Consultorio.piso_id == item.id)
+-    db.execute(delete(ConsultorioCluster).where(ConsultorioCluster.consultorio_id.in_(consultorios_piso)))
+-
+-
+ def validate_torre(db: Session, data: dict[str, Any], item: object | None = None) -> None:
+     if data.get("complejo_id") is not None:
+         exists_or_404(db, Complejo, data["complejo_id"], "Campus")
+@@ -471,7 +464,7 @@ def active_display_exists_for_clusters(db: Session, cluster_ids: list[UUID]) ->
+     )
+ 
+ 
+-def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID, piso_id: UUID) -> None:
++def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_id: UUID) -> None:
+     cluster_ids = unique_uuid_list(cluster_ids)
+     if not cluster_ids:
+         raise HTTPException(
+@@ -483,11 +476,18 @@ def validate_clusters_for_scope(db: Session, cluster_ids: list[UUID], complejo_i
+     missing = [str(cluster_id) for cluster_id in cluster_ids if cluster_id not in found]
+     if missing:
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Clústers no encontrados: {', '.join(missing)}")
++    consultorio_campus = exists_or_404(db, Complejo, complejo_id, "Campus")
+     for cluster in clusters:
+-        if cluster.complejo_id != complejo_id or cluster.piso_id != piso_id:
++        cluster_campus = exists_or_404(db, Complejo, cluster.complejo_id, "Campus del clúster")
++        if cluster_campus.institucion_id != consultorio_campus.institucion_id:
++            raise HTTPException(
++                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++                detail="Los clústers y el consultorio deben pertenecer a la misma institución.",
++            )
++        if cluster.complejo_id != complejo_id:
+             raise HTTPException(
+                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+-                detail="Los clústers deben pertenecer al mismo campus y piso del consultorio.",
++                detail="Los clústers y el consultorio deben pertenecer al mismo campus.",
+             )
+     if not active_display_exists_for_clusters(db, cluster_ids):
+         raise HTTPException(
+@@ -557,13 +557,10 @@ def validate_consultorio(db: Session, data: dict[str, Any], item: object | None
+     cluster_ids = data.get("cluster_ids")
+     if codigo is None or complejo_id is None:
+         return
+-    if piso_id is not None and not piso_requires_display_clusters(db, piso_id):
+-        data["cluster_ids"] = []
+-        cluster_ids = []
+     if cluster_ids is None and item is not None:
+         cluster_ids = cluster_ids_for_consultorio(db, item.id)
+-    if piso_id is not None and piso_requires_display_clusters(db, piso_id):
+-        validate_clusters_for_scope(db, cluster_ids or [], complejo_id, piso_id)
++    if cluster_ids or (piso_id is not None and piso_requires_display_clusters(db, piso_id)):
++        validate_clusters_for_scope(db, cluster_ids or [], complejo_id)
+     query = select(Consultorio).where(Consultorio.complejo_id == complejo_id, Consultorio.codigo == codigo)
+     if item is not None:
+         query = query.where(Consultorio.id != item.id)
+@@ -914,7 +911,6 @@ pisos_router = create_crud_router(
+         "PISO_EDITADO",
+         "codigo",
+         validator=validate_piso,
+-        post_save=post_save_piso,
+     )
+ )
+ clusters_turnos_router = create_crud_router(
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index c427249..56deee7 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -935,6 +935,18 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+             },
+         )
+     )
++    piso_secundario = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 2)
++    cluster_secundario = assert_created(
++        client.post(
++            "/api/clusters-turnos",
++            headers=auth_headers,
++            json={
++                "complejo_id": complejo["id"],
++                "piso_id": piso_secundario["id"],
++                "nombre": f"Cluster Secundario {suffix}",
++            },
++        )
++    )
+     pantalla = assert_created(
+         client.post(
+             "/api/pantallas-turnos",
+@@ -1013,7 +1025,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+                 "codigo": f"C-{suffix}",
+                 "nombre_visible": f"Consultorio Test {suffix}",
+                 "notas": f"Nota consultorio {suffix}",
+-                "cluster_ids": [cluster["id"]],
++                "cluster_ids": [cluster["id"], cluster_secundario["id"]],
+             },
+         )
+     )
+@@ -1038,8 +1050,8 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+     )
+     assert consulta_con_cluster.status_code == 200, consulta_con_cluster.text
+     consultorio_asignado = next(item for item in consulta_con_cluster.json() if item["id"] == consultorio["id"])
+-    assert consultorio_asignado["cluster_ids"] == [cluster["id"]]
+-    assert consultorio_asignado["clusters"][0]["id"] == cluster["id"]
++    assert set(consultorio_asignado["cluster_ids"]) == {cluster["id"], cluster_secundario["id"]}
++    assert {item["id"] for item in consultorio_asignado["clusters"]} == {cluster["id"], cluster_secundario["id"]}
+ 
+     consulta_por_piso = client.get(
+         "/api/consultas-clusters-consultorios/por-piso",
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index 71efd3f..a33aeee 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -484,6 +484,37 @@ input[readonly] {
+   width: auto;
+ }
+ 
++.catalog-multiselect {
++  border: 1px solid #c6d1dd;
++  border-radius: 6px;
++  display: grid;
++  max-height: 260px;
++  overflow-y: auto;
++}
++
++.catalog-multiselect-option {
++  align-items: center;
++  border-bottom: 1px solid #e5eaf0;
++  color: #17202a;
++  display: grid;
++  gap: 0.65rem;
++  grid-template-columns: auto minmax(0, 1fr);
++  padding: 0.65rem 0.75rem;
++}
++
++.catalog-multiselect-option:last-child {
++  border-bottom: 0;
++}
++
++.catalog-multiselect-option:has(input:checked) {
++  background: #f0f6ff;
++}
++
++.catalog-multiselect-option input {
++  margin: 0;
++  width: auto;
++}
++
+ .permission-empty {
+   color: #8a9bae;
+   display: inline-flex;
+diff --git a/access-manager/frontend/src/views/CatalogView.vue b/access-manager/frontend/src/views/CatalogView.vue
+index 84c8a94..a651b90 100644
+--- a/access-manager/frontend/src/views/CatalogView.vue
++++ b/access-manager/frontend/src/views/CatalogView.vue
+@@ -160,9 +160,8 @@ const scopedTorres = computed(() => {
+ const scopedClusters = computed(() => {
+   if (!config.value.institutionScoped) return lookups['clusters-turnos'] ?? [];
+   const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
+-  const pisoId = typeof form.piso_id === 'string' ? form.piso_id : '';
+-  if (!complejoId || !pisoId) return [];
+-  return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId && item.piso_id === pisoId);
++  if (!complejoId) return [];
++  return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId);
+ });
+ 
+ const userLocationScope = computed(() =>
+@@ -262,6 +261,11 @@ function currentFloorOption() {
+   return floorForId(form.piso_id);
+ }
+ 
++function clusterOptionLabel(item: LookupOption) {
++  const piso = floorForId(item.piso_id);
++  return piso ? `${item.label} · ${piso.label}` : item.label;
++}
++
+ const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
+ const currentFloorHasScreens = computed(() => {
+   const piso = currentFloorOption();
+@@ -394,8 +398,8 @@ function usesCustomField(field: CatalogField) {
+   return usesCustomLocationControl(field) || isScopedClusterField(field);
+ }
+ 
+-function isClusterAssignmentBlocked(field: CatalogField) {
+-  return Boolean(config.value.key === 'consultorios' && isScopedClusterField(field) && form.piso_id && !currentFloorHasScreens.value);
++function isClusterAssignmentRequired(field: CatalogField) {
++  return Boolean(field.required && config.value.key === 'consultorios' && isScopedClusterField(field) && currentFloorHasScreens.value);
+ }
+ 
+ function resetScopedTorre() {
+@@ -415,12 +419,8 @@ function resetScopedPiso() {
+ function pruneScopedClusters() {
+   if (!Array.isArray(form.cluster_ids)) return;
+   const clusters = lookups['clusters-turnos'] ?? [];
+-  if (config.value.key === 'consultorios' && form.piso_id && !currentFloorHasScreens.value) {
+-    form.cluster_ids = [];
+-    return;
+-  }
+   if (!clusters.length) return;
+-  if (!form.complejo_id || !form.piso_id) {
++  if (!form.complejo_id) {
+     form.cluster_ids = [];
+     return;
+   }
+@@ -623,7 +623,7 @@ function selectOptions(field: CatalogField): SelectOption[] {
+     return scopedPisos.value.map((item) => ({ value: item.id, label: item.label }));
+   }
+   if (config.value.institutionScoped && field.lookup === 'clusters-turnos') {
+-    return scopedClusters.value.map((item) => ({ value: item.id, label: item.label }));
++    return scopedClusters.value.map((item) => ({ value: item.id, label: clusterOptionLabel(item) }));
+   }
+   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
+ }
+@@ -677,6 +677,20 @@ function updateMultiselect(name: string, event: Event) {
+   form[name] = [...(event.target as HTMLSelectElement).selectedOptions].map((option) => option.value);
+ }
+ 
++function multiselectHasValue(name: string, value: string) {
++  return Array.isArray(form[name]) && form[name].includes(value);
++}
++
++function updateMultiselectCheckbox(name: string, value: string, event: Event) {
++  const selected = new Set(Array.isArray(form[name]) ? form[name].filter((item): item is string => typeof item === 'string') : []);
++  if ((event.target as HTMLInputElement).checked) {
++    selected.add(value);
++  } else {
++    selected.delete(value);
++  }
++  form[name] = [...selected];
++}
++
+ function normalizePayload() {
+   const payload: Record<string, unknown> = {};
+   for (const field of config.value.fields) {
+@@ -702,10 +716,6 @@ function normalizePayload() {
+       continue;
+     }
+     if (field.type === 'multiselect') {
+-      if (config.value.key === 'consultorios' && field.name === 'cluster_ids' && !currentFloorHasScreens.value) {
+-        payload[field.name] = [];
+-        continue;
+-      }
+       payload[field.name] = Array.isArray(value) ? value : [];
+       continue;
+     }
+@@ -719,6 +729,16 @@ function validatePayload(payload: Record<string, unknown>) {
+     return 'Seleccione Turnos, Próxima cita o ambos.';
+   }
+   for (const field of config.value.fields) {
++    if (field.type === 'multiselect' && field.name in payload) {
++      const value = payload[field.name];
++      const required =
++        config.value.key === 'consultorios' && field.name === 'cluster_ids'
++          ? isClusterAssignmentRequired(field)
++          : Boolean(field.required);
++      if (required && (!Array.isArray(value) || value.length === 0)) {
++        return `Seleccione al menos una opción en ${field.label}.`;
++      }
++    }
+     if (field.type === 'number' && field.name in payload) {
+       const value = payload[field.name];
+       if (field.required && (value === null || value === undefined || value === '')) {
+@@ -841,14 +861,15 @@ function optionLabel(key: LookupKey | undefined, value: unknown) {
+   return lookups[key]?.find((item) => item.id === value)?.label ?? String(value);
+ }
+ 
+-function firstClusterLabel(value: unknown) {
++function clusterLabels(value: unknown) {
+   const clusterIds = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+-  const firstClusterId = clusterIds[0];
+-  if (!firstClusterId) {
+-    return 'Sin clúster';
+-  }
+-  const label = lookups['clusters-turnos']?.find((item) => item.id === firstClusterId)?.label ?? firstClusterId;
+-  return clusterIds.length > 1 ? `+ ${label}` : label;
++  if (!clusterIds.length) return 'Sin clúster';
++  return clusterIds
++    .map((clusterId) => {
++      const cluster = lookups['clusters-turnos']?.find((item) => item.id === clusterId);
++      return cluster ? clusterOptionLabel(cluster) : clusterId;
++    })
++    .join(', ');
+ }
+ 
+ function cellValue(row: Row, column: CatalogColumn) {
+@@ -857,7 +878,7 @@ function cellValue(row: Row, column: CatalogColumn) {
+     return value ? column.trueLabel ?? 'Activo' : column.falseLabel ?? 'Inactivo';
+   }
+   if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
+-    return firstClusterLabel(value);
++    return clusterLabels(value);
+   }
+   if (column.options) {
+     return staticOptionLabel(column.options, value);
+@@ -959,22 +980,19 @@ onMounted(loadData);
+               {{ item.label }}
+             </option>
+           </select>
+-          <select
+-            v-else-if="isScopedClusterField(field)"
+-            :id="fieldId(field)"
+-            :name="fieldName(field)"
+-            :value="Array.isArray(form[field.name]) ? form[field.name] : []"
+-            :required="field.required && !isClusterAssignmentBlocked(field)"
+-            :disabled="!form.complejo_id || !form.piso_id || isClusterAssignmentBlocked(field)"
+-            multiple
+-            size="5"
+-            @change="updateMultiselect(field.name, $event)"
+-          >
+-            <option v-for="item in scopedClusters" :key="item.id" :value="item.id">
+-              {{ item.label }}
+-            </option>
+-          </select>
+-          <p v-if="isClusterAssignmentBlocked(field)" class="message">Asignación a clústers bloqueada para pisos sin pantallas.</p>
++          <div v-else-if="isScopedClusterField(field)" :id="fieldId(field)" class="catalog-multiselect">
++            <label v-for="item in scopedClusters" :key="item.id" class="catalog-multiselect-option">
++              <input
++                type="checkbox"
++                :name="fieldName(field)"
++                :checked="multiselectHasValue(field.name, item.id)"
++                :disabled="!form.complejo_id"
++                @change="updateMultiselectCheckbox(field.name, item.id, $event)"
++              />
++              <span>{{ clusterOptionLabel(item) }}</span>
++            </label>
++            <p v-if="form.complejo_id && scopedClusters.length === 0" class="message">No hay clústers disponibles en este campus.</p>
++          </div>
+           <textarea
+             v-else-if="!usesCustomField(field) && field.type === 'textarea'"
+             :id="fieldId(field)"

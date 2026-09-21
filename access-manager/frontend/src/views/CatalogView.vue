@@ -160,9 +160,8 @@ const scopedTorres = computed(() => {
 const scopedClusters = computed(() => {
   if (!config.value.institutionScoped) return lookups['clusters-turnos'] ?? [];
   const complejoId = typeof form.complejo_id === 'string' ? form.complejo_id : '';
-  const pisoId = typeof form.piso_id === 'string' ? form.piso_id : '';
-  if (!complejoId || !pisoId) return [];
-  return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId && item.piso_id === pisoId);
+  if (!complejoId) return [];
+  return (lookups['clusters-turnos'] ?? []).filter((item) => item.complejo_id === complejoId);
 });
 
 const userLocationScope = computed(() =>
@@ -260,6 +259,11 @@ function currentTowerOption() {
 
 function currentFloorOption() {
   return floorForId(form.piso_id);
+}
+
+function clusterOptionLabel(item: LookupOption) {
+  const piso = floorForId(item.piso_id);
+  return piso ? `${item.label} · ${piso.label}` : item.label;
 }
 
 const currentTowerLabel = computed(() => currentTowerOption()?.label ?? '');
@@ -394,8 +398,8 @@ function usesCustomField(field: CatalogField) {
   return usesCustomLocationControl(field) || isScopedClusterField(field);
 }
 
-function isClusterAssignmentBlocked(field: CatalogField) {
-  return Boolean(config.value.key === 'consultorios' && isScopedClusterField(field) && form.piso_id && !currentFloorHasScreens.value);
+function isClusterAssignmentRequired(field: CatalogField) {
+  return Boolean(field.required && config.value.key === 'consultorios' && isScopedClusterField(field) && currentFloorHasScreens.value);
 }
 
 function resetScopedTorre() {
@@ -415,12 +419,8 @@ function resetScopedPiso() {
 function pruneScopedClusters() {
   if (!Array.isArray(form.cluster_ids)) return;
   const clusters = lookups['clusters-turnos'] ?? [];
-  if (config.value.key === 'consultorios' && form.piso_id && !currentFloorHasScreens.value) {
-    form.cluster_ids = [];
-    return;
-  }
   if (!clusters.length) return;
-  if (!form.complejo_id || !form.piso_id) {
+  if (!form.complejo_id) {
     form.cluster_ids = [];
     return;
   }
@@ -623,7 +623,7 @@ function selectOptions(field: CatalogField): SelectOption[] {
     return scopedPisos.value.map((item) => ({ value: item.id, label: item.label }));
   }
   if (config.value.institutionScoped && field.lookup === 'clusters-turnos') {
-    return scopedClusters.value.map((item) => ({ value: item.id, label: item.label }));
+    return scopedClusters.value.map((item) => ({ value: item.id, label: clusterOptionLabel(item) }));
   }
   return (lookups[field.lookup ?? 'usuarios'] ?? []).map((item) => ({ value: item.id, label: item.label }));
 }
@@ -677,6 +677,20 @@ function updateMultiselect(name: string, event: Event) {
   form[name] = [...(event.target as HTMLSelectElement).selectedOptions].map((option) => option.value);
 }
 
+function multiselectHasValue(name: string, value: string) {
+  return Array.isArray(form[name]) && form[name].includes(value);
+}
+
+function updateMultiselectCheckbox(name: string, value: string, event: Event) {
+  const selected = new Set(Array.isArray(form[name]) ? form[name].filter((item): item is string => typeof item === 'string') : []);
+  if ((event.target as HTMLInputElement).checked) {
+    selected.add(value);
+  } else {
+    selected.delete(value);
+  }
+  form[name] = [...selected];
+}
+
 function normalizePayload() {
   const payload: Record<string, unknown> = {};
   for (const field of config.value.fields) {
@@ -702,10 +716,6 @@ function normalizePayload() {
       continue;
     }
     if (field.type === 'multiselect') {
-      if (config.value.key === 'consultorios' && field.name === 'cluster_ids' && !currentFloorHasScreens.value) {
-        payload[field.name] = [];
-        continue;
-      }
       payload[field.name] = Array.isArray(value) ? value : [];
       continue;
     }
@@ -719,6 +729,16 @@ function validatePayload(payload: Record<string, unknown>) {
     return 'Seleccione Turnos, Próxima cita o ambos.';
   }
   for (const field of config.value.fields) {
+    if (field.type === 'multiselect' && field.name in payload) {
+      const value = payload[field.name];
+      const required =
+        config.value.key === 'consultorios' && field.name === 'cluster_ids'
+          ? isClusterAssignmentRequired(field)
+          : Boolean(field.required);
+      if (required && (!Array.isArray(value) || value.length === 0)) {
+        return `Seleccione al menos una opción en ${field.label}.`;
+      }
+    }
     if (field.type === 'number' && field.name in payload) {
       const value = payload[field.name];
       if (field.required && (value === null || value === undefined || value === '')) {
@@ -841,14 +861,15 @@ function optionLabel(key: LookupKey | undefined, value: unknown) {
   return lookups[key]?.find((item) => item.id === value)?.label ?? String(value);
 }
 
-function firstClusterLabel(value: unknown) {
+function clusterLabels(value: unknown) {
   const clusterIds = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-  const firstClusterId = clusterIds[0];
-  if (!firstClusterId) {
-    return 'Sin clúster';
-  }
-  const label = lookups['clusters-turnos']?.find((item) => item.id === firstClusterId)?.label ?? firstClusterId;
-  return clusterIds.length > 1 ? `+ ${label}` : label;
+  if (!clusterIds.length) return 'Sin clúster';
+  return clusterIds
+    .map((clusterId) => {
+      const cluster = lookups['clusters-turnos']?.find((item) => item.id === clusterId);
+      return cluster ? clusterOptionLabel(cluster) : clusterId;
+    })
+    .join(', ');
 }
 
 function cellValue(row: Row, column: CatalogColumn) {
@@ -857,7 +878,7 @@ function cellValue(row: Row, column: CatalogColumn) {
     return value ? column.trueLabel ?? 'Activo' : column.falseLabel ?? 'Inactivo';
   }
   if (config.value.key === 'consultorios' && column.name === 'cluster_ids') {
-    return firstClusterLabel(value);
+    return clusterLabels(value);
   }
   if (column.options) {
     return staticOptionLabel(column.options, value);
@@ -959,22 +980,19 @@ onMounted(loadData);
               {{ item.label }}
             </option>
           </select>
-          <select
-            v-else-if="isScopedClusterField(field)"
-            :id="fieldId(field)"
-            :name="fieldName(field)"
-            :value="Array.isArray(form[field.name]) ? form[field.name] : []"
-            :required="field.required && !isClusterAssignmentBlocked(field)"
-            :disabled="!form.complejo_id || !form.piso_id || isClusterAssignmentBlocked(field)"
-            multiple
-            size="5"
-            @change="updateMultiselect(field.name, $event)"
-          >
-            <option v-for="item in scopedClusters" :key="item.id" :value="item.id">
-              {{ item.label }}
-            </option>
-          </select>
-          <p v-if="isClusterAssignmentBlocked(field)" class="message">Asignación a clústers bloqueada para pisos sin pantallas.</p>
+          <div v-else-if="isScopedClusterField(field)" :id="fieldId(field)" class="catalog-multiselect">
+            <label v-for="item in scopedClusters" :key="item.id" class="catalog-multiselect-option">
+              <input
+                type="checkbox"
+                :name="fieldName(field)"
+                :checked="multiselectHasValue(field.name, item.id)"
+                :disabled="!form.complejo_id"
+                @change="updateMultiselectCheckbox(field.name, item.id, $event)"
+              />
+              <span>{{ clusterOptionLabel(item) }}</span>
+            </label>
+            <p v-if="form.complejo_id && scopedClusters.length === 0" class="message">No hay clústers disponibles en este campus.</p>
+          </div>
           <textarea
             v-else-if="!usesCustomField(field) && field.type === 'textarea'"
             :id="fieldId(field)"

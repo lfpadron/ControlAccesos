@@ -935,6 +935,18 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             },
         )
     )
+    piso_secundario = next(item for item in pisos_response.json() if item["torre_id"] == torre["id"] and item["numero"] == 2)
+    cluster_secundario = assert_created(
+        client.post(
+            "/api/clusters-turnos",
+            headers=auth_headers,
+            json={
+                "complejo_id": complejo["id"],
+                "piso_id": piso_secundario["id"],
+                "nombre": f"Cluster Secundario {suffix}",
+            },
+        )
+    )
     pantalla = assert_created(
         client.post(
             "/api/pantallas-turnos",
@@ -1013,7 +1025,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
                 "codigo": f"C-{suffix}",
                 "nombre_visible": f"Consultorio Test {suffix}",
                 "notas": f"Nota consultorio {suffix}",
-                "cluster_ids": [cluster["id"]],
+                "cluster_ids": [cluster["id"], cluster_secundario["id"]],
             },
         )
     )
@@ -1038,8 +1050,8 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
     )
     assert consulta_con_cluster.status_code == 200, consulta_con_cluster.text
     consultorio_asignado = next(item for item in consulta_con_cluster.json() if item["id"] == consultorio["id"])
-    assert consultorio_asignado["cluster_ids"] == [cluster["id"]]
-    assert consultorio_asignado["clusters"][0]["id"] == cluster["id"]
+    assert set(consultorio_asignado["cluster_ids"]) == {cluster["id"], cluster_secundario["id"]}
+    assert {item["id"] for item in consultorio_asignado["clusters"]} == {cluster["id"], cluster_secundario["id"]}
 
     consulta_por_piso = client.get(
         "/api/consultas-clusters-consultorios/por-piso",
