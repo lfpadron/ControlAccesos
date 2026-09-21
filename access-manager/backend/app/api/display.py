@@ -453,7 +453,9 @@ def next_appointment_consultorio_details(
         if screen_piso is None or consultorio_piso.torre_id != screen_piso.torre_id:
             torre = db.get(Torre, consultorio_piso.torre_id)
             if torre is not None:
-                location = prefixed_location("Torre", torre.nombre)
+                torre_location = prefixed_location("Torre", torre.nombre)
+                piso_location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
+                location = f"{torre_location} - {piso_location}"
         elif consultorio_piso.id != screen_piso.id:
             location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
     code = consultorio.codigo if (consultorio.nombre_visible or "").strip() else None

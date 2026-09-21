@@ -34,4 +34,4 @@ def test_next_appointment_consultorio_location_details() -> None:
     other_tower = SimpleNamespace(piso_id=other_tower_floor_id, codigo="B03", nombre_visible=None)
 
     assert next_appointment_consultorio_details(db, screen, same_tower) == ("Piso Nivel 2", "202")
-    assert next_appointment_consultorio_details(db, screen, other_tower) == ("Torre B", None)
+    assert next_appointment_consultorio_details(db, screen, other_tower) == ("Torre B - Piso 3", None)

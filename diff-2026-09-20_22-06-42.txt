@@ -1,0 +1,25 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 14257d6..6dff803 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -453,7 +453,9 @@ def next_appointment_consultorio_details(
+         if screen_piso is None or consultorio_piso.torre_id != screen_piso.torre_id:
+             torre = db.get(Torre, consultorio_piso.torre_id)
+             if torre is not None:
+-                location = prefixed_location("Torre", torre.nombre)
++                torre_location = prefixed_location("Torre", torre.nombre)
++                piso_location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
++                location = f"{torre_location} - {piso_location}"
+         elif consultorio_piso.id != screen_piso.id:
+             location = prefixed_location("Piso", piso_label(consultorio_piso) or str(consultorio_piso.numero))
+     code = consultorio.codigo if (consultorio.nombre_visible or "").strip() else None
+diff --git a/access-manager/backend/tests/test_display_helpers.py b/access-manager/backend/tests/test_display_helpers.py
+index d9616e6..32db17a 100644
+--- a/access-manager/backend/tests/test_display_helpers.py
++++ b/access-manager/backend/tests/test_display_helpers.py
+@@ -34,4 +34,4 @@ def test_next_appointment_consultorio_location_details() -> None:
+     other_tower = SimpleNamespace(piso_id=other_tower_floor_id, codigo="B03", nombre_visible=None)
+ 
+     assert next_appointment_consultorio_details(db, screen, same_tower) == ("Piso Nivel 2", "202")
+-    assert next_appointment_consultorio_details(db, screen, other_tower) == ("Torre B", None)
++    assert next_appointment_consultorio_details(db, screen, other_tower) == ("Torre B - Piso 3", None)
