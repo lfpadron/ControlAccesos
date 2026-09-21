@@ -41,6 +41,7 @@ from app.schemas.flow import (
     CitaUpdate,
     MedicoEstadoRead,
     MedicoEstadoUpdate,
+    metodos_confirmacion_disponibles,
     MobileSessionResponse,
     PacienteCreate,
     PacienteRead,
@@ -162,6 +163,18 @@ def normalized_digits(value: str | None) -> str | None:
         return None
     digits = "".join(char for char in value if char.isdigit())
     return digits or None
+
+
+def normalized_phone_column(column):
+    return func.replace(
+        func.replace(
+            func.replace(func.replace(func.replace(func.coalesce(column, ""), " ", ""), "-", ""), "(", ""),
+            ")",
+            "",
+        ),
+        "+",
+        "",
+    )
 
 
 def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
@@ -832,10 +845,27 @@ def unique_citas(rows) -> list[Cita]:
 
 
 def validate_patient_contact(paciente: Paciente) -> None:
-    if not paciente.celular and paciente.fecha_nacimiento is None:
+    if not paciente.telefono_1 or not paciente.celular:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Debe indicar celular o fecha de nacimiento.",
+            detail="Teléfono 1 y Teléfono 2 son obligatorios.",
+        )
+
+
+def validate_patient_confirmation_method(paciente: Paciente) -> None:
+    if paciente.metodo_confirmacion is None:
+        return
+    available = metodos_confirmacion_disponibles(
+        paciente.telefono_1,
+        paciente.tipo_telefono_1,
+        paciente.celular,
+        paciente.tipo_telefono_2,
+        paciente.correo_electronico,
+    )
+    if paciente.metodo_confirmacion not in available:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El método de envío y confirmación no corresponde a los datos de contacto capturados.",
         )
 
 
@@ -1005,7 +1035,9 @@ def query_citas(
             query = query.where(
                 or_(
                     full_name.like(term),
+                    func.lower(Paciente.telefono_1).like(term),
                     func.lower(Paciente.celular).like(term),
+                    func.lower(Paciente.correo_electronico).like(term),
                     func.lower(Paciente.folio_paciente).like(term),
                 )
             )
@@ -1015,16 +1047,12 @@ def query_citas(
             patient_joined = True
         digits = normalized_digits(celular)
         if digits:
-            celular_digits = func.replace(
-                func.replace(
-                    func.replace(func.replace(func.replace(func.coalesce(Paciente.celular, ""), " ", ""), "-", ""), "(", ""),
-                    ")",
-                    "",
-                ),
-                "+",
-                "",
+            query = query.where(
+                or_(
+                    normalized_phone_column(Paciente.telefono_1).like(f"%{digits}%"),
+                    normalized_phone_column(Paciente.celular).like(f"%{digits}%"),
+                )
             )
-            query = query.where(celular_digits.like(f"%{digits}%"))
     if fecha_nacimiento is not None:
         if not patient_joined:
             query = query.join(Paciente, Cita.paciente_id == Paciente.id)
@@ -1666,7 +1694,9 @@ def buscar_pacientes(
                     func.lower(func.coalesce(Paciente.nombre_preferido, "")).like(term),
                     func.lower(func.coalesce(Paciente.apellido_paterno, "")).like(term),
                     func.lower(func.coalesce(Paciente.apellido_materno, "")).like(term),
+                    func.lower(func.coalesce(Paciente.telefono_1, "")).like(term),
                     func.lower(func.coalesce(Paciente.celular, "")).like(term),
+                    func.lower(func.coalesce(Paciente.correo_electronico, "")).like(term),
                     func.lower(Paciente.folio_paciente).like(term),
                 )
             )
@@ -1726,6 +1756,8 @@ def create_paciente(
     medico_id = data.pop("medico_id")
     ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
     item = Paciente(**data, folio_paciente=generate_patient_folio(db))
+    validate_patient_contact(item)
+    validate_patient_confirmation_method(item)
     db.add(item)
     db.flush()
     assign_paciente_to_medico(db, item.id, medico_id)
@@ -1761,6 +1793,7 @@ def update_paciente(
         setattr(item, key, value)
     validate_patient_identity(item)
     validate_patient_contact(item)
+    validate_patient_confirmation_method(item)
     db.flush()
     record_audit_event(
         db,

@@ -14,6 +14,14 @@ class Paciente(TimestampMixin, Base):
     __tablename__ = "pacientes"
     __table_args__ = (
         CheckConstraint("celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
+        CheckConstraint("tipo_telefono_1 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_1"),
+        CheckConstraint("tipo_telefono_2 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_2"),
+        CheckConstraint(
+            "metodo_confirmacion IS NULL OR metodo_confirmacion IN ("
+            "'LLAMAR_FIJO_1', 'LLAMAR_FIJO_2', 'LLAMAR_CELULAR_1', 'LLAMAR_CELULAR_2', "
+            "'WHATSAPP_1', 'WHATSAPP_2', 'TELEGRAM_1', 'TELEGRAM_2', 'CORREO')",
+            name="ck_pacientes_metodo_confirmacion",
+        ),
         CheckConstraint(
             "nombre_preferido IS NOT NULL OR (nombre IS NOT NULL AND apellido_paterno IS NOT NULL)",
             name="ck_pacientes_identidad_minima",
@@ -26,7 +34,12 @@ class Paciente(TimestampMixin, Base):
     nombre_preferido: Mapped[str | None] = mapped_column(String(60))
     apellido_paterno: Mapped[str | None] = mapped_column(String(180))
     apellido_materno: Mapped[str | None] = mapped_column(String(180))
+    telefono_1: Mapped[str | None] = mapped_column(String(40), index=True)
+    tipo_telefono_1: Mapped[str] = mapped_column(String(12), default="FIJO", server_default="FIJO", nullable=False)
     celular: Mapped[str | None] = mapped_column(String(40), index=True)
+    tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
+    correo_electronico: Mapped[str | None] = mapped_column(String(320))
+    metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
     fecha_nacimiento: Mapped[date | None] = mapped_column(Date)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

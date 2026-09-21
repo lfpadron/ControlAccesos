@@ -60,6 +60,8 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
             headers=auth_headers,
             json={
                 "nombre_preferido": f"Alias {suffix}",
+                "telefono_1": f"551{suffix[:7]}",
+                "celular": f"552{suffix[:7]}",
                 "fecha_nacimiento": "1990-01-31",
             },
         )
@@ -325,14 +327,24 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
         client.post(
             "/api/pacientes",
             headers=auth_headers,
-            json={"nombre": "Paciente", "apellido_paterno": f"B {suffix}", "celular": f"556{suffix[:7]}"},
+            json={
+                "nombre": "Paciente",
+                "apellido_paterno": f"B {suffix}",
+                "telefono_1": f"551{suffix[:7]}",
+                "celular": f"556{suffix[:7]}",
+            },
         )
     )
     paciente_a = assert_created(
         client.post(
             "/api/pacientes",
             headers=auth_headers,
-            json={"nombre": "Paciente", "apellido_paterno": f"A {suffix}", "celular": f"557{suffix[:7]}"},
+            json={
+                "nombre": "Paciente",
+                "apellido_paterno": f"A {suffix}",
+                "telefono_1": f"552{suffix[:7]}",
+                "celular": f"557{suffix[:7]}",
+            },
         )
     )
     appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=45)
@@ -1246,6 +1258,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
             json={
                 "nombre": "Paciente",
                 "apellido_paterno": f"Test {suffix}",
+                "telefono_1": f"551{suffix[:7]}",
                 "celular": f"555{suffix[:7]}",
             },
         )
@@ -1395,7 +1408,12 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
         client.post(
             "/api/pacientes",
             headers=auth_headers,
-            json={"nombre": "Paciente", "apellido_paterno": f"Legacy {suffix}", "celular": f"5558{suffix[:6]}"},
+            json={
+                "nombre": "Paciente",
+                "apellido_paterno": f"Legacy {suffix}",
+                "telefono_1": f"5518{suffix[:6]}",
+                "celular": f"5558{suffix[:6]}",
+            },
         )
     )
     appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=60)
@@ -1653,6 +1671,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
                 "nombre": "Flujo",
                 "nombre_preferido": f"Alias {suffix}",
                 "apellido_paterno": f"Paciente {suffix}",
+                "telefono_1": f"5519{suffix[:6]}",
                 "celular": f"5559{suffix[:6]}",
             },
         )

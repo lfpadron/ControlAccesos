@@ -1,0 +1,758 @@
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 84ad467..9937f70 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -41,6 +41,7 @@ from app.schemas.flow import (
+     CitaUpdate,
+     MedicoEstadoRead,
+     MedicoEstadoUpdate,
++    metodos_confirmacion_disponibles,
+     MobileSessionResponse,
+     PacienteCreate,
+     PacienteRead,
+@@ -164,6 +165,18 @@ def normalized_digits(value: str | None) -> str | None:
+     return digits or None
+ 
+ 
++def normalized_phone_column(column):
++    return func.replace(
++        func.replace(
++            func.replace(func.replace(func.replace(func.coalesce(column, ""), " ", ""), "-", ""), "(", ""),
++            ")",
++            "",
++        ),
++        "+",
++        "",
++    )
++
++
+ def active_role_codes(db: Session, usuario: Usuario) -> set[str]:
+     today = business_today()
+     return set(
+@@ -832,10 +845,27 @@ def unique_citas(rows) -> list[Cita]:
+ 
+ 
+ def validate_patient_contact(paciente: Paciente) -> None:
+-    if not paciente.celular and paciente.fecha_nacimiento is None:
++    if not paciente.telefono_1 or not paciente.celular:
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+-            detail="Debe indicar celular o fecha de nacimiento.",
++            detail="Teléfono 1 y Teléfono 2 son obligatorios.",
++        )
++
++
++def validate_patient_confirmation_method(paciente: Paciente) -> None:
++    if paciente.metodo_confirmacion is None:
++        return
++    available = metodos_confirmacion_disponibles(
++        paciente.telefono_1,
++        paciente.tipo_telefono_1,
++        paciente.celular,
++        paciente.tipo_telefono_2,
++        paciente.correo_electronico,
++    )
++    if paciente.metodo_confirmacion not in available:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="El método de envío y confirmación no corresponde a los datos de contacto capturados.",
+         )
+ 
+ 
+@@ -1005,7 +1035,9 @@ def query_citas(
+             query = query.where(
+                 or_(
+                     full_name.like(term),
++                    func.lower(Paciente.telefono_1).like(term),
+                     func.lower(Paciente.celular).like(term),
++                    func.lower(Paciente.correo_electronico).like(term),
+                     func.lower(Paciente.folio_paciente).like(term),
+                 )
+             )
+@@ -1015,16 +1047,12 @@ def query_citas(
+             patient_joined = True
+         digits = normalized_digits(celular)
+         if digits:
+-            celular_digits = func.replace(
+-                func.replace(
+-                    func.replace(func.replace(func.replace(func.coalesce(Paciente.celular, ""), " ", ""), "-", ""), "(", ""),
+-                    ")",
+-                    "",
+-                ),
+-                "+",
+-                "",
++            query = query.where(
++                or_(
++                    normalized_phone_column(Paciente.telefono_1).like(f"%{digits}%"),
++                    normalized_phone_column(Paciente.celular).like(f"%{digits}%"),
++                )
+             )
+-            query = query.where(celular_digits.like(f"%{digits}%"))
+     if fecha_nacimiento is not None:
+         if not patient_joined:
+             query = query.join(Paciente, Cita.paciente_id == Paciente.id)
+@@ -1666,7 +1694,9 @@ def buscar_pacientes(
+                     func.lower(func.coalesce(Paciente.nombre_preferido, "")).like(term),
+                     func.lower(func.coalesce(Paciente.apellido_paterno, "")).like(term),
+                     func.lower(func.coalesce(Paciente.apellido_materno, "")).like(term),
++                    func.lower(func.coalesce(Paciente.telefono_1, "")).like(term),
+                     func.lower(func.coalesce(Paciente.celular, "")).like(term),
++                    func.lower(func.coalesce(Paciente.correo_electronico, "")).like(term),
+                     func.lower(Paciente.folio_paciente).like(term),
+                 )
+             )
+@@ -1726,6 +1756,8 @@ def create_paciente(
+     medico_id = data.pop("medico_id")
+     ensure_medico_patient_assignment_access(db, current_user, medico_id, business_today())
+     item = Paciente(**data, folio_paciente=generate_patient_folio(db))
++    validate_patient_contact(item)
++    validate_patient_confirmation_method(item)
+     db.add(item)
+     db.flush()
+     assign_paciente_to_medico(db, item.id, medico_id)
+@@ -1761,6 +1793,7 @@ def update_paciente(
+         setattr(item, key, value)
+     validate_patient_identity(item)
+     validate_patient_contact(item)
++    validate_patient_confirmation_method(item)
+     db.flush()
+     record_audit_event(
+         db,
+diff --git a/access-manager/backend/app/api/kiosks.py b/access-manager/backend/app/api/kiosks.py
+index bd6538e..e6aa35a 100644
+--- a/access-manager/backend/app/api/kiosks.py
++++ b/access-manager/backend/app/api/kiosks.py
+@@ -192,10 +192,16 @@ def patient_lookup_label(paciente: Paciente) -> str:
+ 
+ 
+ def patient_phone_display(paciente: Paciente) -> str:
+-    digits = normalized_digits(paciente.celular)
+-    if not digits:
++    phones = list(
++        dict.fromkeys(
++            digits
++            for digits in (normalized_digits(paciente.telefono_1), normalized_digits(paciente.celular))
++            if digits
++        )
++    )
++    if not phones:
+         return "sin teléfono registrado"
+-    return f"XXX{digits[-4:]}"
++    return " / ".join(f"XXX{digits[-4:]}" for digits in phones)
+ 
+ 
+ def patient_identity_key(paciente: Paciente) -> str:
+@@ -247,7 +253,8 @@ def scoped_patients_for_punto(db: Session, punto: PuntoAcceso) -> list[Paciente]
+ 
+ def patient_matches_contact(paciente: Paciente, celular: str | None, fecha_nacimiento: date | None) -> bool:
+     digits = normalized_digits(celular)
+-    if digits and normalized_digits(paciente.celular) != digits:
++    registered_phones = {normalized_digits(paciente.telefono_1), normalized_digits(paciente.celular)}
++    if digits and digits not in registered_phones:
+         return False
+     if fecha_nacimiento is not None and paciente.fecha_nacimiento != fecha_nacimiento:
+         return False
+@@ -373,7 +380,7 @@ def public_kiosko_buscar_pacientes(
+         KioskoPacienteOption(
+             id=patient.id,
+             label=patient_lookup_label(patient),
+-            celular=patient.celular,
++            celular=patient.celular or patient.telefono_1,
+             telefono_display=patient_phone_display(patient),
+             homonimo=identity_counts[patient_identity_key(patient)] > 1,
+         )
+diff --git a/access-manager/backend/app/models/flow.py b/access-manager/backend/app/models/flow.py
+index 1300f3f..0066bb6 100644
+--- a/access-manager/backend/app/models/flow.py
++++ b/access-manager/backend/app/models/flow.py
+@@ -14,6 +14,14 @@ class Paciente(TimestampMixin, Base):
+     __tablename__ = "pacientes"
+     __table_args__ = (
+         CheckConstraint("celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
++        CheckConstraint("tipo_telefono_1 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_1"),
++        CheckConstraint("tipo_telefono_2 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_2"),
++        CheckConstraint(
++            "metodo_confirmacion IS NULL OR metodo_confirmacion IN ("
++            "'LLAMAR_FIJO_1', 'LLAMAR_FIJO_2', 'LLAMAR_CELULAR_1', 'LLAMAR_CELULAR_2', "
++            "'WHATSAPP_1', 'WHATSAPP_2', 'TELEGRAM_1', 'TELEGRAM_2', 'CORREO')",
++            name="ck_pacientes_metodo_confirmacion",
++        ),
+         CheckConstraint(
+             "nombre_preferido IS NOT NULL OR (nombre IS NOT NULL AND apellido_paterno IS NOT NULL)",
+             name="ck_pacientes_identidad_minima",
+@@ -26,7 +34,12 @@ class Paciente(TimestampMixin, Base):
+     nombre_preferido: Mapped[str | None] = mapped_column(String(60))
+     apellido_paterno: Mapped[str | None] = mapped_column(String(180))
+     apellido_materno: Mapped[str | None] = mapped_column(String(180))
++    telefono_1: Mapped[str | None] = mapped_column(String(40), index=True)
++    tipo_telefono_1: Mapped[str] = mapped_column(String(12), default="FIJO", server_default="FIJO", nullable=False)
+     celular: Mapped[str | None] = mapped_column(String(40), index=True)
++    tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
++    correo_electronico: Mapped[str | None] = mapped_column(String(320))
++    metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
+     fecha_nacimiento: Mapped[date | None] = mapped_column(Date)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+     desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 84931bb..1ed9724 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from datetime import date, datetime, time
+ from uuid import UUID
+ 
+-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
++from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+ 
+ 
+ TIPOS_CITA = {"PROGRAMADA", "ESPONTANEA"}
+@@ -22,6 +22,41 @@ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM
+ TIPOS_CHECKIN = {"LECTOR_QR_APP", "KIOSKO", "RECEPCION_MANUAL", "RECEPCION_QR"}
+ TIPOS_CANCELACION = {"MANUAL", "SISTEMA"}
+ ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
++TIPOS_TELEFONO = {"FIJO", "CELULAR"}
++METODOS_CONFIRMACION = {
++    "LLAMAR_FIJO_1",
++    "LLAMAR_FIJO_2",
++    "LLAMAR_CELULAR_1",
++    "LLAMAR_CELULAR_2",
++    "WHATSAPP_1",
++    "WHATSAPP_2",
++    "TELEGRAM_1",
++    "TELEGRAM_2",
++    "CORREO",
++}
++
++
++def metodos_confirmacion_disponibles(
++    telefono_1: str | None,
++    tipo_telefono_1: str,
++    telefono_2: str | None,
++    tipo_telefono_2: str,
++    correo_electronico: str | None,
++) -> set[str]:
++    metodos: set[str] = set()
++    for posicion, telefono, tipo in (
++        (1, telefono_1, tipo_telefono_1),
++        (2, telefono_2, tipo_telefono_2),
++    ):
++        if not telefono:
++            continue
++        metodos.add(f"LLAMAR_{tipo}_{posicion}")
++        if tipo == "CELULAR":
++            metodos.add(f"WHATSAPP_{posicion}")
++            metodos.add(f"TELEGRAM_{posicion}")
++    if correo_electronico:
++        metodos.add("CORREO")
++    return metodos
+ 
+ 
+ class PacienteBase(BaseModel):
+@@ -29,11 +64,26 @@ class PacienteBase(BaseModel):
+     nombre_preferido: str | None = Field(default=None, max_length=60)
+     apellido_paterno: str | None = Field(default=None, min_length=1, max_length=180)
+     apellido_materno: str | None = Field(default=None, max_length=180)
++    telefono_1: str | None = Field(default=None, max_length=40)
++    tipo_telefono_1: str = "FIJO"
+     celular: str | None = Field(default=None, max_length=40)
++    tipo_telefono_2: str = "CELULAR"
++    correo_electronico: EmailStr | None = None
++    metodo_confirmacion: str | None = Field(default=None, max_length=40)
+     fecha_nacimiento: date | None = None
+     activo: bool = True
+ 
+-    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
++    @field_validator(
++        "nombre",
++        "nombre_preferido",
++        "apellido_paterno",
++        "apellido_materno",
++        "telefono_1",
++        "celular",
++        "correo_electronico",
++        "metodo_confirmacion",
++        mode="before",
++    )
+     @classmethod
+     def blank_to_none(cls, value):
+         if isinstance(value, str):
+@@ -41,29 +91,70 @@ class PacienteBase(BaseModel):
+             return text or None
+         return value
+ 
++    @field_validator("tipo_telefono_1", "tipo_telefono_2")
++    @classmethod
++    def validate_phone_type(cls, value: str) -> str:
++        if value not in TIPOS_TELEFONO:
++            raise ValueError("Tipo de teléfono inválido.")
++        return value
++
++    @field_validator("metodo_confirmacion")
++    @classmethod
++    def validate_confirmation_method(cls, value: str | None) -> str | None:
++        if value is not None and value not in METODOS_CONFIRMACION:
++            raise ValueError("Método de envío y confirmación inválido.")
++        return value
++
+     @model_validator(mode="after")
+     def validate_values(self):
+         if not self.nombre_preferido and not (self.nombre and self.apellido_paterno):
+             raise ValueError("Debe indicar nombre preferido o nombre y apellido paterno.")
+-        if not self.celular and self.fecha_nacimiento is None:
+-            raise ValueError("Debe indicar celular o fecha de nacimiento.")
++        if self.metodo_confirmacion and self.metodo_confirmacion not in metodos_confirmacion_disponibles(
++            self.telefono_1,
++            self.tipo_telefono_1,
++            self.celular,
++            self.tipo_telefono_2,
++            str(self.correo_electronico) if self.correo_electronico else None,
++        ):
++            raise ValueError("El método de envío y confirmación no corresponde a los datos de contacto capturados.")
+         return self
+ 
+ 
+ class PacienteCreate(PacienteBase):
+     medico_id: UUID
+ 
++    @model_validator(mode="after")
++    def validate_required_phones(self):
++        if not self.telefono_1 or not self.celular:
++            raise ValueError("Teléfono 1 y Teléfono 2 son obligatorios.")
++        return self
++
+ 
+ class PacienteUpdate(BaseModel):
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+     nombre_preferido: str | None = Field(default=None, max_length=60)
+     apellido_paterno: str | None = Field(default=None, min_length=1, max_length=180)
+     apellido_materno: str | None = Field(default=None, max_length=180)
++    telefono_1: str | None = Field(default=None, max_length=40)
++    tipo_telefono_1: str | None = None
+     celular: str | None = Field(default=None, max_length=40)
++    tipo_telefono_2: str | None = None
++    correo_electronico: EmailStr | None = None
++    metodo_confirmacion: str | None = Field(default=None, max_length=40)
+     fecha_nacimiento: date | None = None
+     activo: bool | None = None
+ 
+-    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
++    @field_validator(
++        "nombre",
++        "nombre_preferido",
++        "apellido_paterno",
++        "apellido_materno",
++        "telefono_1",
++        "celular",
++        "correo_electronico",
++        "metodo_confirmacion",
++        mode="before",
++    )
+     @classmethod
+     def blank_to_none(cls, value):
+         if isinstance(value, str):
+@@ -71,6 +162,20 @@ class PacienteUpdate(BaseModel):
+             return text or None
+         return value
+ 
++    @field_validator("tipo_telefono_1", "tipo_telefono_2")
++    @classmethod
++    def validate_phone_type(cls, value: str | None) -> str | None:
++        if value is not None and value not in TIPOS_TELEFONO:
++            raise ValueError("Tipo de teléfono inválido.")
++        return value
++
++    @field_validator("metodo_confirmacion")
++    @classmethod
++    def validate_confirmation_method(cls, value: str | None) -> str | None:
++        if value is not None and value not in METODOS_CONFIRMACION:
++            raise ValueError("Método de envío y confirmación inválido.")
++        return value
++
+ 
+ class PacienteRead(PacienteBase):
+     id: UUID
+diff --git a/access-manager/backend/app/services/seed_admins.py b/access-manager/backend/app/services/seed_admins.py
+index 3688e3a..2f94ce6 100644
+--- a/access-manager/backend/app/services/seed_admins.py
++++ b/access-manager/backend/app/services/seed_admins.py
+@@ -388,12 +388,17 @@ def main() -> None:
+                 folio_paciente="PDEMO246",
+                 nombre="Paciente",
+                 apellido_paterno="Demo",
++                telefono_1="5550100001",
++                tipo_telefono_1="FIJO",
+                 celular="5550100000",
++                tipo_telefono_2="CELULAR",
+                 fecha_nacimiento=date(1970, 1, 1),
+             )
+             db.add(paciente)
+             db.flush()
+         else:
++            if paciente.telefono_1 is None:
++                paciente.telefono_1 = "5550100001"
+             if paciente.celular is None:
+                 paciente.celular = "5550100000"
+             if paciente.fecha_nacimiento is None:
+diff --git a/access-manager/backend/tests/test_operational_api.py b/access-manager/backend/tests/test_operational_api.py
+index 56deee7..f9d6b2b 100644
+--- a/access-manager/backend/tests/test_operational_api.py
++++ b/access-manager/backend/tests/test_operational_api.py
+@@ -60,6 +60,8 @@ def test_patient_can_use_preferred_name_only(client: TestClient, auth_headers: d
+             headers=auth_headers,
+             json={
+                 "nombre_preferido": f"Alias {suffix}",
++                "telefono_1": f"551{suffix[:7]}",
++                "celular": f"552{suffix[:7]}",
+                 "fecha_nacimiento": "1990-01-31",
+             },
+         )
+@@ -325,14 +327,24 @@ def test_public_display_next_appointments_table_data(client: TestClient, auth_he
+         client.post(
+             "/api/pacientes",
+             headers=auth_headers,
+-            json={"nombre": "Paciente", "apellido_paterno": f"B {suffix}", "celular": f"556{suffix[:7]}"},
++            json={
++                "nombre": "Paciente",
++                "apellido_paterno": f"B {suffix}",
++                "telefono_1": f"551{suffix[:7]}",
++                "celular": f"556{suffix[:7]}",
++            },
+         )
+     )
+     paciente_a = assert_created(
+         client.post(
+             "/api/pacientes",
+             headers=auth_headers,
+-            json={"nombre": "Paciente", "apellido_paterno": f"A {suffix}", "celular": f"557{suffix[:7]}"},
++            json={
++                "nombre": "Paciente",
++                "apellido_paterno": f"A {suffix}",
++                "telefono_1": f"552{suffix[:7]}",
++                "celular": f"557{suffix[:7]}",
++            },
+         )
+     )
+     appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=45)
+@@ -1246,6 +1258,7 @@ def test_operational_catalog_flow(client: TestClient, auth_headers: dict[str, st
+             json={
+                 "nombre": "Paciente",
+                 "apellido_paterno": f"Test {suffix}",
++                "telefono_1": f"551{suffix[:7]}",
+                 "celular": f"555{suffix[:7]}",
+             },
+         )
+@@ -1395,7 +1408,12 @@ def test_citas_accept_legacy_display_cluster_assignment(client: TestClient, auth
+         client.post(
+             "/api/pacientes",
+             headers=auth_headers,
+-            json={"nombre": "Paciente", "apellido_paterno": f"Legacy {suffix}", "celular": f"5558{suffix[:6]}"},
++            json={
++                "nombre": "Paciente",
++                "apellido_paterno": f"Legacy {suffix}",
++                "telefono_1": f"5518{suffix[:6]}",
++                "celular": f"5558{suffix[:6]}",
++            },
+         )
+     )
+     appointment_at = datetime.now(ZoneInfo("America/Mexico_City")) + timedelta(minutes=60)
+@@ -1653,6 +1671,7 @@ def test_patient_appointment_qr_checkin_ticket_flow(client: TestClient, auth_hea
+                 "nombre": "Flujo",
+                 "nombre_preferido": f"Alias {suffix}",
+                 "apellido_paterno": f"Paciente {suffix}",
++                "telefono_1": f"5519{suffix[:6]}",
+                 "celular": f"5559{suffix[:6]}",
+             },
+         )
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 12fead4..6b16b11 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -378,7 +378,12 @@ export type Paciente = {
+   nombre_preferido?: string | null;
+   apellido_paterno?: string | null;
+   apellido_materno?: string | null;
++  telefono_1?: string | null;
++  tipo_telefono_1: 'FIJO' | 'CELULAR';
+   celular?: string | null;
++  tipo_telefono_2: 'FIJO' | 'CELULAR';
++  correo_electronico?: string | null;
++  metodo_confirmacion?: string | null;
+   fecha_nacimiento?: string | null;
+   activo: boolean;
+   desactivado_en?: string | null;
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index b95b0c8..0a33e13 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -1,5 +1,5 @@
+ <script setup lang="ts">
+-import { computed, onMounted, reactive, ref } from 'vue';
++import { computed, onMounted, reactive, ref, watch } from 'vue';
+ import {
+   activatePaciente,
+   createPaciente,
+@@ -29,12 +29,20 @@ const birthYearInput = ref<HTMLInputElement | null>(null);
+ const birthMonthInput = ref<HTMLInputElement | null>(null);
+ const birthDayInput = ref<HTMLInputElement | null>(null);
+ 
++type PhoneType = 'FIJO' | 'CELULAR';
++type ConfirmationMethodOption = { value: string; label: string };
++
+ const form = reactive({
+   nombre: '',
+   nombre_preferido: '',
+   apellido_paterno: '',
+   apellido_materno: '',
++  telefono_1: '',
++  tipo_telefono_1: 'FIJO' as PhoneType,
+   celular: '',
++  tipo_telefono_2: 'CELULAR' as PhoneType,
++  correo_electronico: '',
++  metodo_confirmacion: '',
+   fecha_nacimiento: '',
+ });
+ 
+@@ -52,6 +60,52 @@ const isPreferredOnly = computed(
+     !form.apellido_materno.trim(),
+ );
+ const canEditPatient = computed(() => Boolean(medicoId.value));
++
++function validEmail(value: string) {
++  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
++}
++
++function lastFourDigits(value: string) {
++  const digits = value.replace(/\D/g, '');
++  return (digits || value.trim()).slice(-4);
++}
++
++function buildConfirmationMethodOptions(patient: {
++  telefono_1?: string | null;
++  tipo_telefono_1?: PhoneType | null;
++  celular?: string | null;
++  tipo_telefono_2?: PhoneType | null;
++  correo_electronico?: string | null;
++}): ConfirmationMethodOption[] {
++  const phones = [
++    { position: 1, value: patient.telefono_1?.trim() ?? '', type: patient.tipo_telefono_1 ?? 'FIJO' },
++    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 ?? 'CELULAR' },
++  ].filter((phone) => phone.value);
++  const fixedPhones = phones.filter((phone) => phone.type === 'FIJO');
++  const mobilePhones = phones.filter((phone) => phone.type === 'CELULAR');
++  const labelFor = (label: string, phone: (typeof phones)[number], matches: typeof phones) =>
++    matches.length > 1 ? `${label} (${lastFourDigits(phone.value)})` : label;
++  const options: ConfirmationMethodOption[] = [];
++
++  for (const phone of fixedPhones) {
++    options.push({ value: `LLAMAR_FIJO_${phone.position}`, label: labelFor('Llamar por teléfono fijo', phone, fixedPhones) });
++  }
++  for (const phone of mobilePhones) {
++    options.push({ value: `LLAMAR_CELULAR_${phone.position}`, label: labelFor('Llamar por celular', phone, mobilePhones) });
++  }
++  for (const phone of mobilePhones) {
++    options.push({ value: `WHATSAPP_${phone.position}`, label: labelFor('WhatsApp', phone, mobilePhones) });
++  }
++  for (const phone of mobilePhones) {
++    options.push({ value: `TELEGRAM_${phone.position}`, label: labelFor('Telegram', phone, mobilePhones) });
++  }
++  if (patient.correo_electronico && validEmail(patient.correo_electronico)) {
++    options.push({ value: 'CORREO', label: 'Correo' });
++  }
++  return options;
++}
++
++const confirmationMethodOptions = computed(() => buildConfirmationMethodOptions(form));
+ const sortedPacientes = computed(() =>
+   [...pacientes.value].sort((left, right) => {
+     const leftName = patientSortName(left);
+@@ -64,6 +118,12 @@ const sortedPacientes = computed(() =>
+   }),
+ );
+ 
++watch(confirmationMethodOptions, (options) => {
++  if (form.metodo_confirmacion && !options.some((option) => option.value === form.metodo_confirmacion)) {
++    form.metodo_confirmacion = '';
++  }
++});
++
+ function patientDisplayName(paciente: Paciente) {
+   const apellidos = [paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
+   const nombre = paciente.nombre?.trim() ?? '';
+@@ -139,7 +199,12 @@ function setForm(paciente?: Paciente | null) {
+   form.nombre_preferido = paciente?.nombre_preferido ?? '';
+   form.apellido_paterno = paciente?.apellido_paterno ?? '';
+   form.apellido_materno = paciente?.apellido_materno ?? '';
++  form.telefono_1 = paciente?.telefono_1 ?? '';
++  form.tipo_telefono_1 = paciente?.tipo_telefono_1 ?? 'FIJO';
+   form.celular = paciente?.celular ?? '';
++  form.tipo_telefono_2 = paciente?.tipo_telefono_2 ?? 'CELULAR';
++  form.correo_electronico = paciente?.correo_electronico ?? '';
++  form.metodo_confirmacion = paciente?.metodo_confirmacion ?? '';
+   setBirthDateParts(paciente?.fecha_nacimiento ?? '');
+   confirmPreferredOnly.value = false;
+ }
+@@ -196,6 +261,21 @@ async function submit(preferredOnlyConfirmed = false) {
+     error.value = 'Captura nombre preferido o nombre y apellido paterno.';
+     return;
+   }
++  if (!form.telefono_1.trim() || !form.celular.trim()) {
++    error.value = 'Teléfono 1 y Teléfono 2 son obligatorios.';
++    return;
++  }
++  if (form.correo_electronico.trim() && !validEmail(form.correo_electronico)) {
++    error.value = 'Captura un correo electrónico válido.';
++    return;
++  }
++  if (
++    form.metodo_confirmacion &&
++    !confirmationMethodOptions.value.some((option) => option.value === form.metodo_confirmacion)
++  ) {
++    error.value = 'Selecciona un método de envío y confirmación disponible.';
++    return;
++  }
+   if (isPreferredOnly.value && !preferredOnlyConfirmed) {
+     confirmPreferredOnly.value = true;
+     return;
+@@ -207,7 +287,12 @@ async function submit(preferredOnlyConfirmed = false) {
+       nombre_preferido: trimOrNull(form.nombre_preferido),
+       apellido_paterno: trimOrNull(form.apellido_paterno),
+       apellido_materno: trimOrNull(form.apellido_materno),
++      telefono_1: trimOrNull(form.telefono_1),
++      tipo_telefono_1: form.tipo_telefono_1,
+       celular: trimOrNull(form.celular),
++      tipo_telefono_2: form.tipo_telefono_2,
++      correo_electronico: trimOrNull(form.correo_electronico),
++      metodo_confirmacion: form.metodo_confirmacion || null,
+       fecha_nacimiento: form.fecha_nacimiento || null,
+       medico_id: medicoId.value,
+     };
+@@ -225,6 +310,18 @@ async function submit(preferredOnlyConfirmed = false) {
+   }
+ }
+ 
++function confirmationMethodLabel(paciente: Paciente) {
++  if (!paciente.metodo_confirmacion) return '-';
++  return (
++    buildConfirmationMethodOptions(paciente).find((option) => option.value === paciente.metodo_confirmacion)?.label ??
++    paciente.metodo_confirmacion
++  );
++}
++
++function phoneLabel(type: PhoneType, value?: string | null) {
++  return value ? `${type === 'FIJO' ? 'Fijo' : 'Celular'} · ${value}` : '-';
++}
++
+ async function setActive(active: boolean) {
+   if (!selected.value || !medicoId.value) return;
+   error.value = '';
+@@ -330,8 +427,39 @@ onMounted(async () => {
+             <input id="apellido_materno" v-model="form.apellido_materno" maxlength="180" />
+           </div>
+           <div class="form-row">
+-            <label for="celular">Celular</label>
+-            <input id="celular" v-model="form.celular" maxlength="40" />
++            <label for="tipo_telefono_1">Tipo de teléfono 1</label>
++            <select id="tipo_telefono_1" v-model="form.tipo_telefono_1">
++              <option value="FIJO">Fijo</option>
++              <option value="CELULAR">Celular</option>
++            </select>
++          </div>
++          <div class="form-row">
++            <label for="telefono_1">Teléfono 1</label>
++            <input id="telefono_1" v-model="form.telefono_1" autocomplete="tel" inputmode="tel" maxlength="40" required />
++          </div>
++          <div class="form-row">
++            <label for="tipo_telefono_2">Tipo de teléfono 2</label>
++            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2">
++              <option value="FIJO">Fijo</option>
++              <option value="CELULAR">Celular</option>
++            </select>
++          </div>
++          <div class="form-row">
++            <label for="celular">Teléfono 2</label>
++            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" required />
++          </div>
++          <div class="form-row">
++            <label for="correo_electronico">Correo electrónico</label>
++            <input id="correo_electronico" v-model="form.correo_electronico" autocomplete="email" maxlength="320" type="email" />
++          </div>
++          <div class="form-row">
++            <label for="metodo_confirmacion">Método de envío y confirmación de citas</label>
++            <select id="metodo_confirmacion" v-model="form.metodo_confirmacion">
++              <option value="">Sin seleccionar</option>
++              <option v-for="option in confirmationMethodOptions" :key="option.value" :value="option.value">
++                {{ option.label }}
++              </option>
++            </select>
+           </div>
+           <div class="form-row">
+             <label for="fecha_nacimiento">Fecha de nacimiento</label>
+@@ -389,7 +517,7 @@ onMounted(async () => {
+         <div class="page-header compact">
+           <h2>Listado</h2>
+           <form class="inline-actions" @submit.prevent="search">
+-            <input v-model="query" placeholder="Nombre, celular o folio" />
++            <input v-model="query" placeholder="Nombre, teléfono, correo o folio" />
+             <button type="submit">Buscar</button>
+             <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
+           </form>
+@@ -404,7 +532,10 @@ onMounted(async () => {
+                 <th>Paciente</th>
+                 <th>Nombre preferido</th>
+                 <th>Fecha de nacimiento</th>
+-                <th>Celular</th>
++                <th>Teléfono 1</th>
++                <th>Teléfono 2</th>
++                <th>Correo electrónico</th>
++                <th>Método de confirmación</th>
+                 <th>Estado</th>
+                 <th>Marcar borrar</th>
+               </tr>
+@@ -421,7 +552,10 @@ onMounted(async () => {
+                 <td>{{ patientDisplayName(paciente) }}</td>
+                 <td>{{ paciente.nombre_preferido || '-' }}</td>
+                 <td>{{ paciente.fecha_nacimiento || '-' }}</td>
+-                <td>{{ paciente.celular || '-' }}</td>
++                <td>{{ phoneLabel(paciente.tipo_telefono_1, paciente.telefono_1) }}</td>
++                <td>{{ phoneLabel(paciente.tipo_telefono_2, paciente.celular) }}</td>
++                <td>{{ paciente.correo_electronico || '-' }}</td>
++                <td>{{ confirmationMethodLabel(paciente) }}</td>
+                 <td>
+                   <span class="status" :class="paciente.activo ? 'ok' : 'muted'">
+                     {{ paciente.activo ? 'Activo' : `Inactivo ${paciente.desactivado_en ? new Date(paciente.desactivado_en).toLocaleString() : ''}` }}
+diff --git a/access-manager/kiosk/src/views/KioskHomeView.vue b/access-manager/kiosk/src/views/KioskHomeView.vue
+index 79bfc56..d8aec7b 100644
+--- a/access-manager/kiosk/src/views/KioskHomeView.vue
++++ b/access-manager/kiosk/src/views/KioskHomeView.vue
+@@ -171,7 +171,7 @@ function selectPaciente(option: PacienteOption) {
+   if (option.homonimo && !option.celular) {
+     status.value = 'Capture fecha de nacimiento para confirmar al paciente.';
+   } else {
+-    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el celular o capture fecha de nacimiento.' : 'Paciente seleccionado.';
++    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el teléfono o capture fecha de nacimiento.' : 'Paciente seleccionado.';
+   }
+ }
+ 
+@@ -201,7 +201,7 @@ async function searchCitas() {
+     return;
+   }
+   if (selectedPaciente.value?.homonimo && !celular.value.trim() && !fechaNacimiento.value) {
+-    error.value = selectedPaciente.value.celular ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
++    error.value = selectedPaciente.value.celular ? 'Capture teléfono o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
+     return;
+   }
+   loading.value = true;
+@@ -333,11 +333,11 @@ onBeforeUnmount(() => {
+               @mousedown.prevent="selectPaciente(option)"
+             >
+               <span>{{ option.label }} - teléfono: {{ option.telefono_display }}</span>
+-              <small v-if="option.homonimo">Requiere celular o fecha de nacimiento</small>
++              <small v-if="option.homonimo">Requiere teléfono o fecha de nacimiento</small>
+             </button>
+           </div>
+         </div>
+-        <label for="search-phone">Celular (opcional)</label>
++        <label for="search-phone">Teléfono (opcional)</label>
+         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
+         <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
+         <input id="search-birthdate" v-model="fechaNacimiento" type="date" />

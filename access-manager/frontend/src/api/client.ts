@@ -378,7 +378,12 @@ export type Paciente = {
   nombre_preferido?: string | null;
   apellido_paterno?: string | null;
   apellido_materno?: string | null;
+  telefono_1?: string | null;
+  tipo_telefono_1: 'FIJO' | 'CELULAR';
   celular?: string | null;
+  tipo_telefono_2: 'FIJO' | 'CELULAR';
+  correo_electronico?: string | null;
+  metodo_confirmacion?: string | null;
   fecha_nacimiento?: string | null;
   activo: boolean;
   desactivado_en?: string | null;

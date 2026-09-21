@@ -171,7 +171,7 @@ function selectPaciente(option: PacienteOption) {
   if (option.homonimo && !option.celular) {
     status.value = 'Capture fecha de nacimiento para confirmar al paciente.';
   } else {
-    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el celular o capture fecha de nacimiento.' : 'Paciente seleccionado.';
+    status.value = option.homonimo ? 'Paciente seleccionado. Verifique el teléfono o capture fecha de nacimiento.' : 'Paciente seleccionado.';
   }
 }
 
@@ -201,7 +201,7 @@ async function searchCitas() {
     return;
   }
   if (selectedPaciente.value?.homonimo && !celular.value.trim() && !fechaNacimiento.value) {
-    error.value = selectedPaciente.value.celular ? 'Capture celular o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
+    error.value = selectedPaciente.value.celular ? 'Capture teléfono o fecha de nacimiento para confirmar al paciente.' : 'Capture fecha de nacimiento para confirmar al paciente.';
     return;
   }
   loading.value = true;
@@ -333,11 +333,11 @@ onBeforeUnmount(() => {
               @mousedown.prevent="selectPaciente(option)"
             >
               <span>{{ option.label }} - teléfono: {{ option.telefono_display }}</span>
-              <small v-if="option.homonimo">Requiere celular o fecha de nacimiento</small>
+              <small v-if="option.homonimo">Requiere teléfono o fecha de nacimiento</small>
             </button>
           </div>
         </div>
-        <label for="search-phone">Celular (opcional)</label>
+        <label for="search-phone">Teléfono (opcional)</label>
         <input id="search-phone" v-model="celular" autocomplete="tel" inputmode="tel" />
         <label for="search-birthdate">Fecha de nacimiento (opcional)</label>
         <input id="search-birthdate" v-model="fechaNacimiento" type="date" />

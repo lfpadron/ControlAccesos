@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   activatePaciente,
   createPaciente,
@@ -29,12 +29,20 @@ const birthYearInput = ref<HTMLInputElement | null>(null);
 const birthMonthInput = ref<HTMLInputElement | null>(null);
 const birthDayInput = ref<HTMLInputElement | null>(null);
 
+type PhoneType = 'FIJO' | 'CELULAR';
+type ConfirmationMethodOption = { value: string; label: string };
+
 const form = reactive({
   nombre: '',
   nombre_preferido: '',
   apellido_paterno: '',
   apellido_materno: '',
+  telefono_1: '',
+  tipo_telefono_1: 'FIJO' as PhoneType,
   celular: '',
+  tipo_telefono_2: 'CELULAR' as PhoneType,
+  correo_electronico: '',
+  metodo_confirmacion: '',
   fecha_nacimiento: '',
 });
 
@@ -52,6 +60,52 @@ const isPreferredOnly = computed(
     !form.apellido_materno.trim(),
 );
 const canEditPatient = computed(() => Boolean(medicoId.value));
+
+function validEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function lastFourDigits(value: string) {
+  const digits = value.replace(/\D/g, '');
+  return (digits || value.trim()).slice(-4);
+}
+
+function buildConfirmationMethodOptions(patient: {
+  telefono_1?: string | null;
+  tipo_telefono_1?: PhoneType | null;
+  celular?: string | null;
+  tipo_telefono_2?: PhoneType | null;
+  correo_electronico?: string | null;
+}): ConfirmationMethodOption[] {
+  const phones = [
+    { position: 1, value: patient.telefono_1?.trim() ?? '', type: patient.tipo_telefono_1 ?? 'FIJO' },
+    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 ?? 'CELULAR' },
+  ].filter((phone) => phone.value);
+  const fixedPhones = phones.filter((phone) => phone.type === 'FIJO');
+  const mobilePhones = phones.filter((phone) => phone.type === 'CELULAR');
+  const labelFor = (label: string, phone: (typeof phones)[number], matches: typeof phones) =>
+    matches.length > 1 ? `${label} (${lastFourDigits(phone.value)})` : label;
+  const options: ConfirmationMethodOption[] = [];
+
+  for (const phone of fixedPhones) {
+    options.push({ value: `LLAMAR_FIJO_${phone.position}`, label: labelFor('Llamar por teléfono fijo', phone, fixedPhones) });
+  }
+  for (const phone of mobilePhones) {
+    options.push({ value: `LLAMAR_CELULAR_${phone.position}`, label: labelFor('Llamar por celular', phone, mobilePhones) });
+  }
+  for (const phone of mobilePhones) {
+    options.push({ value: `WHATSAPP_${phone.position}`, label: labelFor('WhatsApp', phone, mobilePhones) });
+  }
+  for (const phone of mobilePhones) {
+    options.push({ value: `TELEGRAM_${phone.position}`, label: labelFor('Telegram', phone, mobilePhones) });
+  }
+  if (patient.correo_electronico && validEmail(patient.correo_electronico)) {
+    options.push({ value: 'CORREO', label: 'Correo' });
+  }
+  return options;
+}
+
+const confirmationMethodOptions = computed(() => buildConfirmationMethodOptions(form));
 const sortedPacientes = computed(() =>
   [...pacientes.value].sort((left, right) => {
     const leftName = patientSortName(left);
@@ -63,6 +117,12 @@ const sortedPacientes = computed(() =>
     return left.folio_paciente.localeCompare(right.folio_paciente, 'es', { numeric: true, sensitivity: 'base' });
   }),
 );
+
+watch(confirmationMethodOptions, (options) => {
+  if (form.metodo_confirmacion && !options.some((option) => option.value === form.metodo_confirmacion)) {
+    form.metodo_confirmacion = '';
+  }
+});
 
 function patientDisplayName(paciente: Paciente) {
   const apellidos = [paciente.apellido_paterno, paciente.apellido_materno].filter(Boolean).join(' ');
@@ -139,7 +199,12 @@ function setForm(paciente?: Paciente | null) {
   form.nombre_preferido = paciente?.nombre_preferido ?? '';
   form.apellido_paterno = paciente?.apellido_paterno ?? '';
   form.apellido_materno = paciente?.apellido_materno ?? '';
+  form.telefono_1 = paciente?.telefono_1 ?? '';
+  form.tipo_telefono_1 = paciente?.tipo_telefono_1 ?? 'FIJO';
   form.celular = paciente?.celular ?? '';
+  form.tipo_telefono_2 = paciente?.tipo_telefono_2 ?? 'CELULAR';
+  form.correo_electronico = paciente?.correo_electronico ?? '';
+  form.metodo_confirmacion = paciente?.metodo_confirmacion ?? '';
   setBirthDateParts(paciente?.fecha_nacimiento ?? '');
   confirmPreferredOnly.value = false;
 }
@@ -196,6 +261,21 @@ async function submit(preferredOnlyConfirmed = false) {
     error.value = 'Captura nombre preferido o nombre y apellido paterno.';
     return;
   }
+  if (!form.telefono_1.trim() || !form.celular.trim()) {
+    error.value = 'Teléfono 1 y Teléfono 2 son obligatorios.';
+    return;
+  }
+  if (form.correo_electronico.trim() && !validEmail(form.correo_electronico)) {
+    error.value = 'Captura un correo electrónico válido.';
+    return;
+  }
+  if (
+    form.metodo_confirmacion &&
+    !confirmationMethodOptions.value.some((option) => option.value === form.metodo_confirmacion)
+  ) {
+    error.value = 'Selecciona un método de envío y confirmación disponible.';
+    return;
+  }
   if (isPreferredOnly.value && !preferredOnlyConfirmed) {
     confirmPreferredOnly.value = true;
     return;
@@ -207,7 +287,12 @@ async function submit(preferredOnlyConfirmed = false) {
       nombre_preferido: trimOrNull(form.nombre_preferido),
       apellido_paterno: trimOrNull(form.apellido_paterno),
       apellido_materno: trimOrNull(form.apellido_materno),
+      telefono_1: trimOrNull(form.telefono_1),
+      tipo_telefono_1: form.tipo_telefono_1,
       celular: trimOrNull(form.celular),
+      tipo_telefono_2: form.tipo_telefono_2,
+      correo_electronico: trimOrNull(form.correo_electronico),
+      metodo_confirmacion: form.metodo_confirmacion || null,
       fecha_nacimiento: form.fecha_nacimiento || null,
       medico_id: medicoId.value,
     };
@@ -223,6 +308,18 @@ async function submit(preferredOnlyConfirmed = false) {
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible guardar el paciente.';
   }
+}
+
+function confirmationMethodLabel(paciente: Paciente) {
+  if (!paciente.metodo_confirmacion) return '-';
+  return (
+    buildConfirmationMethodOptions(paciente).find((option) => option.value === paciente.metodo_confirmacion)?.label ??
+    paciente.metodo_confirmacion
+  );
+}
+
+function phoneLabel(type: PhoneType, value?: string | null) {
+  return value ? `${type === 'FIJO' ? 'Fijo' : 'Celular'} · ${value}` : '-';
 }
 
 async function setActive(active: boolean) {
@@ -330,8 +427,39 @@ onMounted(async () => {
             <input id="apellido_materno" v-model="form.apellido_materno" maxlength="180" />
           </div>
           <div class="form-row">
-            <label for="celular">Celular</label>
-            <input id="celular" v-model="form.celular" maxlength="40" />
+            <label for="tipo_telefono_1">Tipo de teléfono 1</label>
+            <select id="tipo_telefono_1" v-model="form.tipo_telefono_1">
+              <option value="FIJO">Fijo</option>
+              <option value="CELULAR">Celular</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="telefono_1">Teléfono 1</label>
+            <input id="telefono_1" v-model="form.telefono_1" autocomplete="tel" inputmode="tel" maxlength="40" required />
+          </div>
+          <div class="form-row">
+            <label for="tipo_telefono_2">Tipo de teléfono 2</label>
+            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2">
+              <option value="FIJO">Fijo</option>
+              <option value="CELULAR">Celular</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="celular">Teléfono 2</label>
+            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" required />
+          </div>
+          <div class="form-row">
+            <label for="correo_electronico">Correo electrónico</label>
+            <input id="correo_electronico" v-model="form.correo_electronico" autocomplete="email" maxlength="320" type="email" />
+          </div>
+          <div class="form-row">
+            <label for="metodo_confirmacion">Método de envío y confirmación de citas</label>
+            <select id="metodo_confirmacion" v-model="form.metodo_confirmacion">
+              <option value="">Sin seleccionar</option>
+              <option v-for="option in confirmationMethodOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
           </div>
           <div class="form-row">
             <label for="fecha_nacimiento">Fecha de nacimiento</label>
@@ -389,7 +517,7 @@ onMounted(async () => {
         <div class="page-header compact">
           <h2>Listado</h2>
           <form class="inline-actions" @submit.prevent="search">
-            <input v-model="query" placeholder="Nombre, celular o folio" />
+            <input v-model="query" placeholder="Nombre, teléfono, correo o folio" />
             <button type="submit">Buscar</button>
             <button class="secondary" type="button" @click="query = ''; load()">Limpiar</button>
           </form>
@@ -404,7 +532,10 @@ onMounted(async () => {
                 <th>Paciente</th>
                 <th>Nombre preferido</th>
                 <th>Fecha de nacimiento</th>
-                <th>Celular</th>
+                <th>Teléfono 1</th>
+                <th>Teléfono 2</th>
+                <th>Correo electrónico</th>
+                <th>Método de confirmación</th>
                 <th>Estado</th>
                 <th>Marcar borrar</th>
               </tr>
@@ -421,7 +552,10 @@ onMounted(async () => {
                 <td>{{ patientDisplayName(paciente) }}</td>
                 <td>{{ paciente.nombre_preferido || '-' }}</td>
                 <td>{{ paciente.fecha_nacimiento || '-' }}</td>
-                <td>{{ paciente.celular || '-' }}</td>
+                <td>{{ phoneLabel(paciente.tipo_telefono_1, paciente.telefono_1) }}</td>
+                <td>{{ phoneLabel(paciente.tipo_telefono_2, paciente.celular) }}</td>
+                <td>{{ paciente.correo_electronico || '-' }}</td>
+                <td>{{ confirmationMethodLabel(paciente) }}</td>
                 <td>
                   <span class="status" :class="paciente.activo ? 'ok' : 'muted'">
                     {{ paciente.activo ? 'Activo' : `Inactivo ${paciente.desactivado_en ? new Date(paciente.desactivado_en).toLocaleString() : ''}` }}

@@ -388,12 +388,17 @@ def main() -> None:
                 folio_paciente="PDEMO246",
                 nombre="Paciente",
                 apellido_paterno="Demo",
+                telefono_1="5550100001",
+                tipo_telefono_1="FIJO",
                 celular="5550100000",
+                tipo_telefono_2="CELULAR",
                 fecha_nacimiento=date(1970, 1, 1),
             )
             db.add(paciente)
             db.flush()
         else:
+            if paciente.telefono_1 is None:
+                paciente.telefono_1 = "5550100001"
             if paciente.celular is None:
                 paciente.celular = "5550100000"
             if paciente.fecha_nacimiento is None:

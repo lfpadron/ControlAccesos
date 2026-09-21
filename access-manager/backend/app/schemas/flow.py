@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 TIPOS_CITA = {"PROGRAMADA", "ESPONTANEA"}
@@ -22,6 +22,41 @@ CHECKIN_CANALES = {"KIOSKO", "RECEPCION", "OPERADOR", "APP_MOVIL", "BOT_TELEGRAM
 TIPOS_CHECKIN = {"LECTOR_QR_APP", "KIOSKO", "RECEPCION_MANUAL", "RECEPCION_QR"}
 TIPOS_CANCELACION = {"MANUAL", "SISTEMA"}
 ESTADOS_ATENCION_MEDICO = {"AUSENTE", "NO_DISPONIBLE", "EN_CONSULTA", "DISPONIBLE", "NO_MOSTRAR"}
+TIPOS_TELEFONO = {"FIJO", "CELULAR"}
+METODOS_CONFIRMACION = {
+    "LLAMAR_FIJO_1",
+    "LLAMAR_FIJO_2",
+    "LLAMAR_CELULAR_1",
+    "LLAMAR_CELULAR_2",
+    "WHATSAPP_1",
+    "WHATSAPP_2",
+    "TELEGRAM_1",
+    "TELEGRAM_2",
+    "CORREO",
+}
+
+
+def metodos_confirmacion_disponibles(
+    telefono_1: str | None,
+    tipo_telefono_1: str,
+    telefono_2: str | None,
+    tipo_telefono_2: str,
+    correo_electronico: str | None,
+) -> set[str]:
+    metodos: set[str] = set()
+    for posicion, telefono, tipo in (
+        (1, telefono_1, tipo_telefono_1),
+        (2, telefono_2, tipo_telefono_2),
+    ):
+        if not telefono:
+            continue
+        metodos.add(f"LLAMAR_{tipo}_{posicion}")
+        if tipo == "CELULAR":
+            metodos.add(f"WHATSAPP_{posicion}")
+            metodos.add(f"TELEGRAM_{posicion}")
+    if correo_electronico:
+        metodos.add("CORREO")
+    return metodos
 
 
 class PacienteBase(BaseModel):
@@ -29,11 +64,26 @@ class PacienteBase(BaseModel):
     nombre_preferido: str | None = Field(default=None, max_length=60)
     apellido_paterno: str | None = Field(default=None, min_length=1, max_length=180)
     apellido_materno: str | None = Field(default=None, max_length=180)
+    telefono_1: str | None = Field(default=None, max_length=40)
+    tipo_telefono_1: str = "FIJO"
     celular: str | None = Field(default=None, max_length=40)
+    tipo_telefono_2: str = "CELULAR"
+    correo_electronico: EmailStr | None = None
+    metodo_confirmacion: str | None = Field(default=None, max_length=40)
     fecha_nacimiento: date | None = None
     activo: bool = True
 
-    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
+    @field_validator(
+        "nombre",
+        "nombre_preferido",
+        "apellido_paterno",
+        "apellido_materno",
+        "telefono_1",
+        "celular",
+        "correo_electronico",
+        "metodo_confirmacion",
+        mode="before",
+    )
     @classmethod
     def blank_to_none(cls, value):
         if isinstance(value, str):
@@ -41,17 +91,43 @@ class PacienteBase(BaseModel):
             return text or None
         return value
 
+    @field_validator("tipo_telefono_1", "tipo_telefono_2")
+    @classmethod
+    def validate_phone_type(cls, value: str) -> str:
+        if value not in TIPOS_TELEFONO:
+            raise ValueError("Tipo de teléfono inválido.")
+        return value
+
+    @field_validator("metodo_confirmacion")
+    @classmethod
+    def validate_confirmation_method(cls, value: str | None) -> str | None:
+        if value is not None and value not in METODOS_CONFIRMACION:
+            raise ValueError("Método de envío y confirmación inválido.")
+        return value
+
     @model_validator(mode="after")
     def validate_values(self):
         if not self.nombre_preferido and not (self.nombre and self.apellido_paterno):
             raise ValueError("Debe indicar nombre preferido o nombre y apellido paterno.")
-        if not self.celular and self.fecha_nacimiento is None:
-            raise ValueError("Debe indicar celular o fecha de nacimiento.")
+        if self.metodo_confirmacion and self.metodo_confirmacion not in metodos_confirmacion_disponibles(
+            self.telefono_1,
+            self.tipo_telefono_1,
+            self.celular,
+            self.tipo_telefono_2,
+            str(self.correo_electronico) if self.correo_electronico else None,
+        ):
+            raise ValueError("El método de envío y confirmación no corresponde a los datos de contacto capturados.")
         return self
 
 
 class PacienteCreate(PacienteBase):
     medico_id: UUID
+
+    @model_validator(mode="after")
+    def validate_required_phones(self):
+        if not self.telefono_1 or not self.celular:
+            raise ValueError("Teléfono 1 y Teléfono 2 son obligatorios.")
+        return self
 
 
 class PacienteUpdate(BaseModel):
@@ -59,16 +135,45 @@ class PacienteUpdate(BaseModel):
     nombre_preferido: str | None = Field(default=None, max_length=60)
     apellido_paterno: str | None = Field(default=None, min_length=1, max_length=180)
     apellido_materno: str | None = Field(default=None, max_length=180)
+    telefono_1: str | None = Field(default=None, max_length=40)
+    tipo_telefono_1: str | None = None
     celular: str | None = Field(default=None, max_length=40)
+    tipo_telefono_2: str | None = None
+    correo_electronico: EmailStr | None = None
+    metodo_confirmacion: str | None = Field(default=None, max_length=40)
     fecha_nacimiento: date | None = None
     activo: bool | None = None
 
-    @field_validator("nombre", "nombre_preferido", "apellido_paterno", "apellido_materno", "celular", mode="before")
+    @field_validator(
+        "nombre",
+        "nombre_preferido",
+        "apellido_paterno",
+        "apellido_materno",
+        "telefono_1",
+        "celular",
+        "correo_electronico",
+        "metodo_confirmacion",
+        mode="before",
+    )
     @classmethod
     def blank_to_none(cls, value):
         if isinstance(value, str):
             text = value.strip()
             return text or None
+        return value
+
+    @field_validator("tipo_telefono_1", "tipo_telefono_2")
+    @classmethod
+    def validate_phone_type(cls, value: str | None) -> str | None:
+        if value is not None and value not in TIPOS_TELEFONO:
+            raise ValueError("Tipo de teléfono inválido.")
+        return value
+
+    @field_validator("metodo_confirmacion")
+    @classmethod
+    def validate_confirmation_method(cls, value: str | None) -> str | None:
+        if value is not None and value not in METODOS_CONFIRMACION:
+            raise ValueError("Método de envío y confirmación inválido.")
         return value
 
 

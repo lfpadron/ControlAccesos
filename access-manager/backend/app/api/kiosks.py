@@ -192,10 +192,16 @@ def patient_lookup_label(paciente: Paciente) -> str:
 
 
 def patient_phone_display(paciente: Paciente) -> str:
-    digits = normalized_digits(paciente.celular)
-    if not digits:
+    phones = list(
+        dict.fromkeys(
+            digits
+            for digits in (normalized_digits(paciente.telefono_1), normalized_digits(paciente.celular))
+            if digits
+        )
+    )
+    if not phones:
         return "sin teléfono registrado"
-    return f"XXX{digits[-4:]}"
+    return " / ".join(f"XXX{digits[-4:]}" for digits in phones)
 
 
 def patient_identity_key(paciente: Paciente) -> str:
@@ -247,7 +253,8 @@ def scoped_patients_for_punto(db: Session, punto: PuntoAcceso) -> list[Paciente]
 
 def patient_matches_contact(paciente: Paciente, celular: str | None, fecha_nacimiento: date | None) -> bool:
     digits = normalized_digits(celular)
-    if digits and normalized_digits(paciente.celular) != digits:
+    registered_phones = {normalized_digits(paciente.telefono_1), normalized_digits(paciente.celular)}
+    if digits and digits not in registered_phones:
         return False
     if fecha_nacimiento is not None and paciente.fecha_nacimiento != fecha_nacimiento:
         return False
@@ -373,7 +380,7 @@ def public_kiosko_buscar_pacientes(
         KioskoPacienteOption(
             id=patient.id,
             label=patient_lookup_label(patient),
-            celular=patient.celular,
+            celular=patient.celular or patient.telefono_1,
             telefono_display=patient_phone_display(patient),
             homonimo=identity_counts[patient_identity_key(patient)] > 1,
         )
