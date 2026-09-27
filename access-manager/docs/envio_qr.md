@@ -86,6 +86,12 @@ configurar SMTP. Referencias: [API](https://resend.com/docs/api-reference/emails
    de una cita, mostrar/copiar el enlace del bot. El paciente lo abre en su
    propia cuenta de Telegram, pulsa **Iniciar** y **Compartir mi celular**.
    El código que acompaña al enlace sólo abre el bot; no es un QR de acceso.
+   **Copiar QR y enlace** permite pegarlo en otra aplicación para reenviarlo.
+   El portapapeles incluye imagen, texto y, cuando está disponible, HTML con
+   enlace pulsable. Cada aplicación decide qué formato pegar: el PNG también
+   lleva el enlace escrito. **Copiar enlace** conserva la alternativa de texto.
+   La copia requiere HTTPS (o localhost para desarrollo) y permiso del navegador;
+   la pantalla avisa si no puede copiar. No se envía nada al copiar.
 5. El webhook verifica su secreto, que sea un chat privado y que el contacto
    compartido pertenezca al propio remitente. Vincula sólo teléfonos celulares
    coincidentes en pacientes activos, sin revelar nombres ni datos de citas.
