@@ -48,6 +48,10 @@ def _signature(payload: dict[str, str]) -> str:
 
 
 def encode_qr_payload(cita: Cita, emitido: datetime, expira: datetime) -> str:
+    # PostgreSQL stores instants; always serialize them in UTC, including when a
+    # test database returns a naive timestamp.
+    emitido = emitido.replace(tzinfo=UTC) if emitido.tzinfo is None else emitido.astimezone(UTC)
+    expira = expira.replace(tzinfo=UTC) if expira.tzinfo is None else expira.astimezone(UTC)
     payload = {
         "cita_id": str(cita.id),
         "folio_turno": cita.folio_turno,
@@ -89,6 +93,23 @@ def generate_qr(db: Session, cita: Cita) -> tuple[QrToken, str]:
     cita.estado = "QR_GENERADO" if cita.estado == "AGENDADA" else cita.estado
     db.flush()
     return qr_token, token
+
+
+def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
+    # Serialize creation per appointment so simultaneous previews share a token.
+    db.execute(select(Cita.id).where(Cita.id == cita.id).with_for_update())
+    qr_token = db.execute(
+        select(QrToken).where(
+            QrToken.cita_id == cita.id,
+            QrToken.estado == "GENERADO",
+            QrToken.fecha_expiracion > now_utc(),
+        ).order_by(QrToken.fecha_emision.desc()).limit(1)
+    ).scalar_one_or_none()
+    if qr_token is not None:
+        token = encode_qr_payload(cita, qr_token.fecha_emision, qr_token.fecha_expiracion)
+        if token_digest(token) == qr_token.token_hash:
+            return qr_token, token
+    return generate_qr(db, cita)
 
 
 def cancel_qr(db: Session, cita_id: UUID) -> int:

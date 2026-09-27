@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,6 +40,8 @@ class Paciente(TimestampMixin, Base):
     tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
     correo_electronico: Mapped[str | None] = mapped_column(String(320))
     metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
+    telegram_chat_id_1: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_chat_id_2: Mapped[int | None] = mapped_column(BigInteger)
     fecha_nacimiento: Mapped[date | None] = mapped_column(Date)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

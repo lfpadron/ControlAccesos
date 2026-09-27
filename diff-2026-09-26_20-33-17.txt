@@ -1,0 +1,780 @@
+diff --git a/access-manager/.env.example b/access-manager/.env.example
+index 6df5f2b..fe06fe4 100644
+--- a/access-manager/.env.example
++++ b/access-manager/.env.example
+@@ -12,6 +12,14 @@ JWT_ALGORITHM=HS256
+ ACCESS_TOKEN_EXPIRE_MINUTES=720
+ QR_SIGNING_SECRET=change-me-qr-local-development-only
+ QR_EXPIRATION_HOURS=24
++# Envio de QR (opcionales; sin configurar, el canal aparece deshabilitado).
++RESEND_API_KEY=
++QR_EMAIL_FROM=
++QR_EMAIL_REPLY_TO=
++TELEGRAM_BOT_TOKEN=
++TELEGRAM_BOT_USERNAME=
++TELEGRAM_WEBHOOK_SECRET=
++QR_DELIVERY_TIMEOUT_SECONDS=15
+ CHECKIN_GREEN_BEFORE_MINUTES=120
+ CHECKIN_GREEN_AFTER_MINUTES=30
+ CHECKIN_YELLOW_BEFORE_MINUTES=240
+diff --git a/access-manager/README.md b/access-manager/README.md
+index 57f80be..99b268c 100644
+--- a/access-manager/README.md
++++ b/access-manager/README.md
+@@ -163,4 +163,4 @@ npm run build
+ 
+ ## Estado del entregable
+ 
+-Incluye la base técnica, la capa operativa inicial y el flujo Paciente -> Cita -> QR -> Llegada -> Llamado -> Pantalla. No implementa todavía impresión física real, WhatsApp, Telegram, SMS, expediente clínico, facturación ni pagos.
++Incluye la base técnica, la capa operativa inicial y el flujo Paciente -> Cita -> QR -> Llegada -> Llamado -> Pantalla, además de envío de QR por correo mediante Resend y por Telegram. La configuración y activación de ambos canales se describe en [Envío de QR](docs/envio_qr.md). No implementa todavía impresión física real, WhatsApp, SMS, expediente clínico, facturación ni pagos.
+diff --git a/access-manager/backend/Containerfile b/access-manager/backend/Containerfile
+index b287977..d775271 100644
+--- a/access-manager/backend/Containerfile
++++ b/access-manager/backend/Containerfile
+@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
+ WORKDIR /app
+ 
+ RUN apt-get update \
+-    && apt-get install -y --no-install-recommends curl \
++    && apt-get install -y --no-install-recommends curl fonts-dejavu-core \
+     && rm -rf /var/lib/apt/lists/*
+ 
+ COPY --from=uv /uv /uvx /usr/local/bin/
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 9937f70..6e476ea 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -82,7 +82,7 @@ from app.services.access_scope import (
+ from app.services.medico_sync import sync_medicos_for_medico_users
+ from app.services.checkin_service import checkin_window_status
+ from app.services.folio_service import generate_patient_folio, generate_turn_folio
+-from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, now_utc, token_digest, validate_qr
++from app.services.qr_service import cancel_qr, get_active_qr_payload, now_utc, validate_qr
+ 
+ pacientes_router = APIRouter()
+ citas_router = APIRouter()
+@@ -1114,22 +1114,6 @@ def query_citas(
+     return query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)
+ 
+ 
+-def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
+-    timestamp = now_utc()
+-    qr_token = db.execute(
+-        select(QrToken).where(
+-            QrToken.cita_id == cita.id,
+-            QrToken.estado == "GENERADO",
+-            QrToken.fecha_expiracion > timestamp,
+-        ).order_by(QrToken.fecha_emision.desc())
+-    ).scalar_one_or_none()
+-    if qr_token is not None:
+-        token = encode_qr_payload(cita, qr_token.fecha_emision, qr_token.fecha_expiracion)
+-        if token_digest(token) == qr_token.token_hash:
+-            return qr_token, token
+-    return generate_qr(db, cita)
+-
+-
+ def create_arrival_event(
+     db: Session,
+     cita: Cita,
+@@ -1789,8 +1773,13 @@ def update_paciente(
+     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
+     ensure_paciente_access(db, current_user, item.id, business_today())
+     before = audit_safe_dict(item)
++    previous_phones = (item.telefono_1, item.tipo_telefono_1, item.celular, item.tipo_telefono_2)
+     for key, value in payload.model_dump(exclude_unset=True).items():
+         setattr(item, key, value)
++    if previous_phones[:2] != (item.telefono_1, item.tipo_telefono_1):
++        item.telegram_chat_id_1 = None
++    if previous_phones[2:] != (item.celular, item.tipo_telefono_2):
++        item.telegram_chat_id_2 = None
+     validate_patient_identity(item)
+     validate_patient_contact(item)
+     validate_patient_confirmation_method(item)
+@@ -2223,7 +2212,7 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
+     ensure_cita_access(db, current_user, cita.id, business_today())
+     if cita.estado == "CANCELADA":
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se puede generar un QR para una cita cancelada.")
+-    qr_token, token = generate_qr(db, cita)
++    qr_token, token = get_active_qr_payload(db, cita)
+     record_audit_event(
+         db,
+         evento="QR_GENERADO",
+@@ -2250,6 +2239,8 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
+ def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
+     cita = exists_or_404(db, Cita, cita_id, "Cita")
+     ensure_cita_access(db, current_user, cita.id, business_today())
++    if cita.estado == "CANCELADA":
++        raise HTTPException(status_code=409, detail="La cita está cancelada.")
+     qr_token, _token = get_active_qr_payload(db, cita)
+     db.commit()
+     db.refresh(qr_token)
+@@ -2282,6 +2273,8 @@ def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user:
+ 
+ 
+ def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
++    if cita.estado == "CANCELADA":
++        raise HTTPException(status_code=409, detail="La cita está cancelada.")
+     _qr_token, token = get_active_qr_payload(db, cita)
+     db.commit()
+     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")
+diff --git a/access-manager/backend/app/api/router.py b/access-manager/backend/app/api/router.py
+index 10705b2..d7ab2b7 100644
+--- a/access-manager/backend/app/api/router.py
++++ b/access-manager/backend/app/api/router.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ from fastapi import APIRouter
+ 
+-from app.api import auth, complejos, contactos, display, flow, health, instituciones, kiosks, operational
++from app.api import auth, complejos, contactos, display, flow, health, instituciones, kiosks, operational, qr_delivery
+ 
+ api_router = APIRouter()
+ api_router.include_router(health.router, tags=["health"])
+@@ -12,6 +12,7 @@ api_router.include_router(complejos.router, prefix="/complejos", tags=["complejo
+ api_router.include_router(flow.pacientes_router, prefix="/pacientes", tags=["pacientes"])
+ api_router.include_router(flow.citas_router, prefix="/citas", tags=["citas"])
+ api_router.include_router(flow.qr_router, prefix="/qr", tags=["qr"])
++api_router.include_router(qr_delivery.router, tags=["envio-qr"])
+ api_router.include_router(flow.mobile_router, prefix="/mobile", tags=["mobile"])
+ api_router.include_router(flow.catalogos_operativos_router, prefix="/catalogos-operativos", tags=["catalogos-operativos"])
+ api_router.include_router(flow.medico_estado_router, prefix="/estado-medico", tags=["estado-medico"])
+diff --git a/access-manager/backend/app/core/config.py b/access-manager/backend/app/core/config.py
+index 7f6918f..c67e832 100644
+--- a/access-manager/backend/app/core/config.py
++++ b/access-manager/backend/app/core/config.py
+@@ -21,6 +21,13 @@ class Settings(BaseSettings):
+     access_token_expire_minutes: int = Field(default=720, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+     qr_signing_secret: str | None = Field(default=None, alias="QR_SIGNING_SECRET")
+     qr_expiration_hours: int = Field(default=24, alias="QR_EXPIRATION_HOURS")
++    resend_api_key: str | None = Field(default=None, alias="RESEND_API_KEY")
++    qr_email_from: str | None = Field(default=None, alias="QR_EMAIL_FROM")
++    qr_email_reply_to: str | None = Field(default=None, alias="QR_EMAIL_REPLY_TO")
++    telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
++    telegram_bot_username: str | None = Field(default=None, alias="TELEGRAM_BOT_USERNAME")
++    telegram_webhook_secret: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_SECRET")
++    qr_delivery_timeout_seconds: float = Field(default=15, gt=0, le=60, alias="QR_DELIVERY_TIMEOUT_SECONDS")
+     checkin_green_before_minutes: int = Field(default=120, alias="CHECKIN_GREEN_BEFORE_MINUTES")
+     checkin_green_after_minutes: int = Field(default=30, alias="CHECKIN_GREEN_AFTER_MINUTES")
+     checkin_yellow_before_minutes: int = Field(default=240, alias="CHECKIN_YELLOW_BEFORE_MINUTES")
+diff --git a/access-manager/backend/app/core/logging.py b/access-manager/backend/app/core/logging.py
+index 880d97d..de51bdd 100644
+--- a/access-manager/backend/app/core/logging.py
++++ b/access-manager/backend/app/core/logging.py
+@@ -27,3 +27,6 @@ def configure_logging(level: str = "INFO") -> None:
+     root.handlers.clear()
+     root.addHandler(handler)
+     root.setLevel(level.upper())
++    # Telegram includes the bot credential in its API URL.
++    logging.getLogger("httpx").setLevel(logging.WARNING)
++    logging.getLogger("httpcore").setLevel(logging.WARNING)
+diff --git a/access-manager/backend/app/models/flow.py b/access-manager/backend/app/models/flow.py
+index 0066bb6..41546fa 100644
+--- a/access-manager/backend/app/models/flow.py
++++ b/access-manager/backend/app/models/flow.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from datetime import date, datetime, time
+ import uuid
+ 
+-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
++from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
+ from sqlalchemy.dialects.postgresql import UUID
+ from sqlalchemy.orm import Mapped, mapped_column
+ 
+@@ -40,6 +40,8 @@ class Paciente(TimestampMixin, Base):
+     tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
+     correo_electronico: Mapped[str | None] = mapped_column(String(320))
+     metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
++    telegram_chat_id_1: Mapped[int | None] = mapped_column(BigInteger)
++    telegram_chat_id_2: Mapped[int | None] = mapped_column(BigInteger)
+     fecha_nacimiento: Mapped[date | None] = mapped_column(Date)
+     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+     desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+diff --git a/access-manager/backend/app/services/qr_service.py b/access-manager/backend/app/services/qr_service.py
+index 03483dc..73dc7c7 100644
+--- a/access-manager/backend/app/services/qr_service.py
++++ b/access-manager/backend/app/services/qr_service.py
+@@ -48,6 +48,10 @@ def _signature(payload: dict[str, str]) -> str:
+ 
+ 
+ def encode_qr_payload(cita: Cita, emitido: datetime, expira: datetime) -> str:
++    # PostgreSQL stores instants; always serialize them in UTC, including when a
++    # test database returns a naive timestamp.
++    emitido = emitido.replace(tzinfo=UTC) if emitido.tzinfo is None else emitido.astimezone(UTC)
++    expira = expira.replace(tzinfo=UTC) if expira.tzinfo is None else expira.astimezone(UTC)
+     payload = {
+         "cita_id": str(cita.id),
+         "folio_turno": cita.folio_turno,
+@@ -91,6 +95,23 @@ def generate_qr(db: Session, cita: Cita) -> tuple[QrToken, str]:
+     return qr_token, token
+ 
+ 
++def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
++    # Serialize creation per appointment so simultaneous previews share a token.
++    db.execute(select(Cita.id).where(Cita.id == cita.id).with_for_update())
++    qr_token = db.execute(
++        select(QrToken).where(
++            QrToken.cita_id == cita.id,
++            QrToken.estado == "GENERADO",
++            QrToken.fecha_expiracion > now_utc(),
++        ).order_by(QrToken.fecha_emision.desc()).limit(1)
++    ).scalar_one_or_none()
++    if qr_token is not None:
++        token = encode_qr_payload(cita, qr_token.fecha_emision, qr_token.fecha_expiracion)
++        if token_digest(token) == qr_token.token_hash:
++            return qr_token, token
++    return generate_qr(db, cita)
++
++
+ def cancel_qr(db: Session, cita_id: UUID) -> int:
+     timestamp = now_utc()
+     result = db.execute(
+diff --git a/access-manager/backend/pyproject.toml b/access-manager/backend/pyproject.toml
+index 1402255..9852975 100644
+--- a/access-manager/backend/pyproject.toml
++++ b/access-manager/backend/pyproject.toml
+@@ -13,6 +13,7 @@ dependencies = [
+   "python-jose[cryptography]>=3.3.0",
+   "pytest>=8.3.0",
+   "httpx>=0.28.0",
++  "qrcode[pil]>=8.2,<9",
+   "redis>=5.0.8",
+   "SQLAlchemy>=2.0.32",
+   "uvicorn[standard]>=0.30.6"
+diff --git a/access-manager/backend/uv.lock b/access-manager/backend/uv.lock
+index ae7ecf6..99097d0 100644
+--- a/access-manager/backend/uv.lock
++++ b/access-manager/backend/uv.lock
+@@ -20,6 +20,7 @@ dependencies = [
+     { name = "pydantic-settings" },
+     { name = "pytest" },
+     { name = "python-jose", extra = ["cryptography"] },
++    { name = "qrcode", extra = ["pil"] },
+     { name = "redis" },
+     { name = "sqlalchemy" },
+     { name = "uvicorn", extra = ["standard"] },
+@@ -36,6 +37,7 @@ requires-dist = [
+     { name = "pydantic-settings", specifier = ">=2.4.0" },
+     { name = "pytest", specifier = ">=8.3.0" },
+     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3.0" },
++    { name = "qrcode", extras = ["pil"], specifier = ">=8.2,<9" },
+     { name = "redis", specifier = ">=5.0.8" },
+     { name = "sqlalchemy", specifier = ">=2.0.32" },
+     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.6" },
+@@ -546,6 +548,77 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", size = 100195, upload-time = "2026-04-24T20:15:22.081Z" },
+ ]
+ 
++[[package]]
++name = "pillow"
++version = "12.3.0"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/1c/3d/bb7fca845737cf9d7dbde16ed1843984665ff2e0a518f5db43e77ec540b9/pillow-12.3.0.tar.gz", hash = "sha256:3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce", size = 47025035, upload-time = "2026-07-01T11:56:38.965Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/37/bf/fb3ebff8ddcb76aac5a01389251bbbb9519922a9b520d8247c1ca864a25d/pillow-12.3.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ba09209fbe443b4acccebe845d8a138b89a8f4fbaeedd44953490b5315d5e965", size = 5345969, upload-time = "2026-07-01T11:54:06.397Z" },
++    { url = "https://files.pythonhosted.org/packages/d8/66/9a386a92561f402389a4fc70c18838bf6d35eb5eb5c6850b4b2dc64f5048/pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ffd0c5368496f41b0944be820fcb7a838aa6e623d250b01acf2643939c3f99d7", size = 4780323, upload-time = "2026-07-01T11:54:09.351Z" },
++    { url = "https://files.pythonhosted.org/packages/25/27/ac8f99618ffd3dde21db0f4d4b1d2ab00c0880595bfd17df103f7f39fd0c/pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9", size = 6266838, upload-time = "2026-07-01T11:54:11.71Z" },
++    { url = "https://files.pythonhosted.org/packages/84/21/a35af28dcc61f37ed850a2d64c65c701321dfbf25085e469d5559360cbbf/pillow-12.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91", size = 6940830, upload-time = "2026-07-01T11:54:13.732Z" },
++    { url = "https://files.pythonhosted.org/packages/eb/51/8b08617af3ad95e33ce6d7dd2c99ed6c8298f7fb131636303956be022e25/pillow-12.3.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e491916b378fba47242221bb9ead245211b70d504f495d105d17b14a24b4907c", size = 6344383, upload-time = "2026-07-01T11:54:15.756Z" },
++    { url = "https://files.pythonhosted.org/packages/1d/72/cf78ac9780bb93c28328f408973845a309d4d145041665f734572ced1b52/pillow-12.3.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:0dd2064cbc55aaec028ef5fbb60fa47bb6c3e7918e07ff17935284b227a9d2df", size = 7052934, upload-time = "2026-07-01T11:54:17.721Z" },
++    { url = "https://files.pythonhosted.org/packages/20/20/25e0f4dc178a6bc0696793720055519a0de89e7661dae886992decbd2f81/pillow-12.3.0-cp312-cp312-win32.whl", hash = "sha256:dbce0b29841537a2fa4a214c2bbf14de3587c9680caa9b4e217568472490b28f", size = 6472684, upload-time = "2026-07-01T11:54:19.839Z" },
++    { url = "https://files.pythonhosted.org/packages/45/89/da2f7971a317f83d807fdd4065c0af40208e59e692cc43d315a71a0e96d1/pillow-12.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09", size = 7227137, upload-time = "2026-07-01T11:54:22.025Z" },
++    { url = "https://files.pythonhosted.org/packages/de/47/4845a0a6c0dbf1db8456bd9fc791f13c5ced7ced20606d08a0aacfd25b49/pillow-12.3.0-cp312-cp312-win_arm64.whl", hash = "sha256:331b624368d4f1d069149002f25f44bc61c8919ce8ddb3c45bdad8f6e2d89510", size = 2568267, upload-time = "2026-07-01T11:54:24.051Z" },
++    { url = "https://files.pythonhosted.org/packages/9d/ac/31fb64e1e7efb5a4b50cd3d92049ba89ac6e4d8d3bb6a74e15048ca3353e/pillow-12.3.0-cp313-cp313-ios_13_0_arm64_iphoneos.whl", hash = "sha256:21900ce7ba264168cd50defae43cd75d25c833ad4ad6e73ffc5596d12e25ac89", size = 4161684, upload-time = "2026-07-01T11:54:25.934Z" },
++    { url = "https://files.pythonhosted.org/packages/87/b4/9805e23d2b4d77842b468513841fda254ee42f0289d25088340e4ff46e2d/pillow-12.3.0-cp313-cp313-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:4e8c2a84d977f50b9daed6eeaf3baef67d00d5d74d932288f02cb94518ee3ace", size = 4255487, upload-time = "2026-07-01T11:54:27.935Z" },
++    { url = "https://files.pythonhosted.org/packages/df/39/ecf519435a200c693fe053a6ee4d835b41cf963a4dfc2551c4e637cb2a71/pillow-12.3.0-cp313-cp313-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:ae26d61dfa7a47befdc7572b521024e8745f3d809bd95ca9505a7bba9ef849ec", size = 3696433, upload-time = "2026-07-01T11:54:29.813Z" },
++    { url = "https://files.pythonhosted.org/packages/42/92/2fc3ffad878ae8dd5469ec1bc8eb83b71f48e13efdf68f02709003982a32/pillow-12.3.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:7a743ff716f746fc19a9557f60dab1600d4613255f8a7aeb3cdde4db7eb15a66", size = 5345889, upload-time = "2026-07-01T11:54:31.97Z" },
++    { url = "https://files.pythonhosted.org/packages/10/76/8803c13605b763d33d156c4678fc77f8443389c0c51c8aef707bb02015f4/pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:d69141514cc30b774ceea5e3ed3a6635c8d8a96edf664689b890f4089111fb35", size = 4780109, upload-time = "2026-07-01T11:54:34.026Z" },
++    { url = "https://files.pythonhosted.org/packages/1f/01/e18aff37cb0b4aac47ac90f016d347a49aca667ef97f190b06ac2aabc928/pillow-12.3.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f7401aebd7f581d7f83a439d87d474999317ee099218e5ad25d125290990ba65", size = 6263736, upload-time = "2026-07-01T11:54:36.131Z" },
++    { url = "https://files.pythonhosted.org/packages/f7/62/de5bdd77d935331f4f802edc11e4d82950f642caad6cb2f949837b8560e2/pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0847a763afefb695bc912d7c131e7e0632d4edc1d8698f58ddabec8e46b8b6d3", size = 6937129, upload-time = "2026-07-01T11:54:38.216Z" },
++    { url = "https://files.pythonhosted.org/packages/70/4d/105627a13300c5e0df1d174230b32fd1273062c96f7745fd552b945d1e1d/pillow-12.3.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:571b9fcb07b97ef3a492028fb3d2dc0993ca23a06138b0315286566d29ef718a", size = 6339562, upload-time = "2026-07-01T11:54:40.354Z" },
++    { url = "https://files.pythonhosted.org/packages/6b/1d/f13de01a553988ab895ba1c722e06cf3144d4f57656fd5b81b6d881f1179/pillow-12.3.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:756c768d0c9c2955feb7a56c37ea24aea2e369f8d36a88da270b6a9f19e62b5e", size = 7049439, upload-time = "2026-07-01T11:54:42.489Z" },
++    { url = "https://files.pythonhosted.org/packages/c9/f9/066794cca041b969964f779ee5fa66a9498bbf34248ac39c5d7954e4198f/pillow-12.3.0-cp313-cp313-win32.whl", hash = "sha256:a876864214e136f0eb367788dbd7df045f4806801518e2cfe9e13229cfe06d8f", size = 6473287, upload-time = "2026-07-01T11:54:44.9Z" },
++    { url = "https://files.pythonhosted.org/packages/a6/9b/7a58e61d62be561da3a356fe2384d4059a6345fc130e23ef1c36a5b81d24/pillow-12.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:1cca606cd25738df4ed873d5ad46bbdb3d83b5cbca291f6b4ff13a4df6b0bbe8", size = 7239691, upload-time = "2026-07-01T11:54:47.141Z" },
++    { url = "https://files.pythonhosted.org/packages/aa/b0/c4ed4f0ef8f8fa5ee8351537db6650bb8189f7e118842978dd6589065692/pillow-12.3.0-cp313-cp313-win_arm64.whl", hash = "sha256:b629de27fda84b42cde7edef0d85f13b958b47f6e9bbcbba9b673c562a89bd8b", size = 2568185, upload-time = "2026-07-01T11:54:49.137Z" },
++    { url = "https://files.pythonhosted.org/packages/dc/01/001f65b68192f0228cc1dbbc8d2530ab5d58b61037ba0587f946fea607cd/pillow-12.3.0-cp314-cp314-ios_13_0_arm64_iphoneos.whl", hash = "sha256:9cf95fe4d0f84c82d282745d9bb08ad9f926efa00be4697e767b814ce40d4330", size = 4161736, upload-time = "2026-07-01T11:54:51.156Z" },
++    { url = "https://files.pythonhosted.org/packages/1a/d2/0219746d0fd16fc8a84498e79452375be3797d3ce4044596ce565164b84f/pillow-12.3.0-cp314-cp314-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:8728f216dcdb6e6d555cf971cb34076139ad74b31fc2c14da4fafc741c5f6217", size = 4255435, upload-time = "2026-07-01T11:54:53.414Z" },
++    { url = "https://files.pythonhosted.org/packages/c8/02/8d0bc62ef0302318c46ff2a512822d2610e81c7aa46c9b3abe6cbaca5ad0/pillow-12.3.0-cp314-cp314-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:a45650e8ce7fafffd731db8550230db6b0d306d181a90b67d3e6bca2f1990930", size = 3696262, upload-time = "2026-07-01T11:54:55.739Z" },
++    { url = "https://files.pythonhosted.org/packages/85/e2/73c77d218410b14f5f2d565e8a998d5317b7b9c75368d29985139f7a46f0/pillow-12.3.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:ba54cfebe86920a559a7c4d6b9050791c20513650a1952ebe3368c7dc70306f8", size = 5350344, upload-time = "2026-07-01T11:54:57.657Z" },
++    { url = "https://files.pythonhosted.org/packages/c7/da/32c752228ae345f489e3a42499d817b6c3996da7e8a3bc7a04fc806b243b/pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:e158cb00350dc278f3b91551101aa7d12415a66ebf2c91d8d5ac14e56ddd3ad0", size = 4780131, upload-time = "2026-07-01T11:54:59.713Z" },
++    { url = "https://files.pythonhosted.org/packages/b1/9d/8b2c807dbef61a5197c047afe99823787eb66f63daf9fb2432f91d6f0462/pillow-12.3.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e9aeb04d6aef139de265b29683e119b638208f88cf73cdd1658aa07221165321", size = 6263757, upload-time = "2026-07-01T11:55:01.778Z" },
++    { url = "https://files.pythonhosted.org/packages/5c/44/c85361f65dbe00eea8576ee467c768d25129989efb76e94f205e9ca9bb46/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b", size = 6936962, upload-time = "2026-07-01T11:55:03.93Z" },
++    { url = "https://files.pythonhosted.org/packages/18/7e/e483414b35800b86b6f08dbbc7803fb5cd52c4d6f897f47d53ea2c7e6f65/pillow-12.3.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:fe3cca2e4e8a592be0f269a1ca4835c25199d9f3ce815c8491048f785b0a0198", size = 6339171, upload-time = "2026-07-01T11:55:05.989Z" },
++    { url = "https://files.pythonhosted.org/packages/f0/f4/68c491844841ede6bed70189546b3ee9731cf9f2cbad396faff5e1ccba45/pillow-12.3.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:23aceaa007d6172b02c277f0cd359c79492bbb14f7072b4ede9fbcaf20648130", size = 7048116, upload-time = "2026-07-01T11:55:08.131Z" },
++    { url = "https://files.pythonhosted.org/packages/a3/34/77f3f793fed8efc7d243f21b33c5a3f0d1c97ee70346d3db855587e155ff/pillow-12.3.0-cp314-cp314-win32.whl", hash = "sha256:af8d94b0db561cf68b88a267c5c44b49e134f525d0dc2cb7ed413a66bc23559a", size = 6467209, upload-time = "2026-07-01T11:55:10.408Z" },
++    { url = "https://files.pythonhosted.org/packages/f1/e0/492879f69d94f91f60fc8cd05ba03650e9520afebb2fb7aa12777d7c7f38/pillow-12.3.0-cp314-cp314-win_amd64.whl", hash = "sha256:fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d", size = 7237707, upload-time = "2026-07-01T11:55:12.745Z" },
++    { url = "https://files.pythonhosted.org/packages/c9/ac/6b11f2875f1c2ac040d84e1bbf9cf22a88038f901ca1037898b280b38365/pillow-12.3.0-cp314-cp314-win_arm64.whl", hash = "sha256:e91206ee562682b51b98ef4b26a6ef48fd84e15fd4c4bc5ec768eb641d206838", size = 2565995, upload-time = "2026-07-01T11:55:14.736Z" },
++    { url = "https://files.pythonhosted.org/packages/52/69/c2208e56af9bfc1913afb24020297a691eb1d4ef688474c8a04913f65e04/pillow-12.3.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:164b31cd1a0490ab6efae01aa5df49da7061be0af1b30e035b6e9a1bfe34ee6e", size = 5352503, upload-time = "2026-07-01T11:55:17.076Z" },
++    { url = "https://files.pythonhosted.org/packages/07/70/e5686d753e898a45d778ff1718dba8516ead6ab6b95d85fc8c4b70650cf2/pillow-12.3.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:5afb51d599ea772b8365ae807ae557f18bccfe46ab261fd1c2a9ed700fc6eb17", size = 4782956, upload-time = "2026-07-01T11:55:19.448Z" },
++    { url = "https://files.pythonhosted.org/packages/d5/37/25c6692f06927ee973ff18c8d9ee98ad0b4d84ee67a09610c2dd1447958e/pillow-12.3.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3edce1d53195db527e0191f84b71d02022de0540bf43a16ed734ed7537b07385", size = 6322855, upload-time = "2026-07-01T11:55:21.613Z" },
++    { url = "https://files.pythonhosted.org/packages/cc/91/420637fcb8f1bc11029e403b4538e6694744428d8246118e45719f944556/pillow-12.3.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bf16ba1b4d0b6b7c8e534936632270cf70eb00dbe09005bc345b2677b726855c", size = 6989642, upload-time = "2026-07-01T11:55:24.006Z" },
++    { url = "https://files.pythonhosted.org/packages/10/08/b94d7811281ccf0d143a1cf768d1c49e1e54af63e7b708ab2ee3eb87face/pillow-12.3.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:24870b09b224f7ae3c39ed07d10e819d06f8720bc551847b1d623832b5b0e28d", size = 6391281, upload-time = "2026-07-01T11:55:26.252Z" },
++    { url = "https://files.pythonhosted.org/packages/d2/87/24233f785f55474dc02ce3e739c5528a77e3a862e9333d1dd7a25cc31f70/pillow-12.3.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:30f2aa603c41533cc25c05acd0da21636e84a315768feb631c937177db558931", size = 7096716, upload-time = "2026-07-01T11:55:28.318Z" },
++    { url = "https://files.pythonhosted.org/packages/23/26/fcb2f6e37175b04f53570b59937867e2b80ee1685e744023153028fc14f9/pillow-12.3.0-cp314-cp314t-win32.whl", hash = "sha256:4b0a7fe987b14c31ebda6083f74f22b561fd3739bc0ac51e019622e3d72668c7", size = 6474125, upload-time = "2026-07-01T11:55:30.956Z" },
++    { url = "https://files.pythonhosted.org/packages/90/de/3634abee5f1c9e13c56787b7d5517b0ba8d6de51700b95578cf338349c9f/pillow-12.3.0-cp314-cp314t-win_amd64.whl", hash = "sha256:962864dc93511324d51ddbb5b9f8731bf71675b93ca612a07441896f4688fb8c", size = 7242939, upload-time = "2026-07-01T11:55:34.044Z" },
++    { url = "https://files.pythonhosted.org/packages/ce/2a/fd13f8eb24de5714a6eb444a3d67e2842c6c576e159a43793adf23051351/pillow-12.3.0-cp314-cp314t-win_arm64.whl", hash = "sha256:0740a512dc522224c77d9aa5a8d70d8b7d73fb91f2c21125d8d025d3b8990e45", size = 2567506, upload-time = "2026-07-01T11:55:35.988Z" },
++    { url = "https://files.pythonhosted.org/packages/5d/dc/8fdce34ec725a33c81c6ba122b904d6b9024e50ea9ac7bede62fab54506c/pillow-12.3.0-cp315-cp315-ios_13_0_arm64_iphoneos.whl", hash = "sha256:0feb2e9d6ad6c9e3c06effe9d00f3f1e618a6643273576b016f591e9315a7139", size = 4162063, upload-time = "2026-07-01T11:55:37.941Z" },
++    { url = "https://files.pythonhosted.org/packages/76/66/2044b9a63d3b84ff048228dfcb7cd9bf0df983e8470971bf7d4c57b693de/pillow-12.3.0-cp315-cp315-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:9e881fca225083806662a5c43d627d215f258ff43c890f831966c7d7ba9c7402", size = 4255549, upload-time = "2026-07-01T11:55:40.022Z" },
++    { url = "https://files.pythonhosted.org/packages/52/7e/1f67e6f4ece6b582ee4b539decbcc9f848dc245a93ed8cd7338bafef72f1/pillow-12.3.0-cp315-cp315-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:4998562bf62a445225f22e07c896bb04b35b1b1f2eb6d760584c9c51d7a5f78c", size = 3696331, upload-time = "2026-07-01T11:55:41.98Z" },
++    { url = "https://files.pythonhosted.org/packages/12/40/d306fc2c8e4d45d7f175c77edca7063be7b86fe7fe6e68f4353bf71d808c/pillow-12.3.0-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:dc624f6bc473dacdf7ef7eb8678d0d08edf15cd94fad6ae5c7d6cc67a4e4902f", size = 5350370, upload-time = "2026-07-01T11:55:44.028Z" },
++    { url = "https://files.pythonhosted.org/packages/dd/44/668fb1437e8ce420f62d6106eb66e44a5971602a4d794615bdf79315d82d/pillow-12.3.0-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:71d6097b330eea8fd15097780c8e89cb1a8ce7838669f48c5bacd6f663dd4701", size = 4780147, upload-time = "2026-07-01T11:55:46.073Z" },
++    { url = "https://files.pythonhosted.org/packages/0c/08/93fa2e70e30a2d81547e481b6ee2bb9522117221fb1e0ce4b5df70967677/pillow-12.3.0-cp315-cp315-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:28ce87c5ab450a9dd970b52e5aca5fe63ed432d18a2eaddd1979a00a1ba24ace", size = 6273659, upload-time = "2026-07-01T11:55:48.264Z" },
++    { url = "https://files.pythonhosted.org/packages/f8/6d/043e96ff814fc31a33077e4cba86082167db520c93632afdf2042febbb0c/pillow-12.3.0-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6b02afb9b97f65fbca5f31db6a2a3ba21aa93030225f150fa3f249717e938fb4", size = 6947439, upload-time = "2026-07-01T11:55:50.503Z" },
++    { url = "https://files.pythonhosted.org/packages/af/92/ba71d2ee2ac0edf3fa33bd9d5ee9ee080da70b1766f3ca3934f9938ddac9/pillow-12.3.0-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:1182d52bc2d5e5d7d0949503aa7e36d12f42205dc287e4883f407b1988820d39", size = 6353577, upload-time = "2026-07-01T11:55:52.697Z" },
++    { url = "https://files.pythonhosted.org/packages/0f/ce/e63064e2122923ff687c8ad792d0d736a7b3920a56a46982e81a7fdd25d6/pillow-12.3.0-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:e795b7eb908249c4e43c7c99fac7c2c75dab0c43566e37db472a355f63693d71", size = 7060394, upload-time = "2026-07-01T11:55:55.149Z" },
++    { url = "https://files.pythonhosted.org/packages/54/76/a09cc3ccc8d773a7283d34c38bec1708f9e3cc932093cbc4c5e71ac4060b/pillow-12.3.0-cp315-cp315-win32.whl", hash = "sha256:57b3d78c95ba9059768b10e28b813002261d3f3dfc55cc48b0c988f625175827", size = 6467375, upload-time = "2026-07-01T11:55:57.769Z" },
++    { url = "https://files.pythonhosted.org/packages/3e/03/1846c49ba3b1d5550392a4bbd06d6fb4578e1cd91a803198b5c90f5f7d53/pillow-12.3.0-cp315-cp315-win_amd64.whl", hash = "sha256:fa4ecea169a355be7a3ade2c783e2ed12f0e40d2c5621cda8b3297faf7fbb9f5", size = 7237048, upload-time = "2026-07-01T11:55:59.975Z" },
++    { url = "https://files.pythonhosted.org/packages/fb/bb/89f35dcc79610423f9f195504d7def7f0d1416a711541b42867e25fe3412/pillow-12.3.0-cp315-cp315-win_arm64.whl", hash = "sha256:877c3f311ff35410f690861c4409e7ccbf0cd2f878e50628a28e5a0bb689e658", size = 2566006, upload-time = "2026-07-01T11:56:02.143Z" },
++    { url = "https://files.pythonhosted.org/packages/30/88/707027ba09942dfa2c28759b5c222d769290a41c6d20ea60ec250801941f/pillow-12.3.0-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:e9871b1ffbfa9656b60aeee92ed5136a5742696006fa322b29ea3d8da0ecc9cf", size = 5352509, upload-time = "2026-07-01T11:56:04.2Z" },
++    { url = "https://files.pythonhosted.org/packages/b0/6d/00352fa25332c2569cd387851f568cc5a4b75a9adbfb37ac4fbce4c02eec/pillow-12.3.0-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:53aa02d20d10c3d814d536aa4e5ac9b84ca0ff5a88377963b085ad6822f93e64", size = 4783167, upload-time = "2026-07-01T11:56:06.631Z" },
++    { url = "https://files.pythonhosted.org/packages/13/4f/9e049dfa21af7c22427275720e2490267ba8138120add5c4c574deb69782/pillow-12.3.0-cp315-cp315t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:446c34dcc4324b084a53b705127dc15717b22c5e140ae0a3c38349d4efec071e", size = 6329237, upload-time = "2026-07-01T11:56:08.868Z" },
++    { url = "https://files.pythonhosted.org/packages/36/16/cf6eeaae8d0fce8dd390a33437cf68c5d5bd73834a2bc6e2f14efda0ab45/pillow-12.3.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cf1845d02ad822a369a49f2bb9345b1614744267682e7a03527dc3bf6eea1777", size = 6997047, upload-time = "2026-07-01T11:56:11.379Z" },
++    { url = "https://files.pythonhosted.org/packages/1e/69/dbf769bdd55f48bf5733cac28edc6364ffaa072ec9ba336266e4fe66be55/pillow-12.3.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:186941b6aef820ad110fb01fb06eb925374dc3a21b17e37ec9a53b250c6fe2d1", size = 6400440, upload-time = "2026-07-01T11:56:13.908Z" },
++    { url = "https://files.pythonhosted.org/packages/a0/e1/ffc9cfc2eea0d178da8018e18e959301ad9d6bc9f3edb7181e748a474b97/pillow-12.3.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:f13c32a3abd6079a66d9526e18dad9b6d280384d49d7c54040cd57b6424041d9", size = 7105895, upload-time = "2026-07-01T11:56:16.575Z" },
++    { url = "https://files.pythonhosted.org/packages/18/f0/a5595c1e8c3ae44b9828cb2f0fa8155e5095ef04d6327b8f61cf44a3df85/pillow-12.3.0-cp315-cp315t-win32.whl", hash = "sha256:1657923d2d45afb66526e5b933e5b3052e6bdea196c90d3abb2424e18c77dae8", size = 6474384, upload-time = "2026-07-01T11:56:18.855Z" },
++    { url = "https://files.pythonhosted.org/packages/e4/04/62bcd9f844984c5938d3b05264a61d797a29d3e0812341a8204af70bbdee/pillow-12.3.0-cp315-cp315t-win_amd64.whl", hash = "sha256:8cd2f7bdda092d99c9fc2fb7391354f306d01443d22785d0cbfafa2e2c8bb418", size = 7243537, upload-time = "2026-07-01T11:56:21.214Z" },
++    { url = "https://files.pythonhosted.org/packages/3d/68/1f3066acedf37673694a7141381d8f811ae97f30d34413d236abe7d489f1/pillow-12.3.0-cp315-cp315t-win_arm64.whl", hash = "sha256:06ff022112bc9cbf83b60f8e028d94ad87b60621706487e65f673de61610ab59", size = 2567491, upload-time = "2026-07-01T11:56:23.506Z" },
++]
++
+ [[package]]
+ name = "pluggy"
+ version = "1.6.0"
+@@ -834,6 +907,23 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
+ ]
+ 
++[[package]]
++name = "qrcode"
++version = "8.2"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "colorama", marker = "sys_platform == 'win32'" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/8f/b2/7fc2931bfae0af02d5f53b174e9cf701adbb35f39d69c2af63d4a39f81a9/qrcode-8.2.tar.gz", hash = "sha256:35c3f2a4172b33136ab9f6b3ef1c00260dd2f66f858f24d88418a015f446506c", size = 43317, upload-time = "2025-05-01T15:44:24.726Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl", hash = "sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f", size = 45986, upload-time = "2025-05-01T15:44:22.781Z" },
++]
++
++[package.optional-dependencies]
++pil = [
++    { name = "pillow" },
++]
++
+ [[package]]
+ name = "redis"
+ version = "8.0.0"
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index 6b16b11..ed5174d 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -1170,6 +1170,57 @@ export function getTicket(citaId: string) {
+   return apiFetch<TicketResponse>(`/citas/${citaId}/ticket`);
+ }
+ 
++export type QrDeliveryMethod = 'CORREO' | 'TELEGRAM_1' | 'TELEGRAM_2';
++
++export type QrDestination = {
++  metodo: QrDeliveryMethod;
++  etiqueta: string;
++  disponible: boolean;
++  motivo: string | null;
++  vinculable: boolean;
++};
++
++export type QrPreview = {
++  qr_id: string;
++  imagen_base64: string;
++  nombre_archivo: string;
++  fecha_expiracion: string;
++  paciente: string;
++  cita_estado: string;
++  cita_updated_at: string;
++  paciente_updated_at: string;
++  destinos: QrDestination[];
++  metodo_preferido: string | null;
++  telegram_bot_url: string | null;
++};
++
++export function prepareCitaQr(citaId: string) {
++  return apiFetch<QrPreview>(`/citas/${citaId}/qr/preparar`, { method: 'POST' });
++}
++
++export function sendCitaQr(citaId: string, preview: QrPreview, metodo: QrDeliveryMethod) {
++  return apiFetch<{ mensaje: string }>(`/citas/${citaId}/qr/enviar`, {
++    method: 'POST',
++    body: JSON.stringify({
++      metodo, qr_id: preview.qr_id,
++      cita_updated_at: preview.cita_updated_at, paciente_updated_at: preview.paciente_updated_at,
++    }),
++  });
++}
++
++export type TelegramPatientStatus = {
++  bot_url: string | null;
++  contactos: Array<{ posicion: 1 | 2; etiqueta: string; vinculado: boolean }>;
++};
++
++export function getPatientTelegram(patientId: string) {
++  return apiFetch<TelegramPatientStatus>(`/pacientes/${patientId}/telegram`);
++}
++
++export function unlinkPatientTelegram(patientId: string, position: 1 | 2) {
++  return apiFetch<TelegramPatientStatus>(`/pacientes/${patientId}/telegram/${position}`, { method: 'DELETE' });
++}
++
+ export function checkinLobby(citaId: string, canal = 'RECEPCION') {
+   return apiFetch<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
+     method: 'POST',
+diff --git a/access-manager/frontend/src/views/CitasHoyView.vue b/access-manager/frontend/src/views/CitasHoyView.vue
+index d1ae222..58fa0b9 100644
+--- a/access-manager/frontend/src/views/CitasHoyView.vue
++++ b/access-manager/frontend/src/views/CitasHoyView.vue
+@@ -1,14 +1,12 @@
+ <script setup lang="ts">
+ import { computed, onMounted, reactive, ref } from 'vue';
+-import QRCode from 'qrcode';
++import CitaQrPanel from '../components/CitaQrPanel.vue';
+ import {
+   auditCitasExport,
+   autorizarPasar,
+   cancelarCita,
+   checkinLobby,
+-  generarQr,
+   getCurrentUser,
+-  getTicket,
+   llamarCita,
+   listAccessibleComplejos,
+   listAccessibleConsultorios,
+@@ -24,7 +22,7 @@ import {
+   type Institucion,
+   type Medico,
+   type Piso,
+-  type TicketResponse,
++  type QrPreview,
+   type Torre,
+   type Usuario,
+ } from '../api/client';
+@@ -42,9 +40,9 @@ const medicos = ref<Medico[]>([]);
+ const currentUser = ref<Usuario | null>(null);
+ const error = ref('');
+ const message = ref('');
+-const qrPayload = ref('');
+-const qrDataUrl = ref('');
+-const ticket = ref<TicketResponse | null>(null);
++const qrPanelKey = ref(0);
++const ticketMode = ref(false);
++const canSendQr = computed(() => ['citas', 'citas-hoy'].some((screen) => currentUser.value?.permisos?.[screen] === 'editar'));
+ const selectedCita = ref<Cita | null>(null);
+ const selectedDoctorStatusCita = ref<Cita | null>(null);
+ const loading = ref(false);
+@@ -187,6 +185,7 @@ async function load() {
+   error.value = '';
+   try {
+     citas.value = await listCitasHoy(requestFilters());
++    if (selectedCita.value) selectedCita.value = citas.value.find((item) => item.id === selectedCita.value?.id) ?? null;
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar las citas.';
+   } finally {
+@@ -295,155 +294,23 @@ async function callCita(cita: Cita) {
+   }
+ }
+ 
+-function fileNameFor(cita: Cita | null) {
+-  if (!cita) return 'turno_qr.png';
+-  const hora = cita.hora_cita.slice(0, 5).replace(':', '-');
+-  return `${cita.folio_turno}_${cita.fecha_cita}_${hora}.png`;
++function showQr(cita: Cita) {
++  selectedCita.value = cita;
++  ticketMode.value = false;
++  qrPanelKey.value += 1;
+ }
+ 
+-function prefixedLocation(prefix: string, value: string) {
+-  const text = value.trim();
+-  return text.toLocaleLowerCase('es-MX').startsWith(prefix.toLocaleLowerCase('es-MX')) ? text : `${prefix} ${text}`;
+-}
+-
+-function appointmentDateTimeLabel(cita: Cita) {
+-  const [year, month, day] = cita.fecha_cita.split('-');
+-  return `${day}/${month}/${year} ${cita.hora_cita.slice(0, 5)} hrs`;
+-}
+-
+-function qrLocationLines(cita: Cita) {
+-  const consultorio = consultorios.value.find((item) => item.id === cita.consultorio_id);
+-  const piso = pisos.value.find((item) => item.id === cita.piso_id);
+-  const torre = piso ? torres.value.find((item) => item.id === piso.torre_id) : undefined;
+-  const lines: string[] = [];
+-  if (torre) lines.push(prefixedLocation('Torre', torre.nombre));
+-  if (piso) lines.push(prefixedLocation('Piso', piso.nombre_visible || String(piso.numero)));
+-  if (consultorio) {
+-    const visibleName = consultorio.nombre_visible?.trim();
+-    lines.push(visibleName ? `${visibleName} - ${consultorio.codigo}` : consultorio.codigo);
+-  } else if (cita.consultorio) {
+-    lines.push(cita.consultorio);
++function onQrPrepared(preview: QrPreview) {
++  if (selectedCita.value) {
++    selectedCita.value.estado = preview.cita_estado;
++    selectedCita.value.updated_at = preview.cita_updated_at;
+   }
+-  return lines;
+ }
+ 
+-function loadQrImage(source: string) {
+-  return new Promise<HTMLImageElement>((resolve, reject) => {
+-    const image = new Image();
+-    image.onload = () => resolve(image);
+-    image.onerror = () => reject(new Error('No fue posible preparar la imagen del QR.'));
+-    image.src = source;
+-  });
+-}
+-
+-function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+-  const words = text.split(/\s+/).filter(Boolean);
+-  const lines: string[] = [];
+-  let current = '';
+-  for (const word of words) {
+-    if (context.measureText(word).width > maxWidth) {
+-      if (current) {
+-        lines.push(current);
+-        current = '';
+-      }
+-      let chunk = '';
+-      for (const character of word) {
+-        const candidateChunk = chunk + character;
+-        if (chunk && context.measureText(candidateChunk).width > maxWidth) {
+-          lines.push(chunk);
+-          chunk = character;
+-        } else {
+-          chunk = candidateChunk;
+-        }
+-      }
+-      current = chunk;
+-      continue;
+-    }
+-    const candidate = current ? `${current} ${word}` : word;
+-    if (current && context.measureText(candidate).width > maxWidth) {
+-      lines.push(current);
+-      current = word;
+-    } else {
+-      current = candidate;
+-    }
+-  }
+-  if (current) lines.push(current);
+-  return lines;
+-}
+-
+-function downloadQr() {
+-  if (!qrDataUrl.value) return;
+-  const link = document.createElement('a');
+-  link.href = qrDataUrl.value;
+-  link.download = fileNameFor(selectedCita.value);
+-  link.click();
+-}
+-
+-async function renderQr(payload: string, cita: Cita) {
+-  const qrSize = 480;
+-  const canvasWidth = 640;
+-  const horizontalPadding = 40;
+-  const qrSource = await QRCode.toDataURL(payload, { margin: 2, width: qrSize });
+-  const qrImage = await loadQrImage(qrSource);
+-  const measurementCanvas = document.createElement('canvas');
+-  const measurementContext = measurementCanvas.getContext('2d');
+-  if (!measurementContext) throw new Error('No fue posible preparar la imagen del QR.');
+-  measurementContext.font = '600 24px Arial, sans-serif';
+-  const detailLines = qrLocationLines(cita).flatMap((line) =>
+-    wrapCanvasText(measurementContext, line, canvasWidth - horizontalPadding * 2),
+-  );
+-  const lineHeight = 34;
+-  const qrTop = 76;
+-  const detailsTop = qrTop + qrSize + 36;
+-  const canvas = document.createElement('canvas');
+-  canvas.width = canvasWidth;
+-  canvas.height = detailsTop + detailLines.length * lineHeight + 34;
+-  const context = canvas.getContext('2d');
+-  if (!context) throw new Error('No fue posible preparar la imagen del QR.');
+-
+-  context.fillStyle = '#ffffff';
+-  context.fillRect(0, 0, canvas.width, canvas.height);
+-  context.fillStyle = '#111827';
+-  context.textAlign = 'center';
+-  context.textBaseline = 'middle';
+-  context.font = '700 28px Arial, sans-serif';
+-  context.fillText(appointmentDateTimeLabel(cita), canvas.width / 2, 38);
+-  context.drawImage(qrImage, (canvas.width - qrSize) / 2, qrTop, qrSize, qrSize);
+-  context.font = '600 24px Arial, sans-serif';
+-  detailLines.forEach((line, index) => {
+-    context.fillText(line, canvas.width / 2, detailsTop + index * lineHeight);
+-  });
+-  qrDataUrl.value = canvas.toDataURL('image/png');
+-}
+-
+-async function showQr(cita: Cita) {
+-  if (cita.estado === 'CANCELADA') return;
+-  error.value = '';
+-  message.value = '';
+-  try {
+-    const qr = await generarQr(cita.id);
+-    qrPayload.value = qr.qr_payload;
+-    selectedCita.value = cita;
+-    await renderQr(qr.qr_payload, cita);
+-    ticket.value = null;
+-    message.value = 'QR generado.';
+-    await load();
+-  } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible generar el QR.';
+-  }
+-}
+-
+-async function showTicket(cita: Cita) {
+-  error.value = '';
+-  message.value = '';
+-  try {
+-    ticket.value = await getTicket(cita.id);
+-    selectedCita.value = cita;
+-    qrPayload.value = '';
+-    await renderQr(ticket.value.qr_payload, cita);
+-  } catch (err) {
+-    error.value = err instanceof Error ? err.message : 'No fue posible generar el ticket.';
+-  }
++function showTicket(cita: Cita) {
++  selectedCita.value = cita;
++  ticketMode.value = true;
++  qrPanelKey.value += 1;
+ }
+ 
+ function clearFilters() {
+@@ -661,8 +528,8 @@ onMounted(async () => {
+               </td>
+               <td>
+                 <div class="inline-actions">
+-                  <button class="small" type="button" :disabled="cita.estado === 'CANCELADA' || loading" @click="showQr(cita)">QR</button>
+-                  <button class="small secondary" type="button" @click="showTicket(cita)">Ticket</button>
++                  <button class="small" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado) || loading" @click="showQr(cita)">QR</button>
++                  <button class="small secondary" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado) || loading" @click="showTicket(cita)">Ticket</button>
+                   <button class="small secondary" type="button" @click="run(() => checkinLobby(cita.id), 'Check-in registrado.')">Check-in</button>
+                   <button class="small secondary" type="button" @click="run(() => autorizarPasar(cita.id), 'Acceso autorizado.')">Autorizar</button>
+                   <button class="small" type="button" :disabled="!canCall(cita) || loading" @click="callCita(cita)">Llamar</button>
+@@ -676,25 +543,8 @@ onMounted(async () => {
+       <p v-if="!loading && citas.length === 0" class="message">No hay citas con estos filtros.</p>
+     </div>
+ 
+-    <div v-if="qrPayload || ticket" class="panel">
+-      <h2>{{ ticket ? 'Ticket lógico' : 'QR generado' }}</h2>
+-      <div class="qr-preview">
+-        <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR de la cita" />
+-        <button class="secondary" type="button" @click="downloadQr">Bajar</button>
+-      </div>
+-      <pre v-if="ticket">{{ ticket.encabezado_fecha }}
+-{{ ticket.leyenda }}
+-
+-Turno {{ ticket.turno }}
+-
+-[QR]
+-
+-Consultorio {{ ticket.consultorio }}
+-Torre {{ ticket.torre }}
+-{{ ticket.piso }}
+-Cita {{ ticket.hora }} hrs</pre>
+-      <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>
+-    </div>
++    <CitaQrPanel v-if="selectedCita" :cita="selectedCita" :can-send="canSendQr" :ticket-mode="ticketMode"
++      :refresh-key="qrPanelKey" @prepared="onQrPrepared" @close="selectedCita = null" />
+ 
+     <div v-if="selectedDoctorStatusCita" class="modal-backdrop">
+       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="doctor-status-dialog-title">
+diff --git a/access-manager/frontend/src/views/CitasView.vue b/access-manager/frontend/src/views/CitasView.vue
+index d1dac75..2188f8f 100644
+--- a/access-manager/frontend/src/views/CitasView.vue
++++ b/access-manager/frontend/src/views/CitasView.vue
+@@ -1,5 +1,6 @@
+ <script setup lang="ts">
+ import { computed, onMounted, reactive, ref } from 'vue';
++import CitaQrPanel from '../components/CitaQrPanel.vue';
+ import {
+   ApiError,
+   createCita,
+@@ -19,6 +20,7 @@ import {
+   type Medico,
+   type Paciente,
+   type Piso,
++  type QrPreview,
+   type Torre,
+   type Usuario,
+ } from '../api/client';
+@@ -55,6 +57,21 @@ const complejos = ref<Complejo[]>([]);
+ const torres = ref<Torre[]>([]);
+ const pisos = ref<Piso[]>([]);
+ const currentUser = ref<Usuario | null>(null);
++const selectedQrCita = ref<Cita | null>(null);
++const qrPanelKey = ref(0);
++const canSendQr = computed(() => ['citas', 'citas-hoy'].some((screen) => currentUser.value?.permisos?.[screen] === 'editar'));
++
++function showQr(cita: Cita) {
++  selectedQrCita.value = cita;
++  qrPanelKey.value += 1;
++}
++
++function onQrPrepared(preview: QrPreview) {
++  if (selectedQrCita.value) {
++    selectedQrCita.value.estado = preview.cita_estado;
++    selectedQrCita.value.updated_at = preview.cita_updated_at;
++  }
++}
+ const error = ref('');
+ const message = ref('');
+ const duplicateWarning = ref<DuplicateWarning | null>(null);
+@@ -594,10 +611,12 @@ async function loadTable() {
+   error.value = '';
+   if (!tableFilters.medico_id) {
+     citas.value = [];
++    selectedQrCita.value = null;
+     return;
+   }
+   try {
+     citas.value = uniqueById(await listCitas(tableRequestFilters()));
++    if (selectedQrCita.value) selectedQrCita.value = citas.value.find((item) => item.id === selectedQrCita.value?.id) ?? null;
+   } catch (err) {
+     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
+   }
+@@ -1042,6 +1061,7 @@ onMounted(load);
+                 <th>Autorización</th>
+                 <th>Llamado</th>
+                 <th>Cancelación</th>
++                <th>QR</th>
+               </tr>
+             </thead>
+             <tbody>
+@@ -1064,6 +1084,7 @@ onMounted(load);
+                   <br v-if="cita.tipo_cancelacion" />
+                   <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
+                 </td>
++                <td><button class="small" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado)" @click="showQr(cita)">QR</button></td>
+               </tr>
+             </tbody>
+           </table>
+@@ -1081,5 +1102,7 @@ onMounted(load);
+         </div>
+       </div>
+     </div>
++    <CitaQrPanel v-if="selectedQrCita" :cita="selectedQrCita" :can-send="canSendQr"
++      :refresh-key="qrPanelKey" @prepared="onQrPrepared" @close="selectedQrCita = null" />
+   </section>
+ </template>
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index 0a33e13..c474e0a 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -1,5 +1,6 @@
+ <script setup lang="ts">
+ import { computed, onMounted, reactive, ref, watch } from 'vue';
++import PatientTelegram from '../components/PatientTelegram.vue';
+ import {
+   activatePaciente,
+   createPaciente,
+@@ -408,6 +409,7 @@ onMounted(async () => {
+     <div class="grid catalog-grid">
+       <form class="panel form compact-form" @submit.prevent="submit()">
+         <h2>{{ selected ? 'Editar paciente' : 'Crear paciente' }}</h2>
++        <PatientTelegram v-if="selected" :key="selected.id + selected.updated_at" :patient-id="selected.id" :can-edit="currentUser?.permisos?.pacientes === 'editar'" />
+         <p v-if="!canEditPatient" class="message">Selecciona un médico para habilitar la creación de pacientes.</p>
+         <fieldset class="fieldset-reset" :disabled="!canEditPatient">
+           <div class="form-row">

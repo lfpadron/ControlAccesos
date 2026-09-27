@@ -1170,6 +1170,57 @@ export function getTicket(citaId: string) {
   return apiFetch<TicketResponse>(`/citas/${citaId}/ticket`);
 }
 
+export type QrDeliveryMethod = 'CORREO' | 'TELEGRAM_1' | 'TELEGRAM_2';
+
+export type QrDestination = {
+  metodo: QrDeliveryMethod;
+  etiqueta: string;
+  disponible: boolean;
+  motivo: string | null;
+  vinculable: boolean;
+};
+
+export type QrPreview = {
+  qr_id: string;
+  imagen_base64: string;
+  nombre_archivo: string;
+  fecha_expiracion: string;
+  paciente: string;
+  cita_estado: string;
+  cita_updated_at: string;
+  paciente_updated_at: string;
+  destinos: QrDestination[];
+  metodo_preferido: string | null;
+  telegram_bot_url: string | null;
+};
+
+export function prepareCitaQr(citaId: string) {
+  return apiFetch<QrPreview>(`/citas/${citaId}/qr/preparar`, { method: 'POST' });
+}
+
+export function sendCitaQr(citaId: string, preview: QrPreview, metodo: QrDeliveryMethod) {
+  return apiFetch<{ mensaje: string }>(`/citas/${citaId}/qr/enviar`, {
+    method: 'POST',
+    body: JSON.stringify({
+      metodo, qr_id: preview.qr_id,
+      cita_updated_at: preview.cita_updated_at, paciente_updated_at: preview.paciente_updated_at,
+    }),
+  });
+}
+
+export type TelegramPatientStatus = {
+  bot_url: string | null;
+  contactos: Array<{ posicion: 1 | 2; etiqueta: string; vinculado: boolean }>;
+};
+
+export function getPatientTelegram(patientId: string) {
+  return apiFetch<TelegramPatientStatus>(`/pacientes/${patientId}/telegram`);
+}
+
+export function unlinkPatientTelegram(patientId: string, position: 1 | 2) {
+  return apiFetch<TelegramPatientStatus>(`/pacientes/${patientId}/telegram/${position}`, { method: 'DELETE' });
+}
+
 export function checkinLobby(citaId: string, canal = 'RECEPCION') {
   return apiFetch<CheckinResponse>(`/citas/${citaId}/checkin-lobby`, {
     method: 'POST',

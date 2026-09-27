@@ -82,7 +82,7 @@ from app.services.access_scope import (
 from app.services.medico_sync import sync_medicos_for_medico_users
 from app.services.checkin_service import checkin_window_status
 from app.services.folio_service import generate_patient_folio, generate_turn_folio
-from app.services.qr_service import cancel_qr, encode_qr_payload, generate_qr, now_utc, token_digest, validate_qr
+from app.services.qr_service import cancel_qr, get_active_qr_payload, now_utc, validate_qr
 
 pacientes_router = APIRouter()
 citas_router = APIRouter()
@@ -1114,22 +1114,6 @@ def query_citas(
     return query.order_by(Cita.fecha_cita, Cita.hora_cita, Cita.folio_turno)
 
 
-def get_active_qr_payload(db: Session, cita: Cita) -> tuple[QrToken, str]:
-    timestamp = now_utc()
-    qr_token = db.execute(
-        select(QrToken).where(
-            QrToken.cita_id == cita.id,
-            QrToken.estado == "GENERADO",
-            QrToken.fecha_expiracion > timestamp,
-        ).order_by(QrToken.fecha_emision.desc())
-    ).scalar_one_or_none()
-    if qr_token is not None:
-        token = encode_qr_payload(cita, qr_token.fecha_emision, qr_token.fecha_expiracion)
-        if token_digest(token) == qr_token.token_hash:
-            return qr_token, token
-    return generate_qr(db, cita)
-
-
 def create_arrival_event(
     db: Session,
     cita: Cita,
@@ -1789,8 +1773,13 @@ def update_paciente(
     item = paciente_for_medico_or_404(db, paciente_id, medico_id)
     ensure_paciente_access(db, current_user, item.id, business_today())
     before = audit_safe_dict(item)
+    previous_phones = (item.telefono_1, item.tipo_telefono_1, item.celular, item.tipo_telefono_2)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
+    if previous_phones[:2] != (item.telefono_1, item.tipo_telefono_1):
+        item.telegram_chat_id_1 = None
+    if previous_phones[2:] != (item.celular, item.tipo_telefono_2):
+        item.telegram_chat_id_2 = None
     validate_patient_identity(item)
     validate_patient_contact(item)
     validate_patient_confirmation_method(item)
@@ -2223,7 +2212,7 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
     ensure_cita_access(db, current_user, cita.id, business_today())
     if cita.estado == "CANCELADA":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se puede generar un QR para una cita cancelada.")
-    qr_token, token = generate_qr(db, cita)
+    qr_token, token = get_active_qr_payload(db, cita)
     record_audit_event(
         db,
         evento="QR_GENERADO",
@@ -2250,6 +2239,8 @@ def generar_qr_cita(cita_id: UUID, request: Request, db: Session = Depends(get_d
 def get_qr_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: Usuario = CitasOperationalReadUser):
     cita = exists_or_404(db, Cita, cita_id, "Cita")
     ensure_cita_access(db, current_user, cita.id, business_today())
+    if cita.estado == "CANCELADA":
+        raise HTTPException(status_code=409, detail="La cita está cancelada.")
     qr_token, _token = get_active_qr_payload(db, cita)
     db.commit()
     db.refresh(qr_token)
@@ -2282,6 +2273,8 @@ def get_ticket_cita(cita_id: UUID, db: Session = Depends(get_db), current_user: 
 
 
 def ticket_response_for_cita(db: Session, cita: Cita) -> TicketResponse:
+    if cita.estado == "CANCELADA":
+        raise HTTPException(status_code=409, detail="La cita está cancelada.")
     _qr_token, token = get_active_qr_payload(db, cita)
     db.commit()
     dias = ("LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO")

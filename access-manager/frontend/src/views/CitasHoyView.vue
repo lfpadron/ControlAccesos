@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import QRCode from 'qrcode';
+import CitaQrPanel from '../components/CitaQrPanel.vue';
 import {
   auditCitasExport,
   autorizarPasar,
   cancelarCita,
   checkinLobby,
-  generarQr,
   getCurrentUser,
-  getTicket,
   llamarCita,
   listAccessibleComplejos,
   listAccessibleConsultorios,
@@ -24,7 +22,7 @@ import {
   type Institucion,
   type Medico,
   type Piso,
-  type TicketResponse,
+  type QrPreview,
   type Torre,
   type Usuario,
 } from '../api/client';
@@ -42,9 +40,9 @@ const medicos = ref<Medico[]>([]);
 const currentUser = ref<Usuario | null>(null);
 const error = ref('');
 const message = ref('');
-const qrPayload = ref('');
-const qrDataUrl = ref('');
-const ticket = ref<TicketResponse | null>(null);
+const qrPanelKey = ref(0);
+const ticketMode = ref(false);
+const canSendQr = computed(() => ['citas', 'citas-hoy'].some((screen) => currentUser.value?.permisos?.[screen] === 'editar'));
 const selectedCita = ref<Cita | null>(null);
 const selectedDoctorStatusCita = ref<Cita | null>(null);
 const loading = ref(false);
@@ -187,6 +185,7 @@ async function load() {
   error.value = '';
   try {
     citas.value = await listCitasHoy(requestFilters());
+    if (selectedCita.value) selectedCita.value = citas.value.find((item) => item.id === selectedCita.value?.id) ?? null;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar las citas.';
   } finally {
@@ -295,155 +294,23 @@ async function callCita(cita: Cita) {
   }
 }
 
-function fileNameFor(cita: Cita | null) {
-  if (!cita) return 'turno_qr.png';
-  const hora = cita.hora_cita.slice(0, 5).replace(':', '-');
-  return `${cita.folio_turno}_${cita.fecha_cita}_${hora}.png`;
+function showQr(cita: Cita) {
+  selectedCita.value = cita;
+  ticketMode.value = false;
+  qrPanelKey.value += 1;
 }
 
-function prefixedLocation(prefix: string, value: string) {
-  const text = value.trim();
-  return text.toLocaleLowerCase('es-MX').startsWith(prefix.toLocaleLowerCase('es-MX')) ? text : `${prefix} ${text}`;
-}
-
-function appointmentDateTimeLabel(cita: Cita) {
-  const [year, month, day] = cita.fecha_cita.split('-');
-  return `${day}/${month}/${year} ${cita.hora_cita.slice(0, 5)} hrs`;
-}
-
-function qrLocationLines(cita: Cita) {
-  const consultorio = consultorios.value.find((item) => item.id === cita.consultorio_id);
-  const piso = pisos.value.find((item) => item.id === cita.piso_id);
-  const torre = piso ? torres.value.find((item) => item.id === piso.torre_id) : undefined;
-  const lines: string[] = [];
-  if (torre) lines.push(prefixedLocation('Torre', torre.nombre));
-  if (piso) lines.push(prefixedLocation('Piso', piso.nombre_visible || String(piso.numero)));
-  if (consultorio) {
-    const visibleName = consultorio.nombre_visible?.trim();
-    lines.push(visibleName ? `${visibleName} - ${consultorio.codigo}` : consultorio.codigo);
-  } else if (cita.consultorio) {
-    lines.push(cita.consultorio);
-  }
-  return lines;
-}
-
-function loadQrImage(source: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('No fue posible preparar la imagen del QR.'));
-    image.src = source;
-  });
-}
-
-function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    if (context.measureText(word).width > maxWidth) {
-      if (current) {
-        lines.push(current);
-        current = '';
-      }
-      let chunk = '';
-      for (const character of word) {
-        const candidateChunk = chunk + character;
-        if (chunk && context.measureText(candidateChunk).width > maxWidth) {
-          lines.push(chunk);
-          chunk = character;
-        } else {
-          chunk = candidateChunk;
-        }
-      }
-      current = chunk;
-      continue;
-    }
-    const candidate = current ? `${current} ${word}` : word;
-    if (current && context.measureText(candidate).width > maxWidth) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-function downloadQr() {
-  if (!qrDataUrl.value) return;
-  const link = document.createElement('a');
-  link.href = qrDataUrl.value;
-  link.download = fileNameFor(selectedCita.value);
-  link.click();
-}
-
-async function renderQr(payload: string, cita: Cita) {
-  const qrSize = 480;
-  const canvasWidth = 640;
-  const horizontalPadding = 40;
-  const qrSource = await QRCode.toDataURL(payload, { margin: 2, width: qrSize });
-  const qrImage = await loadQrImage(qrSource);
-  const measurementCanvas = document.createElement('canvas');
-  const measurementContext = measurementCanvas.getContext('2d');
-  if (!measurementContext) throw new Error('No fue posible preparar la imagen del QR.');
-  measurementContext.font = '600 24px Arial, sans-serif';
-  const detailLines = qrLocationLines(cita).flatMap((line) =>
-    wrapCanvasText(measurementContext, line, canvasWidth - horizontalPadding * 2),
-  );
-  const lineHeight = 34;
-  const qrTop = 76;
-  const detailsTop = qrTop + qrSize + 36;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvasWidth;
-  canvas.height = detailsTop + detailLines.length * lineHeight + 34;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('No fue posible preparar la imagen del QR.');
-
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = '#111827';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.font = '700 28px Arial, sans-serif';
-  context.fillText(appointmentDateTimeLabel(cita), canvas.width / 2, 38);
-  context.drawImage(qrImage, (canvas.width - qrSize) / 2, qrTop, qrSize, qrSize);
-  context.font = '600 24px Arial, sans-serif';
-  detailLines.forEach((line, index) => {
-    context.fillText(line, canvas.width / 2, detailsTop + index * lineHeight);
-  });
-  qrDataUrl.value = canvas.toDataURL('image/png');
-}
-
-async function showQr(cita: Cita) {
-  if (cita.estado === 'CANCELADA') return;
-  error.value = '';
-  message.value = '';
-  try {
-    const qr = await generarQr(cita.id);
-    qrPayload.value = qr.qr_payload;
-    selectedCita.value = cita;
-    await renderQr(qr.qr_payload, cita);
-    ticket.value = null;
-    message.value = 'QR generado.';
-    await load();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible generar el QR.';
+function onQrPrepared(preview: QrPreview) {
+  if (selectedCita.value) {
+    selectedCita.value.estado = preview.cita_estado;
+    selectedCita.value.updated_at = preview.cita_updated_at;
   }
 }
 
-async function showTicket(cita: Cita) {
-  error.value = '';
-  message.value = '';
-  try {
-    ticket.value = await getTicket(cita.id);
-    selectedCita.value = cita;
-    qrPayload.value = '';
-    await renderQr(ticket.value.qr_payload, cita);
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : 'No fue posible generar el ticket.';
-  }
+function showTicket(cita: Cita) {
+  selectedCita.value = cita;
+  ticketMode.value = true;
+  qrPanelKey.value += 1;
 }
 
 function clearFilters() {
@@ -661,8 +528,8 @@ onMounted(async () => {
               </td>
               <td>
                 <div class="inline-actions">
-                  <button class="small" type="button" :disabled="cita.estado === 'CANCELADA' || loading" @click="showQr(cita)">QR</button>
-                  <button class="small secondary" type="button" @click="showTicket(cita)">Ticket</button>
+                  <button class="small" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado) || loading" @click="showQr(cita)">QR</button>
+                  <button class="small secondary" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado) || loading" @click="showTicket(cita)">Ticket</button>
                   <button class="small secondary" type="button" @click="run(() => checkinLobby(cita.id), 'Check-in registrado.')">Check-in</button>
                   <button class="small secondary" type="button" @click="run(() => autorizarPasar(cita.id), 'Acceso autorizado.')">Autorizar</button>
                   <button class="small" type="button" :disabled="!canCall(cita) || loading" @click="callCita(cita)">Llamar</button>
@@ -676,25 +543,8 @@ onMounted(async () => {
       <p v-if="!loading && citas.length === 0" class="message">No hay citas con estos filtros.</p>
     </div>
 
-    <div v-if="qrPayload || ticket" class="panel">
-      <h2>{{ ticket ? 'Ticket lógico' : 'QR generado' }}</h2>
-      <div class="qr-preview">
-        <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR de la cita" />
-        <button class="secondary" type="button" @click="downloadQr">Bajar</button>
-      </div>
-      <pre v-if="ticket">{{ ticket.encabezado_fecha }}
-{{ ticket.leyenda }}
-
-Turno {{ ticket.turno }}
-
-[QR]
-
-Consultorio {{ ticket.consultorio }}
-Torre {{ ticket.torre }}
-{{ ticket.piso }}
-Cita {{ ticket.hora }} hrs</pre>
-      <p v-else class="message">QR listo para descargar o presentar en kiosko.</p>
-    </div>
+    <CitaQrPanel v-if="selectedCita" :cita="selectedCita" :can-send="canSendQr" :ticket-mode="ticketMode"
+      :refresh-key="qrPanelKey" @prepared="onQrPrepared" @close="selectedCita = null" />
 
     <div v-if="selectedDoctorStatusCita" class="modal-backdrop">
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="doctor-status-dialog-title">

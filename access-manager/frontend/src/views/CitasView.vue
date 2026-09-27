@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import CitaQrPanel from '../components/CitaQrPanel.vue';
 import {
   ApiError,
   createCita,
@@ -19,6 +20,7 @@ import {
   type Medico,
   type Paciente,
   type Piso,
+  type QrPreview,
   type Torre,
   type Usuario,
 } from '../api/client';
@@ -55,6 +57,21 @@ const complejos = ref<Complejo[]>([]);
 const torres = ref<Torre[]>([]);
 const pisos = ref<Piso[]>([]);
 const currentUser = ref<Usuario | null>(null);
+const selectedQrCita = ref<Cita | null>(null);
+const qrPanelKey = ref(0);
+const canSendQr = computed(() => ['citas', 'citas-hoy'].some((screen) => currentUser.value?.permisos?.[screen] === 'editar'));
+
+function showQr(cita: Cita) {
+  selectedQrCita.value = cita;
+  qrPanelKey.value += 1;
+}
+
+function onQrPrepared(preview: QrPreview) {
+  if (selectedQrCita.value) {
+    selectedQrCita.value.estado = preview.cita_estado;
+    selectedQrCita.value.updated_at = preview.cita_updated_at;
+  }
+}
 const error = ref('');
 const message = ref('');
 const duplicateWarning = ref<DuplicateWarning | null>(null);
@@ -594,10 +611,12 @@ async function loadTable() {
   error.value = '';
   if (!tableFilters.medico_id) {
     citas.value = [];
+    selectedQrCita.value = null;
     return;
   }
   try {
     citas.value = uniqueById(await listCitas(tableRequestFilters()));
+    if (selectedQrCita.value) selectedQrCita.value = citas.value.find((item) => item.id === selectedQrCita.value?.id) ?? null;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'No fue posible cargar citas.';
   }
@@ -1042,6 +1061,7 @@ onMounted(load);
                 <th>Autorización</th>
                 <th>Llamado</th>
                 <th>Cancelación</th>
+                <th>QR</th>
               </tr>
             </thead>
             <tbody>
@@ -1064,6 +1084,7 @@ onMounted(load);
                   <br v-if="cita.tipo_cancelacion" />
                   <small v-if="cita.tipo_cancelacion">{{ cancelTypeLabel(cita.tipo_cancelacion) }}</small>
                 </td>
+                <td><button class="small" type="button" :disabled="['CANCELADA', 'EXPIRADA', 'NO_LLEGO'].includes(cita.estado)" @click="showQr(cita)">QR</button></td>
               </tr>
             </tbody>
           </table>
@@ -1081,5 +1102,7 @@ onMounted(load);
         </div>
       </div>
     </div>
+    <CitaQrPanel v-if="selectedQrCita" :cita="selectedQrCita" :can-send="canSendQr"
+      :refresh-key="qrPanelKey" @prepared="onQrPrepared" @close="selectedQrCita = null" />
   </section>
 </template>

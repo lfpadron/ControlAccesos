@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import PatientTelegram from '../components/PatientTelegram.vue';
 import {
   activatePaciente,
   createPaciente,
@@ -408,6 +409,7 @@ onMounted(async () => {
     <div class="grid catalog-grid">
       <form class="panel form compact-form" @submit.prevent="submit()">
         <h2>{{ selected ? 'Editar paciente' : 'Crear paciente' }}</h2>
+        <PatientTelegram v-if="selected" :key="selected.id + selected.updated_at" :patient-id="selected.id" :can-edit="currentUser?.permisos?.pacientes === 'editar'" />
         <p v-if="!canEditPatient" class="message">Selecciona un médico para habilitar la creación de pacientes.</p>
         <fieldset class="fieldset-reset" :disabled="!canEditPatient">
           <div class="form-row">

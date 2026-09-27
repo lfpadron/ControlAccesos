@@ -163,4 +163,4 @@ npm run build
 
 ## Estado del entregable
 
-Incluye la base técnica, la capa operativa inicial y el flujo Paciente -> Cita -> QR -> Llegada -> Llamado -> Pantalla. No implementa todavía impresión física real, WhatsApp, Telegram, SMS, expediente clínico, facturación ni pagos.
+Incluye la base técnica, la capa operativa inicial y el flujo Paciente -> Cita -> QR -> Llegada -> Llamado -> Pantalla, además de envío de QR por correo mediante Resend y por Telegram. La configuración y activación de ambos canales se describe en [Envío de QR](docs/envio_qr.md). No implementa todavía impresión física real, WhatsApp, SMS, expediente clínico, facturación ni pagos.
