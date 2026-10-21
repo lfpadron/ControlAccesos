@@ -161,7 +161,7 @@ class ConsultorioCreate(BaseModel):
     complejo_id: UUID
     piso_id: UUID
     codigo: str = Field(min_length=1, max_length=80)
-    nombre_visible: str | None = Field(default=None, max_length=180)
+    nombre_visible: str | None = Field(default=None, max_length=120)
     instrucciones_acceso: str | None = None
     notas: str | None = Field(default=None, max_length=1000)
     cluster_ids: list[UUID] = Field(default_factory=list)
@@ -172,7 +172,7 @@ class ConsultorioUpdate(BaseModel):
     complejo_id: UUID | None = None
     piso_id: UUID | None = None
     codigo: str | None = Field(default=None, min_length=1, max_length=80)
-    nombre_visible: str | None = Field(default=None, max_length=180)
+    nombre_visible: str | None = Field(default=None, max_length=120)
     instrucciones_acceso: str | None = None
     notas: str | None = Field(default=None, max_length=1000)
     cluster_ids: list[UUID] | None = None
@@ -180,6 +180,8 @@ class ConsultorioUpdate(BaseModel):
 
 
 class ConsultorioRead(ConsultorioCreate):
+    # Preserve names already stored under the previous limit when reading them.
+    nombre_visible: str | None = Field(default=None, max_length=180)
     id: UUID
     created_at: datetime
     updated_at: datetime

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import QRCode from 'qrcode';
+import OverflowMarquee from '../components/OverflowMarquee.vue';
 import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
 import astrogatoLogo from '../astrogato-logo-v02.png';
 import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
@@ -403,16 +404,16 @@ onUnmounted(() => {
       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
         <table class="next-appointments-table">
           <colgroup>
-            <col class="next-appointments-consultorio" />
             <col class="next-appointments-medico" />
+            <col class="next-appointments-consultorio" />
             <col class="next-appointments-disponibilidad" />
             <col class="next-appointments-cita" />
             <col class="next-appointments-hora" />
           </colgroup>
           <thead>
             <tr>
-              <th>Consultorio</th>
               <th>Médico</th>
+              <th>Consultorio</th>
               <th>Disponibilidad</th>
               <th>Cita</th>
               <th>Hora aprox.</th>
@@ -420,14 +421,15 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
+              <td>{{ item.medico }}</td>
               <td>
                 <div class="next-appointment-consultorio-detail">
-                  <span class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
+                  <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="item.consultorio" />
+                  <span v-else class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
                   <small v-if="item.ubicacion_consultorio">{{ item.ubicacion_consultorio }}</small>
                   <small v-if="item.codigo_consultorio">{{ item.codigo_consultorio }}</small>
                 </div>
               </td>
-              <td>{{ item.medico }}</td>
               <td>
                 <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">
                   <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">

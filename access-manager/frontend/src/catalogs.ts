@@ -255,7 +255,7 @@ export const catalogs: Record<string, CatalogConfig> = {
       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
-      { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
+      { name: 'nombre_visible', label: 'Nombre visible', maxLength: 120 },
       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
       { name: 'notas', label: 'Notas', type: 'textarea', maxLength: 1000 },
       { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },

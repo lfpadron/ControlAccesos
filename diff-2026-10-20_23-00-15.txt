@@ -1,0 +1,144 @@
+diff --git a/access-manager/backend/app/schemas/operational.py b/access-manager/backend/app/schemas/operational.py
+index 3638348..10c5087 100644
+--- a/access-manager/backend/app/schemas/operational.py
++++ b/access-manager/backend/app/schemas/operational.py
+@@ -161,7 +161,7 @@ class ConsultorioCreate(BaseModel):
+     complejo_id: UUID
+     piso_id: UUID
+     codigo: str = Field(min_length=1, max_length=80)
+-    nombre_visible: str | None = Field(default=None, max_length=180)
++    nombre_visible: str | None = Field(default=None, max_length=120)
+     instrucciones_acceso: str | None = None
+     notas: str | None = Field(default=None, max_length=1000)
+     cluster_ids: list[UUID] = Field(default_factory=list)
+@@ -172,7 +172,7 @@ class ConsultorioUpdate(BaseModel):
+     complejo_id: UUID | None = None
+     piso_id: UUID | None = None
+     codigo: str | None = Field(default=None, min_length=1, max_length=80)
+-    nombre_visible: str | None = Field(default=None, max_length=180)
++    nombre_visible: str | None = Field(default=None, max_length=120)
+     instrucciones_acceso: str | None = None
+     notas: str | None = Field(default=None, max_length=1000)
+     cluster_ids: list[UUID] | None = None
+@@ -180,6 +180,8 @@ class ConsultorioUpdate(BaseModel):
+ 
+ 
+ class ConsultorioRead(ConsultorioCreate):
++    # Preserve names already stored under the previous limit when reading them.
++    nombre_visible: str | None = Field(default=None, max_length=180)
+     id: UUID
+     created_at: datetime
+     updated_at: datetime
+diff --git a/access-manager/frontend/src/catalogs.ts b/access-manager/frontend/src/catalogs.ts
+index e5a04d0..be5763f 100644
+--- a/access-manager/frontend/src/catalogs.ts
++++ b/access-manager/frontend/src/catalogs.ts
+@@ -255,7 +255,7 @@ export const catalogs: Record<string, CatalogConfig> = {
+       { name: 'torre_id', label: 'Torre', type: 'select', lookup: 'torres', required: true, transient: true },
+       { name: 'piso_id', label: 'Piso', type: 'select', lookup: 'pisos', required: true },
+       { name: 'codigo', label: 'Código', required: true, maxLength: 80 },
+-      { name: 'nombre_visible', label: 'Nombre visible', maxLength: 180 },
++      { name: 'nombre_visible', label: 'Nombre visible', maxLength: 120 },
+       { name: 'instrucciones_acceso', label: 'Instrucciones de acceso', type: 'textarea' },
+       { name: 'notas', label: 'Notas', type: 'textarea', maxLength: 1000 },
+       { name: 'cluster_ids', label: 'Clústers', type: 'multiselect', lookup: 'clusters-turnos', required: true },
+diff --git a/access-manager/frontend/src/styles.css b/access-manager/frontend/src/styles.css
+index a33aeee..b27db8d 100644
+--- a/access-manager/frontend/src/styles.css
++++ b/access-manager/frontend/src/styles.css
+@@ -1136,26 +1136,32 @@ pre {
+   display: grid;
+   margin: 0 auto;
+   max-width: 1520px;
++  min-width: 0;
+   width: 100%;
+ }
+ 
+ .next-appointments-table-wrap {
++  min-width: 0;
+   overflow-x: auto;
++  width: 100%;
+ }
+ 
+ .next-appointments-table {
+   border-collapse: collapse;
+   color: var(--display-text);
+   font-size: 1.7rem;
+-  margin: 0;
++  margin: 0 auto;
+   min-width: 1180px;
+   table-layout: fixed;
+   width: 100%;
+ }
+ 
+-.next-appointments-consultorio,
++.next-appointments-consultorio {
++  width: 29.7%;
++}
++
+ .next-appointments-medico {
+-  width: 27%;
++  width: 24.3%;
+ }
+ 
+ .next-appointments-disponibilidad {
+@@ -1198,8 +1204,8 @@ pre {
+   padding-left: 0;
+ }
+ 
+-.next-appointments-table th:nth-child(2),
+-.next-appointments-table td:nth-child(2) {
++.next-appointments-table th:first-child,
++.next-appointments-table td:first-child {
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index ebc8ee9..d07c2a7 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -2,6 +2,7 @@
+ import { computed, onMounted, onUnmounted, ref } from 'vue';
+ import { useRoute } from 'vue-router';
+ import QRCode from 'qrcode';
++import OverflowMarquee from '../components/OverflowMarquee.vue';
+ import { getPublicDisplayTurnos, PublicDisplayConfig, PublicDisplayProximaCita, PublicDisplayTurno } from '../api/client';
+ import astrogatoLogo from '../astrogato-logo-v02.png';
+ import capitalMedicalCenterLogo from '../capital-medical-center-logo.png';
+@@ -403,16 +404,16 @@ onUnmounted(() => {
+       <div v-if="proximasCitas.length > 0" class="next-appointments-table-wrap">
+         <table class="next-appointments-table">
+           <colgroup>
+-            <col class="next-appointments-consultorio" />
+             <col class="next-appointments-medico" />
++            <col class="next-appointments-consultorio" />
+             <col class="next-appointments-disponibilidad" />
+             <col class="next-appointments-cita" />
+             <col class="next-appointments-hora" />
+           </colgroup>
+           <thead>
+             <tr>
+-              <th>Consultorio</th>
+               <th>Médico</th>
++              <th>Consultorio</th>
+               <th>Disponibilidad</th>
+               <th>Cita</th>
+               <th>Hora aprox.</th>
+@@ -420,14 +421,15 @@ onUnmounted(() => {
+           </thead>
+           <tbody>
+             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
++              <td>{{ item.medico }}</td>
+               <td>
+                 <div class="next-appointment-consultorio-detail">
+-                  <span class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
++                  <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="item.consultorio" />
++                  <span v-else class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
+                   <small v-if="item.ubicacion_consultorio">{{ item.ubicacion_consultorio }}</small>
+                   <small v-if="item.codigo_consultorio">{{ item.codigo_consultorio }}</small>
+                 </div>
+               </td>
+-              <td>{{ item.medico }}</td>
+               <td>
+                 <span v-if="availabilityLabel(item.estado_atencion)" class="doctor-status-value next-appointment-status">
+                   <span class="doctor-status-icon" :class="`doctor-status-${doctorStatusTone(item.estado_atencion)}`">

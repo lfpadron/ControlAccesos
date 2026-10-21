@@ -1136,26 +1136,32 @@ pre {
   display: grid;
   margin: 0 auto;
   max-width: 1520px;
+  min-width: 0;
   width: 100%;
 }
 
 .next-appointments-table-wrap {
+  min-width: 0;
   overflow-x: auto;
+  width: 100%;
 }
 
 .next-appointments-table {
   border-collapse: collapse;
   color: var(--display-text);
   font-size: 1.7rem;
-  margin: 0;
+  margin: 0 auto;
   min-width: 1180px;
   table-layout: fixed;
   width: 100%;
 }
 
-.next-appointments-consultorio,
+.next-appointments-consultorio {
+  width: 29.7%;
+}
+
 .next-appointments-medico {
-  width: 27%;
+  width: 24.3%;
 }
 
 .next-appointments-disponibilidad {
@@ -1198,8 +1204,8 @@ pre {
   padding-left: 0;
 }
 
-.next-appointments-table th:nth-child(2),
-.next-appointments-table td:nth-child(2) {
+.next-appointments-table th:first-child,
+.next-appointments-table td:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
