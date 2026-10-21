@@ -424,10 +424,9 @@ onUnmounted(() => {
               <td>{{ item.medico }}</td>
               <td>
                 <div class="next-appointment-consultorio-detail">
-                  <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="item.consultorio" />
+                  <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="`${item.codigo_consultorio} - ${item.consultorio}`" />
                   <span v-else class="next-appointment-consultorio-name">{{ item.consultorio }}</span>
                   <small v-if="item.ubicacion_consultorio">{{ item.ubicacion_consultorio }}</small>
-                  <small v-if="item.codigo_consultorio">{{ item.codigo_consultorio }}</small>
                 </div>
               </td>
               <td>
