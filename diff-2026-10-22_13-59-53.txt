@@ -1,0 +1,705 @@
+diff --git a/access-manager/backend/app/api/display.py b/access-manager/backend/app/api/display.py
+index 6dff803..ce12b9d 100644
+--- a/access-manager/backend/app/api/display.py
++++ b/access-manager/backend/app/api/display.py
+@@ -356,8 +356,9 @@ def safe_zone_info(value: str | None) -> ZoneInfo:
+         return ZoneInfo("UTC")
+ 
+ 
+-def medico_label(medico: Medico) -> str:
+-    return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}".strip()
++def medico_label(medico: Medico, prefijo: str | None = None) -> str:
++    nombre = (medico.nombre_visible or f"{medico.nombre} {medico.apellidos}").strip()
++    return " ".join(part for part in [(prefijo or "").strip(), nombre] if part)
+ 
+ 
+ def display_flags_for_clusters(clusters: list[ClusterTurnos]) -> tuple[bool, bool]:
+@@ -518,9 +519,10 @@ def public_next_appointments(
+     called_appointment_exists = select(TurnoDisplay.id).where(TurnoDisplay.cita_id == Cita.id).exists()
+ 
+     rows = db.execute(
+-        select(Cita, Medico, Consultorio)
++        select(Cita, Medico, Consultorio, Usuario.prefijo)
+         .join(Medico, Medico.id == Cita.medico_id)
+         .join(Consultorio, Consultorio.id == Cita.consultorio_id)
++        .outerjoin(Usuario, Usuario.id == Medico.usuario_id)
+         .where(
+             Cita.complejo_id == screen.complejo_id,
+             Cita.consultorio_id.in_(consultorio_ids),
+@@ -543,14 +545,14 @@ def public_next_appointments(
+ 
+     next_start_by_medico = latest_called_finish_by_medico(
+         db,
+-        {cita.medico_id for cita, _medico, _consultorio in rows},
++        {cita.medico_id for cita, _medico, _consultorio, _prefijo in rows},
+         screen.complejo_id,
+         consultorio_ids,
+         timestamp,
+     )
+     response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
+-    for cita, medico, consultorio in rows:
+-        medico_name = medico_label(medico)
++    for cita, medico, consultorio, prefijo in rows:
++        medico_name = medico_label(medico, prefijo)
+         consultorio_name = (consultorio.nombre_visible or "").strip() or consultorio.codigo
+         consultorio_location, consultorio_code = next_appointment_consultorio_details(db, screen, consultorio)
+         scheduled_at = cita_scheduled_at_utc(cita, timezone)
+@@ -559,7 +561,7 @@ def public_next_appointments(
+         _estimated_at, estimated_time = estimated_appointment_time(estimated_at, timezone)
+         response.append(
+             (
+-                medico_name.lower(),
++                medico_label(medico).lower(),
+                 estimated_at,
+                 PublicProximaCitaDisplay(
+                     folio_turno=cita.folio_turno,
+diff --git a/access-manager/backend/app/api/flow.py b/access-manager/backend/app/api/flow.py
+index 6e476ea..26b7834 100644
+--- a/access-manager/backend/app/api/flow.py
++++ b/access-manager/backend/app/api/flow.py
+@@ -845,10 +845,15 @@ def unique_citas(rows) -> list[Cita]:
+ 
+ 
+ def validate_patient_contact(paciente: Paciente) -> None:
+-    if not paciente.telefono_1 or not paciente.celular:
++    if not paciente.telefono_1:
+         raise HTTPException(
+             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+-            detail="Teléfono 1 y Teléfono 2 son obligatorios.",
++            detail="Teléfono 1 es obligatorio.",
++        )
++    if paciente.celular and paciente.tipo_telefono_2 not in ("FIJO", "CELULAR"):
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail="Selecciona Fijo o Celular para Teléfono 2.",
+         )
+ 
+ 
+diff --git a/access-manager/backend/app/models/flow.py b/access-manager/backend/app/models/flow.py
+index 41546fa..a679ae4 100644
+--- a/access-manager/backend/app/models/flow.py
++++ b/access-manager/backend/app/models/flow.py
+@@ -13,7 +13,7 @@ from app.models.base import Base, TimestampMixin
+ class Paciente(TimestampMixin, Base):
+     __tablename__ = "pacientes"
+     __table_args__ = (
+-        CheckConstraint("celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
++        CheckConstraint("telefono_1 IS NOT NULL OR celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
+         CheckConstraint("tipo_telefono_1 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_1"),
+         CheckConstraint("tipo_telefono_2 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_2"),
+         CheckConstraint(
+@@ -37,7 +37,7 @@ class Paciente(TimestampMixin, Base):
+     telefono_1: Mapped[str | None] = mapped_column(String(40), index=True)
+     tipo_telefono_1: Mapped[str] = mapped_column(String(12), default="FIJO", server_default="FIJO", nullable=False)
+     celular: Mapped[str | None] = mapped_column(String(40), index=True)
+-    tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
++    tipo_telefono_2: Mapped[str | None] = mapped_column(String(12).evaluates_none(), default="CELULAR", server_default="CELULAR", nullable=True)
+     correo_electronico: Mapped[str | None] = mapped_column(String(320))
+     metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
+     telegram_chat_id_1: Mapped[int | None] = mapped_column(BigInteger)
+diff --git a/access-manager/backend/app/models/usuario.py b/access-manager/backend/app/models/usuario.py
+index 55dbc8e..4378257 100644
+--- a/access-manager/backend/app/models/usuario.py
++++ b/access-manager/backend/app/models/usuario.py
+@@ -13,6 +13,7 @@ class Usuario(TimestampMixin, Base):
+     __tablename__ = "usuarios"
+ 
+     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
++    prefijo: Mapped[str | None] = mapped_column(String(64))
+     apellidos: Mapped[str] = mapped_column(String(180), nullable=False)
+     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+diff --git a/access-manager/backend/app/schemas/flow.py b/access-manager/backend/app/schemas/flow.py
+index 1ed9724..2deca64 100644
+--- a/access-manager/backend/app/schemas/flow.py
++++ b/access-manager/backend/app/schemas/flow.py
+@@ -40,7 +40,7 @@ def metodos_confirmacion_disponibles(
+     telefono_1: str | None,
+     tipo_telefono_1: str,
+     telefono_2: str | None,
+-    tipo_telefono_2: str,
++    tipo_telefono_2: str | None,
+     correo_electronico: str | None,
+ ) -> set[str]:
+     metodos: set[str] = set()
+@@ -48,7 +48,7 @@ def metodos_confirmacion_disponibles(
+         (1, telefono_1, tipo_telefono_1),
+         (2, telefono_2, tipo_telefono_2),
+     ):
+-        if not telefono:
++        if not telefono or tipo is None:
+             continue
+         metodos.add(f"LLAMAR_{tipo}_{posicion}")
+         if tipo == "CELULAR":
+@@ -67,7 +67,7 @@ class PacienteBase(BaseModel):
+     telefono_1: str | None = Field(default=None, max_length=40)
+     tipo_telefono_1: str = "FIJO"
+     celular: str | None = Field(default=None, max_length=40)
+-    tipo_telefono_2: str = "CELULAR"
++    tipo_telefono_2: str | None = "CELULAR"
+     correo_electronico: EmailStr | None = None
+     metodo_confirmacion: str | None = Field(default=None, max_length=40)
+     fecha_nacimiento: date | None = None
+@@ -80,6 +80,7 @@ class PacienteBase(BaseModel):
+         "apellido_materno",
+         "telefono_1",
+         "celular",
++        "tipo_telefono_2",
+         "correo_electronico",
+         "metodo_confirmacion",
+         mode="before",
+@@ -93,8 +94,8 @@ class PacienteBase(BaseModel):
+ 
+     @field_validator("tipo_telefono_1", "tipo_telefono_2")
+     @classmethod
+-    def validate_phone_type(cls, value: str) -> str:
+-        if value not in TIPOS_TELEFONO:
++    def validate_phone_type(cls, value: str | None) -> str | None:
++        if value is not None and value not in TIPOS_TELEFONO:
+             raise ValueError("Tipo de teléfono inválido.")
+         return value
+ 
+@@ -124,9 +125,11 @@ class PacienteCreate(PacienteBase):
+     medico_id: UUID
+ 
+     @model_validator(mode="after")
+-    def validate_required_phones(self):
+-        if not self.telefono_1 or not self.celular:
+-            raise ValueError("Teléfono 1 y Teléfono 2 son obligatorios.")
++    def validate_required_phone(self):
++        if not self.telefono_1:
++            raise ValueError("Teléfono 1 es obligatorio.")
++        if self.celular and self.tipo_telefono_2 is None:
++            raise ValueError("Selecciona Fijo o Celular para Teléfono 2.")
+         return self
+ 
+ 
+@@ -151,6 +154,7 @@ class PacienteUpdate(BaseModel):
+         "apellido_materno",
+         "telefono_1",
+         "celular",
++        "tipo_telefono_2",
+         "correo_electronico",
+         "metodo_confirmacion",
+         mode="before",
+diff --git a/access-manager/backend/app/schemas/usuario.py b/access-manager/backend/app/schemas/usuario.py
+index a8b51d3..fc1bb96 100644
+--- a/access-manager/backend/app/schemas/usuario.py
++++ b/access-manager/backend/app/schemas/usuario.py
+@@ -17,6 +17,7 @@ def normalize_optional_email(value: object) -> object:
+ 
+ 
+ class UsuarioCreate(BaseModel):
++    prefijo: str | None = Field(default=None, max_length=64)
+     apellidos: str = Field(min_length=1, max_length=180)
+     nombre: str = Field(min_length=1, max_length=180)
+     email: EmailStr
+@@ -43,9 +44,9 @@ class UsuarioCreate(BaseModel):
+     def normalize_required_text(cls, value: object) -> object:
+         return value.strip() if isinstance(value, str) else value
+ 
+-    @field_validator("notas", mode="before")
++    @field_validator("prefijo", "notas", mode="before")
+     @classmethod
+-    def normalize_notas(cls, value: object) -> object:
++    def normalize_optional_text(cls, value: object) -> object:
+         if isinstance(value, str):
+             normalized = value.strip()
+             return normalized or None
+@@ -53,6 +54,7 @@ class UsuarioCreate(BaseModel):
+ 
+ 
+ class UsuarioUpdate(BaseModel):
++    prefijo: str | None = Field(default=None, max_length=64)
+     apellidos: str | None = Field(default=None, min_length=1, max_length=180)
+     nombre: str | None = Field(default=None, min_length=1, max_length=180)
+     email: EmailStr | None = None
+@@ -79,9 +81,9 @@ class UsuarioUpdate(BaseModel):
+     def normalize_required_text(cls, value: object) -> object:
+         return value.strip() if isinstance(value, str) else value
+ 
+-    @field_validator("notas", mode="before")
++    @field_validator("prefijo", "notas", mode="before")
+     @classmethod
+-    def normalize_notas(cls, value: object) -> object:
++    def normalize_optional_text(cls, value: object) -> object:
+         if isinstance(value, str):
+             normalized = value.strip()
+             return normalized or None
+@@ -108,6 +110,7 @@ class UsuarioProfileUpdate(BaseModel):
+ 
+ class UsuarioRead(BaseModel):
+     id: UUID
++    prefijo: str | None = None
+     apellidos: str
+     nombre: str
+     email: EmailStr
+diff --git a/access-manager/backend/tests/test_display_helpers.py b/access-manager/backend/tests/test_display_helpers.py
+index 32db17a..d84b74f 100644
+--- a/access-manager/backend/tests/test_display_helpers.py
++++ b/access-manager/backend/tests/test_display_helpers.py
+@@ -1,8 +1,18 @@
++from datetime import UTC, datetime
+ from types import SimpleNamespace
+ from uuid import uuid4
+ 
+-from app.api.display import next_appointment_consultorio_details
+-from app.models.operational import Piso, Torre
++import pytest
++from sqlalchemy import create_engine
++from sqlalchemy.orm import Session
++
++from app.api.display import next_appointment_consultorio_details, public_next_appointments
++from app.models.complejo import Complejo
++from app.models.display import TurnoDisplay
++from app.models.flow import Cita
++from app.models.operational import AsignacionMedicoConsultorio, Consultorio, ConsultorioCluster, Medico, Piso, Role, Torre, UsuarioRol
++from app.models.usuario import Usuario
++from app.schemas.usuario import UsuarioCreate, UsuarioRead, UsuarioUpdate
+ 
+ 
+ def test_next_appointment_consultorio_location_details() -> None:
+@@ -35,3 +45,49 @@ def test_next_appointment_consultorio_location_details() -> None:
+ 
+     assert next_appointment_consultorio_details(db, screen, same_tower) == ("Piso Nivel 2", "202")
+     assert next_appointment_consultorio_details(db, screen, other_tower) == ("Torre B - Piso 3", None)
++
++
++@pytest.mark.parametrize("prefijo, expected", [("  Dra2  ", "Dra2 Ana Pérez"), ("  ", "Ana Pérez"), (None, "Ana Pérez")])
++def test_next_appointments_use_saved_user_prefix(prefijo, expected) -> None:
++    engine = create_engine("sqlite://")
++    for model in (Usuario, Medico, Consultorio, ConsultorioCluster, Cita, TurnoDisplay,
++                  AsignacionMedicoConsultorio, UsuarioRol, Role, Complejo, Piso):
++        model.__table__.create(engine)
++    timestamp = datetime(2026, 10, 22, 12, tzinfo=UTC)
++    campus_id, floor_id, cluster_id = uuid4(), uuid4(), uuid4()
++
++    with Session(engine) as db:
++        payload = UsuarioCreate(prefijo=prefijo, nombre="Ana", apellidos="Pérez",
++                                email="ana@example.com", password="ValidPassword1!")
++        user = Usuario(**payload.model_dump(exclude={"password"}), password_hash="irrelevant")
++        db.add(user)
++        db.flush()
++        db.refresh(user)
++        assert UsuarioRead.model_validate(user).prefijo == (prefijo.strip() or None if prefijo else None)
++        doctor = Medico(usuario_id=user.id, nombre="Ana", apellidos="Pérez", nombre_visible="  Ana Pérez  ")
++        unlinked_doctor = Medico(nombre="Luis", apellidos="López")
++        office = Consultorio(complejo_id=campus_id, piso_id=floor_id, codigo="101")
++        db.add_all([doctor, unlinked_doctor, office])
++        db.flush()
++        db.add(ConsultorioCluster(consultorio_id=office.id, cluster_id=cluster_id))
++        for index, medico in enumerate((doctor, unlinked_doctor)):
++            db.add(AsignacionMedicoConsultorio(medico_id=medico.id, consultorio_id=office.id,
++                                              fecha_inicio=timestamp.date()))
++            db.add(Cita(paciente_id=uuid4(), medico_id=medico.id, consultorio_id=office.id,
++                        complejo_id=campus_id, piso_id=floor_id, fecha_cita=timestamp.date(),
++                        hora_cita=timestamp.time().replace(tzinfo=None), folio_turno=f"A{index:03}",
++                        tipo="PROGRAMADA", estado="LLEGO_LOBBY"))
++        db.commit()
++        screen = SimpleNamespace(complejo_id=campus_id, consultorio_id=None, piso_id=None)
++
++        rows = public_next_appointments(db, screen, [cluster_id], timestamp)
++        assert {row.medico for row in rows} == {expected, "Luis López"}
++
++        for value, expected_name in [("  Dr3  ", "Dr3 Ana Pérez"), ("  ", "Ana Pérez")]:
++            update = UsuarioUpdate(prefijo=value)
++            user.prefijo = update.prefijo
++            db.commit()
++            rows = public_next_appointments(db, screen, [cluster_id], timestamp)
++            assert {row.medico for row in rows} == {expected_name, "Luis López"}
++
++    engine.dispose()
+diff --git a/access-manager/backend/tests/test_patient_contacts.py b/access-manager/backend/tests/test_patient_contacts.py
+index 9cc5845..edc7c79 100644
+--- a/access-manager/backend/tests/test_patient_contacts.py
++++ b/access-manager/backend/tests/test_patient_contacts.py
+@@ -5,10 +5,13 @@ from uuid import uuid4
+ import pytest
+ from pydantic import ValidationError
+ from sqlalchemy.dialects import postgresql
++from sqlalchemy import create_engine
++from sqlalchemy.orm import Session
+ 
+-from app.api.flow import query_citas
++from app.api.flow import query_citas, validate_patient_contact
+ from app.api.kiosks import patient_matches_contact, patient_phone_display
+-from app.schemas.flow import PacienteCreate, metodos_confirmacion_disponibles
++from app.models.flow import Paciente
++from app.schemas.flow import PacienteCreate, PacienteRead, PacienteUpdate, metodos_confirmacion_disponibles
+ 
+ 
+ def patient_payload() -> dict:
+@@ -29,10 +32,89 @@ def test_patient_contact_defaults_preserve_second_phone_as_mobile() -> None:
+     assert patient.celular == "55 9876 5432"
+ 
+ 
+-def test_patient_requires_both_phones_and_valid_email() -> None:
++@pytest.mark.parametrize("phone_type", [None, "", "   "])
++def test_patient_can_save_and_clear_second_phone_type_without_number(phone_type) -> None:
++    engine = create_engine("sqlite://")
++    Paciente.__table__.create(engine)
++    payload = PacienteCreate(**(patient_payload() | {"celular": None, "tipo_telefono_2": phone_type}))
++
++    with Session(engine) as db:
++        patient = Paciente(**payload.model_dump(exclude={"medico_id"}), folio_paciente="PTEST")
++        db.add(patient)
++        db.commit()
++        db.refresh(patient)
++        assert PacienteRead.model_validate(patient).tipo_telefono_2 is None
++        assert patient.celular is None
++
++        patient.tipo_telefono_2 = "FIJO"
++        db.commit()
++        update = PacienteUpdate(tipo_telefono_2=phone_type)
++        for key, value in update.model_dump(exclude_unset=True).items():
++            setattr(patient, key, value)
++        db.commit()
++        db.refresh(patient)
++        assert PacienteRead.model_validate(patient).tipo_telefono_2 is None
++
++    engine.dispose()
++
++
++@pytest.mark.parametrize("phone_type", [None, "", "   "])
++def test_patient_cannot_create_second_phone_without_type(phone_type) -> None:
++    with pytest.raises(ValidationError, match="Selecciona Fijo o Celular para Teléfono 2"):
++        PacienteCreate(**(patient_payload() | {"tipo_telefono_2": phone_type}))
++
++
++@pytest.mark.parametrize("phone_type", ["FIJO", "CELULAR"])
++def test_patient_can_create_second_phone_with_valid_type(phone_type) -> None:
++    payload = PacienteCreate(**(patient_payload() | {"tipo_telefono_2": phone_type}))
++    patient = Paciente(**payload.model_dump(exclude={"medico_id"}), folio_paciente="PTEST")
++    validate_patient_contact(patient)
++    assert patient.tipo_telefono_2 == phone_type
++
++
++def test_confirmation_methods_skip_second_phone_without_type() -> None:
++    assert metodos_confirmacion_disponibles("5512345678", "FIJO", "5598765432", None, None) == {
++        "LLAMAR_FIJO_1"
++    }
++    with pytest.raises(ValidationError, match="no corresponde a los datos de contacto"):
++        PacienteCreate(**(patient_payload() | {"tipo_telefono_2": None, "metodo_confirmacion": "WHATSAPP_2"}))
++
++
++@pytest.mark.parametrize("second_phone", [{}, {"celular": None}, {"celular": ""}, {"celular": "   "}])
++def test_patient_can_save_and_clear_second_phone_without_birth_date(second_phone) -> None:
++    engine = create_engine("sqlite://")
++    Paciente.__table__.create(engine)
++    data = patient_payload()
++    data.pop("celular")
++    payload = PacienteCreate(**(data | second_phone))
++
++    with Session(engine) as db:
++        patient = Paciente(**payload.model_dump(exclude={"medico_id"}), folio_paciente="PTEST")
++        validate_patient_contact(patient)
++        db.add(patient)
++        db.commit()
++        db.refresh(patient)
++        assert PacienteRead.model_validate(patient).celular is None
++        assert patient.fecha_nacimiento is None
++
++        patient.celular = "55 9876 5432"
++        db.commit()
++        update = PacienteUpdate(celular=second_phone.get("celular"))
++        for key, value in update.model_dump(exclude_unset=True).items():
++            setattr(patient, key, value)
++        validate_patient_contact(patient)
++        db.commit()
++        db.refresh(patient)
++        assert PacienteRead.model_validate(patient).celular is None
++        assert patient.telefono_1 == "55 1234 5678"
++
++    engine.dispose()
++
++
++def test_patient_requires_first_phone_and_valid_email() -> None:
+     missing_phone = patient_payload()
+     missing_phone.pop("telefono_1")
+-    with pytest.raises(ValidationError, match="Teléfono 1 y Teléfono 2 son obligatorios"):
++    with pytest.raises(ValidationError, match="Teléfono 1 es obligatorio"):
+         PacienteCreate(**missing_phone)
+ 
+     invalid_email = patient_payload() | {"correo_electronico": "correo-invalido"}
+diff --git a/access-manager/backend/tests/test_qr_delivery.py b/access-manager/backend/tests/test_qr_delivery.py
+index aeaebd3..129817b 100644
+--- a/access-manager/backend/tests/test_qr_delivery.py
++++ b/access-manager/backend/tests/test_qr_delivery.py
+@@ -263,7 +263,8 @@ def test_patient_can_unlink_one_slot(client, db, appointment):
+ 
+ 
+ @pytest.mark.parametrize("changes, cleared", [({"telefono_1": "5511112222"}, 1), ({"celular": "5533334444"}, 2),
+-    ({"tipo_telefono_1": "FIJO"}, 1), ({"tipo_telefono_2": "FIJO"}, 2)])
++    ({"tipo_telefono_1": "FIJO"}, 1), ({"tipo_telefono_2": "FIJO"}, 2), ({"celular": None}, 2),
++    ({"celular": None, "tipo_telefono_2": None}, 2)])
+ def test_editing_phone_clears_only_its_telegram_link(db, appointment, monkeypatch, changes, cleared):
+     from starlette.requests import Request
+     _, patient = appointment
+@@ -278,6 +279,29 @@ def test_editing_phone_clears_only_its_telegram_link(db, appointment, monkeypatc
+     assert getattr(patient, f"telegram_chat_id_{3 - cleared}") is not None
+ 
+ 
++@pytest.mark.parametrize("existing_phone, changes", [
++    (True, {"tipo_telefono_2": None}),
++    (True, {"tipo_telefono_2": ""}),
++    (True, {"tipo_telefono_2": "   "}),
++    (False, {"celular": "5533334444"}),
++])
++def test_patient_update_rejects_second_phone_without_type(db, appointment, monkeypatch, existing_phone, changes):
++    from starlette.requests import Request
++    _, patient = appointment
++    if not existing_phone:
++        patient.celular = None
++        patient.tipo_telefono_2 = None
++        db.commit()
++    monkeypatch.setattr(flow, "paciente_for_medico_or_404", lambda *args: patient)
++    monkeypatch.setattr(flow, "ensure_paciente_access", lambda *args: None)
++
++    with pytest.raises(HTTPException) as error:
++        flow.update_paciente(patient.id, PacienteUpdate(**changes), Request({"type": "http", "headers": []}),
++                             medico_id=uuid4(), db=db, current_user=SimpleNamespace(id=uuid4()))
++    assert error.value.status_code == 422
++    assert error.value.detail == "Selecciona Fijo o Celular para Teléfono 2."
++
++
+ def test_start_requests_own_phone_and_inactive_patient_is_not_linked(client, db, appointment, monkeypatch):
+     _, patient = appointment
+     patient.telegram_chat_id_1 = None
+diff --git a/access-manager/frontend/Containerfile b/access-manager/frontend/Containerfile
+index d890c86..bcefb25 100644
+--- a/access-manager/frontend/Containerfile
++++ b/access-manager/frontend/Containerfile
+@@ -2,8 +2,9 @@ FROM public.ecr.aws/docker/library/node:22-alpine
+ 
+ WORKDIR /app
+ 
+-COPY package.json ./
+-RUN npm install
++COPY package.json package-lock.json ./
++RUN npm ci --no-audit --no-fund --loglevel=info --foreground-scripts \
++    --fetch-retries=1 --fetch-timeout=60000
+ 
+ COPY index.html tsconfig.json vite.config.ts ./
+ COPY src ./src
+diff --git a/access-manager/frontend/src/api/client.ts b/access-manager/frontend/src/api/client.ts
+index ed5174d..3b3789f 100644
+--- a/access-manager/frontend/src/api/client.ts
++++ b/access-manager/frontend/src/api/client.ts
+@@ -83,6 +83,7 @@ export type Complejo = {
+ 
+ export type Usuario = {
+   id: string;
++  prefijo?: string | null;
+   apellidos: string;
+   nombre: string;
+   email: string;
+@@ -381,7 +382,7 @@ export type Paciente = {
+   telefono_1?: string | null;
+   tipo_telefono_1: 'FIJO' | 'CELULAR';
+   celular?: string | null;
+-  tipo_telefono_2: 'FIJO' | 'CELULAR';
++  tipo_telefono_2: 'FIJO' | 'CELULAR' | null;
+   correo_electronico?: string | null;
+   metodo_confirmacion?: string | null;
+   fecha_nacimiento?: string | null;
+diff --git a/access-manager/frontend/src/views/DisplayTurnosView.vue b/access-manager/frontend/src/views/DisplayTurnosView.vue
+index 32ece2c..e47998c 100644
+--- a/access-manager/frontend/src/views/DisplayTurnosView.vue
++++ b/access-manager/frontend/src/views/DisplayTurnosView.vue
+@@ -421,7 +421,7 @@ onUnmounted(() => {
+           </thead>
+           <tbody>
+             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
+-              <td>{{ item.medico }}</td>
++              <td><OverflowMarquee :text="item.medico" /></td>
+               <td>
+                 <div class="next-appointment-consultorio-detail">
+                   <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="`${item.codigo_consultorio} - ${item.consultorio}`" />
+diff --git a/access-manager/frontend/src/views/PacientesView.vue b/access-manager/frontend/src/views/PacientesView.vue
+index c474e0a..f45946d 100644
+--- a/access-manager/frontend/src/views/PacientesView.vue
++++ b/access-manager/frontend/src/views/PacientesView.vue
+@@ -41,7 +41,7 @@ const form = reactive({
+   telefono_1: '',
+   tipo_telefono_1: 'FIJO' as PhoneType,
+   celular: '',
+-  tipo_telefono_2: 'CELULAR' as PhoneType,
++  tipo_telefono_2: 'CELULAR' as PhoneType | '',
+   correo_electronico: '',
+   metodo_confirmacion: '',
+   fecha_nacimiento: '',
+@@ -75,12 +75,12 @@ function buildConfirmationMethodOptions(patient: {
+   telefono_1?: string | null;
+   tipo_telefono_1?: PhoneType | null;
+   celular?: string | null;
+-  tipo_telefono_2?: PhoneType | null;
++  tipo_telefono_2?: PhoneType | '' | null;
+   correo_electronico?: string | null;
+ }): ConfirmationMethodOption[] {
+   const phones = [
+     { position: 1, value: patient.telefono_1?.trim() ?? '', type: patient.tipo_telefono_1 ?? 'FIJO' },
+-    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 ?? 'CELULAR' },
++    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 },
+   ].filter((phone) => phone.value);
+   const fixedPhones = phones.filter((phone) => phone.type === 'FIJO');
+   const mobilePhones = phones.filter((phone) => phone.type === 'CELULAR');
+@@ -203,7 +203,7 @@ function setForm(paciente?: Paciente | null) {
+   form.telefono_1 = paciente?.telefono_1 ?? '';
+   form.tipo_telefono_1 = paciente?.tipo_telefono_1 ?? 'FIJO';
+   form.celular = paciente?.celular ?? '';
+-  form.tipo_telefono_2 = paciente?.tipo_telefono_2 ?? 'CELULAR';
++  form.tipo_telefono_2 = paciente ? paciente.tipo_telefono_2 ?? '' : 'CELULAR';
+   form.correo_electronico = paciente?.correo_electronico ?? '';
+   form.metodo_confirmacion = paciente?.metodo_confirmacion ?? '';
+   setBirthDateParts(paciente?.fecha_nacimiento ?? '');
+@@ -262,8 +262,12 @@ async function submit(preferredOnlyConfirmed = false) {
+     error.value = 'Captura nombre preferido o nombre y apellido paterno.';
+     return;
+   }
+-  if (!form.telefono_1.trim() || !form.celular.trim()) {
+-    error.value = 'Teléfono 1 y Teléfono 2 son obligatorios.';
++  if (!form.telefono_1.trim()) {
++    error.value = 'Teléfono 1 es obligatorio.';
++    return;
++  }
++  if (form.celular.trim() && !form.tipo_telefono_2) {
++    error.value = 'Selecciona Fijo o Celular para Teléfono 2.';
+     return;
+   }
+   if (form.correo_electronico.trim() && !validEmail(form.correo_electronico)) {
+@@ -291,7 +295,7 @@ async function submit(preferredOnlyConfirmed = false) {
+       telefono_1: trimOrNull(form.telefono_1),
+       tipo_telefono_1: form.tipo_telefono_1,
+       celular: trimOrNull(form.celular),
+-      tipo_telefono_2: form.tipo_telefono_2,
++      tipo_telefono_2: form.tipo_telefono_2 || null,
+       correo_electronico: trimOrNull(form.correo_electronico),
+       metodo_confirmacion: form.metodo_confirmacion || null,
+       fecha_nacimiento: form.fecha_nacimiento || null,
+@@ -319,7 +323,8 @@ function confirmationMethodLabel(paciente: Paciente) {
+   );
+ }
+ 
+-function phoneLabel(type: PhoneType, value?: string | null) {
++function phoneLabel(type: PhoneType | null, value?: string | null) {
++  if (!type) return value || '-';
+   return value ? `${type === 'FIJO' ? 'Fijo' : 'Celular'} · ${value}` : '-';
+ }
+ 
+@@ -441,14 +446,15 @@ onMounted(async () => {
+           </div>
+           <div class="form-row">
+             <label for="tipo_telefono_2">Tipo de teléfono 2</label>
+-            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2">
++            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2" :required="Boolean(form.celular.trim())">
++              <option value="">Sin seleccionar</option>
+               <option value="FIJO">Fijo</option>
+               <option value="CELULAR">Celular</option>
+             </select>
+           </div>
+           <div class="form-row">
+             <label for="celular">Teléfono 2</label>
+-            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" required />
++            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" />
+           </div>
+           <div class="form-row">
+             <label for="correo_electronico">Correo electrónico</label>
+diff --git a/access-manager/frontend/src/views/UsuariosView.vue b/access-manager/frontend/src/views/UsuariosView.vue
+index 8d406c5..eb89820 100644
+--- a/access-manager/frontend/src/views/UsuariosView.vue
++++ b/access-manager/frontend/src/views/UsuariosView.vue
+@@ -35,6 +35,7 @@ const appliedFilters = reactive({
+ });
+ 
+ const form = reactive({
++  prefijo: '',
+   apellidos: '',
+   nombre: '',
+   email: '',
+@@ -84,6 +85,7 @@ function roleText(userId: string) {
+ 
+ function resetForm() {
+   selected.value = null;
++  form.prefijo = '';
+   form.apellidos = '';
+   form.nombre = '';
+   form.email = '';
+@@ -98,6 +100,7 @@ function resetForm() {
+ 
+ function editUser(user: Usuario) {
+   selected.value = user;
++  form.prefijo = user.prefijo ?? '';
+   form.apellidos = user.apellidos;
+   form.nombre = user.nombre;
+   form.email = user.email;
+@@ -165,6 +168,7 @@ async function submit() {
+   loading.value = true;
+   try {
+     const payload: Record<string, unknown> = {
++      prefijo: form.prefijo.trim() || null,
+       apellidos: form.apellidos.trim(),
+       nombre: form.nombre.trim(),
+       email: form.email.trim(),
+@@ -224,6 +228,10 @@ onMounted(loadData);
+     <div class="grid catalog-grid">
+       <form class="panel form" autocomplete="off" @submit.prevent="submit">
+         <h2>{{ selected ? 'Editar usuario' : 'Crear usuario' }}</h2>
++        <div class="form-row">
++          <label for="usuario-prefijo">Prefijo</label>
++          <input id="usuario-prefijo" v-model="form.prefijo" maxlength="64" />
++        </div>
+         <div class="form-row">
+           <label for="usuario-apellidos">Apellido(s)</label>
+           <input id="usuario-apellidos" v-model="form.apellidos" required maxlength="180" />
+diff --git a/access-manager/kiosk/Containerfile b/access-manager/kiosk/Containerfile
+index d890c86..bcefb25 100644
+--- a/access-manager/kiosk/Containerfile
++++ b/access-manager/kiosk/Containerfile
+@@ -2,8 +2,9 @@ FROM public.ecr.aws/docker/library/node:22-alpine
+ 
+ WORKDIR /app
+ 
+-COPY package.json ./
+-RUN npm install
++COPY package.json package-lock.json ./
++RUN npm ci --no-audit --no-fund --loglevel=info --foreground-scripts \
++    --fetch-retries=1 --fetch-timeout=60000
+ 
+ COPY index.html tsconfig.json vite.config.ts ./
+ COPY src ./src
+diff --git a/access-manager/mobile-pwa/Containerfile b/access-manager/mobile-pwa/Containerfile
+index 8c8724c..034d835 100644
+--- a/access-manager/mobile-pwa/Containerfile
++++ b/access-manager/mobile-pwa/Containerfile
+@@ -2,8 +2,9 @@ FROM public.ecr.aws/docker/library/node:22-alpine
+ 
+ WORKDIR /app
+ 
+-COPY package.json ./
+-RUN npm install
++COPY package.json package-lock.json ./
++RUN npm ci --no-audit --no-fund --loglevel=info --foreground-scripts \
++    --fetch-retries=1 --fetch-timeout=60000
+ 
+ COPY index.html tsconfig.json vite.config.ts ./
+ COPY public ./public
+diff --git a/subir_droplet.ps1 b/subir_droplet.ps1
+index 7e9fd18..2a4ad60 100644
+--- a/subir_droplet.ps1
++++ b/subir_droplet.ps1
+@@ -200,10 +200,15 @@ try {
+             "if [ ! -s .env ]; then echo '.env no existe o esta vacio en $RemoteDir' >&2; exit 1; fi",
+             "unset DATABASE_URL",
+             "export COMPOSE_BAKE=false",
++            "echo 'Construyendo backend...'",
+             "docker compose build backend",
++            "echo 'Construyendo worker...'",
+             "docker compose build worker",
++            "echo 'Construyendo frontend...'",
+             "docker compose build frontend",
++            "echo 'Construyendo kiosk...'",
+             "docker compose build kiosk",
++            "echo 'Construyendo mobile-pwa...'",
+             "docker compose build mobile-pwa",
+             "docker compose up -d postgres redis",
+             "docker compose run --rm backend uv run alembic upgrade head",

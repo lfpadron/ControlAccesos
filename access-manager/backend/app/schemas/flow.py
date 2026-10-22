@@ -40,7 +40,7 @@ def metodos_confirmacion_disponibles(
     telefono_1: str | None,
     tipo_telefono_1: str,
     telefono_2: str | None,
-    tipo_telefono_2: str,
+    tipo_telefono_2: str | None,
     correo_electronico: str | None,
 ) -> set[str]:
     metodos: set[str] = set()
@@ -48,7 +48,7 @@ def metodos_confirmacion_disponibles(
         (1, telefono_1, tipo_telefono_1),
         (2, telefono_2, tipo_telefono_2),
     ):
-        if not telefono:
+        if not telefono or tipo is None:
             continue
         metodos.add(f"LLAMAR_{tipo}_{posicion}")
         if tipo == "CELULAR":
@@ -67,7 +67,7 @@ class PacienteBase(BaseModel):
     telefono_1: str | None = Field(default=None, max_length=40)
     tipo_telefono_1: str = "FIJO"
     celular: str | None = Field(default=None, max_length=40)
-    tipo_telefono_2: str = "CELULAR"
+    tipo_telefono_2: str | None = "CELULAR"
     correo_electronico: EmailStr | None = None
     metodo_confirmacion: str | None = Field(default=None, max_length=40)
     fecha_nacimiento: date | None = None
@@ -80,6 +80,7 @@ class PacienteBase(BaseModel):
         "apellido_materno",
         "telefono_1",
         "celular",
+        "tipo_telefono_2",
         "correo_electronico",
         "metodo_confirmacion",
         mode="before",
@@ -93,8 +94,8 @@ class PacienteBase(BaseModel):
 
     @field_validator("tipo_telefono_1", "tipo_telefono_2")
     @classmethod
-    def validate_phone_type(cls, value: str) -> str:
-        if value not in TIPOS_TELEFONO:
+    def validate_phone_type(cls, value: str | None) -> str | None:
+        if value is not None and value not in TIPOS_TELEFONO:
             raise ValueError("Tipo de teléfono inválido.")
         return value
 
@@ -124,9 +125,11 @@ class PacienteCreate(PacienteBase):
     medico_id: UUID
 
     @model_validator(mode="after")
-    def validate_required_phones(self):
-        if not self.telefono_1 or not self.celular:
-            raise ValueError("Teléfono 1 y Teléfono 2 son obligatorios.")
+    def validate_required_phone(self):
+        if not self.telefono_1:
+            raise ValueError("Teléfono 1 es obligatorio.")
+        if self.celular and self.tipo_telefono_2 is None:
+            raise ValueError("Selecciona Fijo o Celular para Teléfono 2.")
         return self
 
 
@@ -151,6 +154,7 @@ class PacienteUpdate(BaseModel):
         "apellido_materno",
         "telefono_1",
         "celular",
+        "tipo_telefono_2",
         "correo_electronico",
         "metodo_confirmacion",
         mode="before",

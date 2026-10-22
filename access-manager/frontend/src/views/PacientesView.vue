@@ -41,7 +41,7 @@ const form = reactive({
   telefono_1: '',
   tipo_telefono_1: 'FIJO' as PhoneType,
   celular: '',
-  tipo_telefono_2: 'CELULAR' as PhoneType,
+  tipo_telefono_2: 'CELULAR' as PhoneType | '',
   correo_electronico: '',
   metodo_confirmacion: '',
   fecha_nacimiento: '',
@@ -75,12 +75,12 @@ function buildConfirmationMethodOptions(patient: {
   telefono_1?: string | null;
   tipo_telefono_1?: PhoneType | null;
   celular?: string | null;
-  tipo_telefono_2?: PhoneType | null;
+  tipo_telefono_2?: PhoneType | '' | null;
   correo_electronico?: string | null;
 }): ConfirmationMethodOption[] {
   const phones = [
     { position: 1, value: patient.telefono_1?.trim() ?? '', type: patient.tipo_telefono_1 ?? 'FIJO' },
-    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 ?? 'CELULAR' },
+    { position: 2, value: patient.celular?.trim() ?? '', type: patient.tipo_telefono_2 },
   ].filter((phone) => phone.value);
   const fixedPhones = phones.filter((phone) => phone.type === 'FIJO');
   const mobilePhones = phones.filter((phone) => phone.type === 'CELULAR');
@@ -203,7 +203,7 @@ function setForm(paciente?: Paciente | null) {
   form.telefono_1 = paciente?.telefono_1 ?? '';
   form.tipo_telefono_1 = paciente?.tipo_telefono_1 ?? 'FIJO';
   form.celular = paciente?.celular ?? '';
-  form.tipo_telefono_2 = paciente?.tipo_telefono_2 ?? 'CELULAR';
+  form.tipo_telefono_2 = paciente ? paciente.tipo_telefono_2 ?? '' : 'CELULAR';
   form.correo_electronico = paciente?.correo_electronico ?? '';
   form.metodo_confirmacion = paciente?.metodo_confirmacion ?? '';
   setBirthDateParts(paciente?.fecha_nacimiento ?? '');
@@ -262,8 +262,12 @@ async function submit(preferredOnlyConfirmed = false) {
     error.value = 'Captura nombre preferido o nombre y apellido paterno.';
     return;
   }
-  if (!form.telefono_1.trim() || !form.celular.trim()) {
-    error.value = 'Teléfono 1 y Teléfono 2 son obligatorios.';
+  if (!form.telefono_1.trim()) {
+    error.value = 'Teléfono 1 es obligatorio.';
+    return;
+  }
+  if (form.celular.trim() && !form.tipo_telefono_2) {
+    error.value = 'Selecciona Fijo o Celular para Teléfono 2.';
     return;
   }
   if (form.correo_electronico.trim() && !validEmail(form.correo_electronico)) {
@@ -291,7 +295,7 @@ async function submit(preferredOnlyConfirmed = false) {
       telefono_1: trimOrNull(form.telefono_1),
       tipo_telefono_1: form.tipo_telefono_1,
       celular: trimOrNull(form.celular),
-      tipo_telefono_2: form.tipo_telefono_2,
+      tipo_telefono_2: form.tipo_telefono_2 || null,
       correo_electronico: trimOrNull(form.correo_electronico),
       metodo_confirmacion: form.metodo_confirmacion || null,
       fecha_nacimiento: form.fecha_nacimiento || null,
@@ -319,7 +323,8 @@ function confirmationMethodLabel(paciente: Paciente) {
   );
 }
 
-function phoneLabel(type: PhoneType, value?: string | null) {
+function phoneLabel(type: PhoneType | null, value?: string | null) {
+  if (!type) return value || '-';
   return value ? `${type === 'FIJO' ? 'Fijo' : 'Celular'} · ${value}` : '-';
 }
 
@@ -441,14 +446,15 @@ onMounted(async () => {
           </div>
           <div class="form-row">
             <label for="tipo_telefono_2">Tipo de teléfono 2</label>
-            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2">
+            <select id="tipo_telefono_2" v-model="form.tipo_telefono_2" :required="Boolean(form.celular.trim())">
+              <option value="">Sin seleccionar</option>
               <option value="FIJO">Fijo</option>
               <option value="CELULAR">Celular</option>
             </select>
           </div>
           <div class="form-row">
             <label for="celular">Teléfono 2</label>
-            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" required />
+            <input id="celular" v-model="form.celular" autocomplete="tel" inputmode="tel" maxlength="40" />
           </div>
           <div class="form-row">
             <label for="correo_electronico">Correo electrónico</label>

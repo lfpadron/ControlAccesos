@@ -263,7 +263,8 @@ def test_patient_can_unlink_one_slot(client, db, appointment):
 
 
 @pytest.mark.parametrize("changes, cleared", [({"telefono_1": "5511112222"}, 1), ({"celular": "5533334444"}, 2),
-    ({"tipo_telefono_1": "FIJO"}, 1), ({"tipo_telefono_2": "FIJO"}, 2)])
+    ({"tipo_telefono_1": "FIJO"}, 1), ({"tipo_telefono_2": "FIJO"}, 2), ({"celular": None}, 2),
+    ({"celular": None, "tipo_telefono_2": None}, 2)])
 def test_editing_phone_clears_only_its_telegram_link(db, appointment, monkeypatch, changes, cleared):
     from starlette.requests import Request
     _, patient = appointment
@@ -276,6 +277,29 @@ def test_editing_phone_clears_only_its_telegram_link(db, appointment, monkeypatc
     db.refresh(patient)
     assert getattr(patient, f"telegram_chat_id_{cleared}") is None
     assert getattr(patient, f"telegram_chat_id_{3 - cleared}") is not None
+
+
+@pytest.mark.parametrize("existing_phone, changes", [
+    (True, {"tipo_telefono_2": None}),
+    (True, {"tipo_telefono_2": ""}),
+    (True, {"tipo_telefono_2": "   "}),
+    (False, {"celular": "5533334444"}),
+])
+def test_patient_update_rejects_second_phone_without_type(db, appointment, monkeypatch, existing_phone, changes):
+    from starlette.requests import Request
+    _, patient = appointment
+    if not existing_phone:
+        patient.celular = None
+        patient.tipo_telefono_2 = None
+        db.commit()
+    monkeypatch.setattr(flow, "paciente_for_medico_or_404", lambda *args: patient)
+    monkeypatch.setattr(flow, "ensure_paciente_access", lambda *args: None)
+
+    with pytest.raises(HTTPException) as error:
+        flow.update_paciente(patient.id, PacienteUpdate(**changes), Request({"type": "http", "headers": []}),
+                             medico_id=uuid4(), db=db, current_user=SimpleNamespace(id=uuid4()))
+    assert error.value.status_code == 422
+    assert error.value.detail == "Selecciona Fijo o Celular para Teléfono 2."
 
 
 def test_start_requests_own_phone_and_inactive_patient_is_not_linked(client, db, appointment, monkeypatch):

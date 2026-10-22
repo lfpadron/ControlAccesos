@@ -17,6 +17,7 @@ def normalize_optional_email(value: object) -> object:
 
 
 class UsuarioCreate(BaseModel):
+    prefijo: str | None = Field(default=None, max_length=64)
     apellidos: str = Field(min_length=1, max_length=180)
     nombre: str = Field(min_length=1, max_length=180)
     email: EmailStr
@@ -43,9 +44,9 @@ class UsuarioCreate(BaseModel):
     def normalize_required_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("notas", mode="before")
+    @field_validator("prefijo", "notas", mode="before")
     @classmethod
-    def normalize_notas(cls, value: object) -> object:
+    def normalize_optional_text(cls, value: object) -> object:
         if isinstance(value, str):
             normalized = value.strip()
             return normalized or None
@@ -53,6 +54,7 @@ class UsuarioCreate(BaseModel):
 
 
 class UsuarioUpdate(BaseModel):
+    prefijo: str | None = Field(default=None, max_length=64)
     apellidos: str | None = Field(default=None, min_length=1, max_length=180)
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     email: EmailStr | None = None
@@ -79,9 +81,9 @@ class UsuarioUpdate(BaseModel):
     def normalize_required_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("notas", mode="before")
+    @field_validator("prefijo", "notas", mode="before")
     @classmethod
-    def normalize_notas(cls, value: object) -> object:
+    def normalize_optional_text(cls, value: object) -> object:
         if isinstance(value, str):
             normalized = value.strip()
             return normalized or None
@@ -108,6 +110,7 @@ class UsuarioProfileUpdate(BaseModel):
 
 class UsuarioRead(BaseModel):
     id: UUID
+    prefijo: str | None = None
     apellidos: str
     nombre: str
     email: EmailStr

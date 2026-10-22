@@ -13,7 +13,7 @@ from app.models.base import Base, TimestampMixin
 class Paciente(TimestampMixin, Base):
     __tablename__ = "pacientes"
     __table_args__ = (
-        CheckConstraint("celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
+        CheckConstraint("telefono_1 IS NOT NULL OR celular IS NOT NULL OR fecha_nacimiento IS NOT NULL", name="contacto_o_fecha_nacimiento"),
         CheckConstraint("tipo_telefono_1 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_1"),
         CheckConstraint("tipo_telefono_2 IN ('FIJO', 'CELULAR')", name="ck_pacientes_tipo_telefono_2"),
         CheckConstraint(
@@ -37,7 +37,7 @@ class Paciente(TimestampMixin, Base):
     telefono_1: Mapped[str | None] = mapped_column(String(40), index=True)
     tipo_telefono_1: Mapped[str] = mapped_column(String(12), default="FIJO", server_default="FIJO", nullable=False)
     celular: Mapped[str | None] = mapped_column(String(40), index=True)
-    tipo_telefono_2: Mapped[str] = mapped_column(String(12), default="CELULAR", server_default="CELULAR", nullable=False)
+    tipo_telefono_2: Mapped[str | None] = mapped_column(String(12).evaluates_none(), default="CELULAR", server_default="CELULAR", nullable=True)
     correo_electronico: Mapped[str | None] = mapped_column(String(320))
     metodo_confirmacion: Mapped[str | None] = mapped_column(String(40))
     telegram_chat_id_1: Mapped[int | None] = mapped_column(BigInteger)

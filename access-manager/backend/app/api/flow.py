@@ -845,10 +845,15 @@ def unique_citas(rows) -> list[Cita]:
 
 
 def validate_patient_contact(paciente: Paciente) -> None:
-    if not paciente.telefono_1 or not paciente.celular:
+    if not paciente.telefono_1:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Teléfono 1 y Teléfono 2 son obligatorios.",
+            detail="Teléfono 1 es obligatorio.",
+        )
+    if paciente.celular and paciente.tipo_telefono_2 not in ("FIJO", "CELULAR"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Selecciona Fijo o Celular para Teléfono 2.",
         )
 
 

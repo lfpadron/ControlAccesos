@@ -356,8 +356,9 @@ def safe_zone_info(value: str | None) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def medico_label(medico: Medico) -> str:
-    return medico.nombre_visible or f"{medico.nombre} {medico.apellidos}".strip()
+def medico_label(medico: Medico, prefijo: str | None = None) -> str:
+    nombre = (medico.nombre_visible or f"{medico.nombre} {medico.apellidos}").strip()
+    return " ".join(part for part in [(prefijo or "").strip(), nombre] if part)
 
 
 def display_flags_for_clusters(clusters: list[ClusterTurnos]) -> tuple[bool, bool]:
@@ -518,9 +519,10 @@ def public_next_appointments(
     called_appointment_exists = select(TurnoDisplay.id).where(TurnoDisplay.cita_id == Cita.id).exists()
 
     rows = db.execute(
-        select(Cita, Medico, Consultorio)
+        select(Cita, Medico, Consultorio, Usuario.prefijo)
         .join(Medico, Medico.id == Cita.medico_id)
         .join(Consultorio, Consultorio.id == Cita.consultorio_id)
+        .outerjoin(Usuario, Usuario.id == Medico.usuario_id)
         .where(
             Cita.complejo_id == screen.complejo_id,
             Cita.consultorio_id.in_(consultorio_ids),
@@ -543,14 +545,14 @@ def public_next_appointments(
 
     next_start_by_medico = latest_called_finish_by_medico(
         db,
-        {cita.medico_id for cita, _medico, _consultorio in rows},
+        {cita.medico_id for cita, _medico, _consultorio, _prefijo in rows},
         screen.complejo_id,
         consultorio_ids,
         timestamp,
     )
     response: list[tuple[str, datetime, PublicProximaCitaDisplay]] = []
-    for cita, medico, consultorio in rows:
-        medico_name = medico_label(medico)
+    for cita, medico, consultorio, prefijo in rows:
+        medico_name = medico_label(medico, prefijo)
         consultorio_name = (consultorio.nombre_visible or "").strip() or consultorio.codigo
         consultorio_location, consultorio_code = next_appointment_consultorio_details(db, screen, consultorio)
         scheduled_at = cita_scheduled_at_utc(cita, timezone)
@@ -559,7 +561,7 @@ def public_next_appointments(
         _estimated_at, estimated_time = estimated_appointment_time(estimated_at, timezone)
         response.append(
             (
-                medico_name.lower(),
+                medico_label(medico).lower(),
                 estimated_at,
                 PublicProximaCitaDisplay(
                     folio_turno=cita.folio_turno,

@@ -2,8 +2,9 @@ FROM public.ecr.aws/docker/library/node:22-alpine
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund --loglevel=info --foreground-scripts \
+    --fetch-retries=1 --fetch-timeout=60000
 
 COPY index.html tsconfig.json vite.config.ts ./
 COPY public ./public

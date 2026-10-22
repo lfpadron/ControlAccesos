@@ -421,7 +421,7 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="(item, index) in proximasCitas" :key="`${item.folio_turno}-${item.medico_id}-${index}`">
-              <td>{{ item.medico }}</td>
+              <td><OverflowMarquee :text="item.medico" /></td>
               <td>
                 <div class="next-appointment-consultorio-detail">
                   <OverflowMarquee v-if="item.codigo_consultorio" class="next-appointment-consultorio-name" :text="`${item.codigo_consultorio} - ${item.consultorio}`" />

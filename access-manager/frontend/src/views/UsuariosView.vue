@@ -35,6 +35,7 @@ const appliedFilters = reactive({
 });
 
 const form = reactive({
+  prefijo: '',
   apellidos: '',
   nombre: '',
   email: '',
@@ -84,6 +85,7 @@ function roleText(userId: string) {
 
 function resetForm() {
   selected.value = null;
+  form.prefijo = '';
   form.apellidos = '';
   form.nombre = '';
   form.email = '';
@@ -98,6 +100,7 @@ function resetForm() {
 
 function editUser(user: Usuario) {
   selected.value = user;
+  form.prefijo = user.prefijo ?? '';
   form.apellidos = user.apellidos;
   form.nombre = user.nombre;
   form.email = user.email;
@@ -165,6 +168,7 @@ async function submit() {
   loading.value = true;
   try {
     const payload: Record<string, unknown> = {
+      prefijo: form.prefijo.trim() || null,
       apellidos: form.apellidos.trim(),
       nombre: form.nombre.trim(),
       email: form.email.trim(),
@@ -224,6 +228,10 @@ onMounted(loadData);
     <div class="grid catalog-grid">
       <form class="panel form" autocomplete="off" @submit.prevent="submit">
         <h2>{{ selected ? 'Editar usuario' : 'Crear usuario' }}</h2>
+        <div class="form-row">
+          <label for="usuario-prefijo">Prefijo</label>
+          <input id="usuario-prefijo" v-model="form.prefijo" maxlength="64" />
+        </div>
         <div class="form-row">
           <label for="usuario-apellidos">Apellido(s)</label>
           <input id="usuario-apellidos" v-model="form.apellidos" required maxlength="180" />

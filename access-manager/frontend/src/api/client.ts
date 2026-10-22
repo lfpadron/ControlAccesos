@@ -83,6 +83,7 @@ export type Complejo = {
 
 export type Usuario = {
   id: string;
+  prefijo?: string | null;
   apellidos: string;
   nombre: string;
   email: string;
@@ -381,7 +382,7 @@ export type Paciente = {
   telefono_1?: string | null;
   tipo_telefono_1: 'FIJO' | 'CELULAR';
   celular?: string | null;
-  tipo_telefono_2: 'FIJO' | 'CELULAR';
+  tipo_telefono_2: 'FIJO' | 'CELULAR' | null;
   correo_electronico?: string | null;
   metodo_confirmacion?: string | null;
   fecha_nacimiento?: string | null;
